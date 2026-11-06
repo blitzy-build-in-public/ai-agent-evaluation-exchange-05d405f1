@@ -829,6 +829,18 @@ canvas {
   font-size: var(--font-size-sm);
 }
 
+/* A fact in that row is a flex item, and a flex item's automatic minimum size is its min-content
+   size — so a value with no break opportunity in it, such as a license code, cannot shrink below
+   its own width and escapes the card, widening the document and giving a 360px viewport a
+   horizontal scroll that no other element on the page produces. `min-width: 0` lets the item
+   shrink and `anywhere` lets the token break: `break-word` breaks the line but still leaves the
+   min-content size at the whole token, which is why the version, the standard and the report id
+   already carry `anywhere` above. */
+.listing-card__meta > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* The one text this file clamps, and only here: the excerpt of a card's stated limitations. The
    whole sentence stays in the document, so assistive technology reads it in full, and the
    listing page renders the limitations unclamped. The label, the outcome and the version are
