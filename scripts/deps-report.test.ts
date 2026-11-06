@@ -17,6 +17,9 @@
  * - a marker that names no usable licence (`UNLICENSED`, `UNKNOWN`, `SEE LICENSE IN …`) can never pass;
  * - the rendered document carries no timestamp, host name or absolute path, so regenerating the
  *   committed file produces no spurious diff;
+ * - the graph split is driven over a synthetic installed tree, so the runtime/development
+ *   classification — the mechanism that scopes the development-only exception — is exercised rather
+ *   than assumed;
  * - nothing outside the path the run was handed is written.
  *
  * The allowlist cases read the delivered `scripts/license-allowlist.json` rather than a copy, so a
@@ -24,7 +27,7 @@
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -83,6 +86,15 @@ const DEVELOPMENT_ONLY_EXCEPTION = "MPL-2.0";
 
 /** A licence outside the allowlist, planted to drive the failure path. */
 const OUT_OF_ALLOWLIST_LICENCE = "GPL-3.0-only";
+
+/**
+ * The shape of a bare host name: one token of letters, digits, dots and hyphens.
+ *
+ * The case that proves the document is machine-independent used to read the running machine's host
+ * name, which made it depend on that machine rather than on the document. This shape is what such a
+ * leak would look like, and recognising it reads nothing of the host.
+ */
+const BARE_HOST_NAME = /^[A-Za-z0-9.-]+$/;
 
 /** One entry per marker that names no usable licence, with the raw value a violation has to quote. */
 const NON_LICENCE_MARKERS: ReadonlyArray<{ readonly name: string; readonly value: string }> = [
@@ -248,6 +260,18 @@ function dependencyRows(document: string): readonly (readonly string[])[] {
     .map((line) => tableCells(line));
 }
 
+/** Returns the bullet lines of the acceptance section, stopping at the next heading. */
+function acceptedEntries(document: string): readonly string[] {
+  const heading = "## Accepted through a development-only exception";
+  const start = document.indexOf(heading);
+  if (start === -1) {
+    throw new Error(`the document holds no ${heading} section`);
+  }
+  const rest = document.slice(start + heading.length);
+  const end = rest.indexOf("\n## ");
+  return (end === -1 ? rest : rest.slice(0, end)).split("\n").filter((line) => line.startsWith("- "));
+}
+
 describe("the licence allowlist data", () => {
   it("holds the licences the request names, in the file's own order and without duplicates", () => {
     const data = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8")) as { readonly allowed: readonly string[] };
@@ -300,6 +324,24 @@ describe("the licence allowlist data", () => {
     expect(exception.reason).toMatch(/runtime graph/i);
     expect(isAllowlisted([DEVELOPMENT_ONLY_EXCEPTION], "development", allowlist)).toBe(true);
     expect(isAllowlisted([DEVELOPMENT_ONLY_EXCEPTION], "runtime", allowlist)).toBe(false);
+  });
+
+  it("records the amendment to the request's licence list, so widening it stays a reviewed diff", () => {
+    const allowlist = deliveredAllowlist();
+    const data = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8")) as { readonly source?: unknown };
+    const exceptions = (allowlist.developmentOnlyExceptions ?? []).map((exception) => exception.license);
+
+    // Exactly one licence beyond the request's six, and exactly the four exceptions the amendment names:
+    // a silent removal and a further widening both fail here, in either direction.
+    expect(allowlist.allowed.filter((licence) => !REQUEST_ALLOWLISTED_LICENCES.includes(licence))).toEqual([
+      "BlueOak-1.0.0",
+    ]);
+    expect(exceptions.sort()).toEqual(["CC-BY-3.0", "CC-BY-4.0", "CC0-1.0", DEVELOPMENT_ONLY_EXCEPTION]);
+
+    const source = String(data.source);
+    expect(source).toMatch(/criteria 11/i);
+    expect(source).toMatch(/amendment/i);
+    expect(source).toContain("BlueOak-1.0.0");
   });
 
   it("does not admit a copyleft licence the request leaves out", () => {
@@ -458,6 +500,171 @@ describe("the allowlist decision", () => {
     const workspace = dependency("@adem/planted-workspace", { licenses: [], inRepo: true });
 
     expect(checkLicenses([workspace], deliveredAllowlist())).toEqual([]);
+  });
+});
+
+/** One manifest of a synthetic installed tree: where it sits under the root, and what it declares. */
+interface SyntheticManifest {
+  /** Path of the manifest's directory, relative to the tree's root (`.` for the root itself). */
+  readonly at: string;
+  /** The manifest's contents. */
+  readonly manifest: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The manifests of the synthetic installed tree the classification cases read.
+ *
+ * The tree carries one package of each kind the split has to get right — declared by the root, by a
+ * workspace manifest, reached transitively along a runtime edge, reached along a `devDependencies`
+ * edge, and the workspace itself — because those are the edges the runtime/development classification
+ * is derived from. Only the runtime transitive package's licence differs between the two trees this
+ * suite builds, so it is the one value a case replaces.
+ */
+function syntheticTreeManifests(runtimeTransitiveLicence: string): readonly SyntheticManifest[] {
+  return [
+    {
+      at: ".",
+      manifest: {
+        name: "synthetic-root",
+        version: "1.0.0",
+        private: true,
+        license: "MIT",
+        workspaces: ["packages/*"],
+        dependencies: { "pkg-runtime-direct": "1.0.0" },
+        devDependencies: { "pkg-development-direct": "1.0.0" },
+      },
+    },
+    {
+      at: join("packages", "example"),
+      manifest: {
+        name: "@synthetic/example",
+        version: "0.1.0",
+        private: true,
+        license: "Apache-2.0",
+        dependencies: { "pkg-runtime-through-workspace": "1.0.0" },
+      },
+    },
+    {
+      at: join("node_modules", "pkg-runtime-direct"),
+      manifest: {
+        name: "pkg-runtime-direct",
+        version: "1.0.0",
+        license: "MIT",
+        dependencies: { "pkg-runtime-transitive": "1.0.0" },
+      },
+    },
+    {
+      at: join("node_modules", "pkg-runtime-transitive"),
+      manifest: { name: "pkg-runtime-transitive", version: "1.0.0", license: runtimeTransitiveLicence },
+    },
+    {
+      at: join("node_modules", "pkg-runtime-through-workspace"),
+      manifest: { name: "pkg-runtime-through-workspace", version: "1.0.0", license: "BSD-3-Clause" },
+    },
+    {
+      at: join("node_modules", "pkg-development-direct"),
+      manifest: {
+        name: "pkg-development-direct",
+        version: "1.0.0",
+        license: DEVELOPMENT_ONLY_EXCEPTION,
+        dependencies: { "pkg-development-transitive": "1.0.0" },
+      },
+    },
+    {
+      at: join("node_modules", "pkg-development-transitive"),
+      manifest: { name: "pkg-development-transitive", version: "1.0.0", license: "MIT" },
+    },
+  ];
+}
+
+/**
+ * Writes the synthetic installed tree under `directory` and returns its root.
+ *
+ * The tree is built here rather than read from the checkout, so these cases stay install-independent
+ * and cannot be satisfied by whatever happens to be installed beside them.
+ */
+function buildInstalledTree(directory: string, runtimeTransitiveLicence: string): string {
+  const root = join(directory, "synthetic-tree");
+  for (const { at, manifest } of syntheticTreeManifests(runtimeTransitiveLicence)) {
+    const manifestDirectory = join(root, at);
+    mkdirSync(manifestDirectory, { recursive: true });
+    writeFileSync(join(manifestDirectory, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  }
+  return root;
+}
+
+/**
+ * The tree reader, driven over a tree this suite builds itself.
+ *
+ * `readInstalledTree`'s runtime/development split is the mechanism that scopes the development-only
+ * exception, and no `entries`-supplying case can reach it: every case that checks the exception hands
+ * the graph in. Read from the installed tree instead, a regression that classified every package
+ * `development` would keep all of them green while the exception silently covered a runtime
+ * dependency, which is why the classification is asserted here edge by edge.
+ */
+describe("readInstalledTree", () => {
+  it("classifies a synthetic installed tree by graph, directness and origin", async () => {
+    await withTemporaryDirectory(async (directory) => {
+      const entries = await readInstalledTree(buildInstalledTree(directory, "MIT"));
+      const allowlist = deliveredAllowlist();
+
+      // A workspace manifest's runtime dependency joins the closure, a devDependencies edge does not
+      // follow, and only what a manifest of this repository declares is direct.
+      expect(entries).toEqual([
+        dependency("@synthetic/example", { version: "0.1.0", licenses: ["Apache-2.0"], inRepo: true }),
+        dependency("pkg-development-direct", {
+          licenses: [DEVELOPMENT_ONLY_EXCEPTION],
+          direct: true,
+          graph: "development",
+        }),
+        dependency("pkg-development-transitive", { graph: "development" }),
+        dependency("pkg-runtime-direct", { direct: true }),
+        dependency("pkg-runtime-through-workspace", { licenses: ["BSD-3-Clause"], direct: true }),
+        dependency("pkg-runtime-transitive"),
+      ]);
+      // The root project is not a dependency of anything, so it never reaches the inventory.
+      expect(entries.map((entry) => entry.name)).not.toContain("synthetic-root");
+      expect(checkLicenses(entries, allowlist)).toEqual([]);
+
+      const document = renderDependencyReport({
+        entries,
+        allowlist,
+        generatedBy: GENERATED_BY,
+        sources: REPORT_SOURCES,
+      });
+      // The tree's one development-only licence is the one entry the exception covers.
+      expect(acceptedEntries(document)).toEqual([
+        `- pkg-development-direct@1.0.0 — \`${DEVELOPMENT_ONLY_EXCEPTION}\` (development graph)`,
+      ]);
+    });
+  });
+
+  it("exits 1 when that tree's development-only licence is in its runtime graph", async () => {
+    await withTemporaryDirectory(async (directory) => {
+      const root = buildInstalledTree(directory, DEVELOPMENT_ONLY_EXCEPTION);
+      const reportPath = join(directory, "runtime-exception-report.md");
+      // No `entries`: the command reads the tree itself, which is the path a classification regression
+      // changes — with every package read as development, this run would exit 0.
+      const { result } = await runCommand({ root, allowlist: deliveredAllowlist(), reportPath });
+
+      expect(result.wroteReport).toBe(true);
+      expect(result.entries).toHaveLength(6);
+      expect(result.exitCode).toBe(1);
+      expect(result.violations.map((violation) => violation.name)).toEqual(["pkg-runtime-transitive"]);
+
+      const violation = firstOf(result.violations, "the runtime-graph violation");
+      expect(violation.version).toBe("1.0.0");
+      expect(violation.graph).toBe("runtime");
+      expect(violation.licenses).toEqual([DEVELOPMENT_ONLY_EXCEPTION]);
+      expect(violation.reason).toMatch(/development-only/);
+      expect(violation.reason).toMatch(/runtime graph/);
+
+      // The same licence on the development edge of the same tree is not a violation.
+      expect(result.violations.map((violation) => violation.name)).not.toContain("pkg-development-direct");
+      expect(acceptedEntries(readFileSync(reportPath, "utf8"))).toEqual([
+        `- pkg-development-direct@1.0.0 — \`${DEVELOPMENT_ONLY_EXCEPTION}\` (development graph)`,
+      ]);
+    });
   });
 });
 
@@ -705,19 +912,27 @@ describe("the generated document", () => {
 
   it("is byte-identical for the same input, whatever order the entries arrive in", () => {
     const first = render();
-    const second = render();
 
-    // The document is committed evidence, so a spurious diff on every run would hide a real one.
-    expect(first === second).toBe(true);
+    // The document is committed evidence, so a spurious diff on every run would hide a real one, and
+    // what it renders has to be the fixture's own document — a renderer that dropped a row or a
+    // column would be byte-identical with itself and pass a self-comparison.
     expect(render([...entries].reverse())).toBe(first);
+    expect(dependencyRows(first)).toEqual([
+      ["@adem/example-workspace", "0.1.0", "none declared", "transitive", "runtime"],
+      ["pkg-direct-runtime", "1.2.3", "MIT", "direct", "runtime"],
+      ["pkg-mpl-development", "7.8.9", DEVELOPMENT_ONLY_EXCEPTION, "transitive", "development"],
+      ["pkg-transitive-development", "4.5.6", "Apache-2.0", "transitive", "development"],
+    ]);
   });
 
   it("carries no timestamp, host name or absolute path", () => {
     const document = render();
 
+    // Properties of the document, not of the machine that rendered it: a year, a date or a bare host
+    // name in the document is what a spurious diff would come from, wherever the run happened.
+    expect(document).not.toMatch(/\b(?:19|20)\d{2}\b/);
     expect(document).not.toMatch(/\d{4}-\d{2}-\d{2}/);
-    expect(document).not.toContain(String(new Date().getFullYear()));
-    expect(document).not.toContain(hostname());
+    expect(document.split("\n").filter((line) => BARE_HOST_NAME.test(line.trim()))).toEqual([]);
     expect(document).not.toContain(REPO_ROOT);
     expect(document).not.toContain(scratchDirectory());
     expect(document.endsWith("\n")).toBe(true);
@@ -737,6 +952,102 @@ describe("the generated document", () => {
     expect(checkLicenses([piped], deliveredAllowlist())).toHaveLength(1);
     expect(document).toContain("## Violations");
   });
+
+  /**
+   * The hostile shapes a dependency value can carry, one per character the renderer has to neutralise.
+   *
+   * A line feed and a carriage return would otherwise end the line the value sits on, so the rest of
+   * the value would render as a line nobody wrote — a heading, a list item or a table row — which is
+   * how a value hides its own row or fabricates one. A bare backtick would pair with a fence elsewhere
+   * on the line and close the span early. A backslash immediately before a backtick is where the
+   * escaping order goes wrong, because the escape the renderer adds is itself a backslash: escaping
+   * the backtick without escaping the value's own backslash first renders an escaped backslash and
+   * then a bare backtick, which opens a code span exactly as a bare one does.
+   *
+   * Each shape carries a licence outside the allowlist, so its entry lands in the violation list a
+   * reviewer reads as well as in the table.
+   */
+  const hostileShapes: ReadonlyArray<{ readonly label: string; readonly name: string }> = [
+    { label: "a line feed", name: "name-newline-package\n## Injected heading" },
+    { label: "a carriage return", name: "carriage-return-package\rINJECTED-ROW" },
+    { label: "a bare backtick", name: "pkg-backtick-name`x" },
+    { label: "a backslash before a backtick", name: "pkg-backslash-name\\`x" },
+  ];
+
+  it.each(hostileShapes)(
+    "escapes a dependency value carrying $label, so no value can break out of the line it renders on",
+    ({ name }: { readonly label: string; readonly name: string }) => {
+      /**
+       * The value as the document has to render it: each line break named by the two characters that
+       * spell it, then each backslash, then each backtick, escaped once.
+       */
+      const escaped = (value: string): string =>
+        value
+          .replace(/\r\n|\r|\n/g, (lineBreak) =>
+            lineBreak === "\r\n" ? "\\r\\n" : lineBreak === "\r" ? "\\r" : "\\n",
+          )
+          .replace(/\\/g, "\\\\")
+          .replace(/`/g, "\\`");
+
+      /**
+       * The backticks a line leaves unescaped, which are the ones that can pair with a fence.
+       *
+       * A backtick counts as escaped only behind an odd run of backslashes, which is how Markdown reads
+       * the escape: `\` followed by a backtick is a literal backtick, while the backslash of an escaped
+       * backslash pairs away and leaves the backtick behind it bare.
+       */
+      const unescapedBackticks = (line: string): number => {
+        let unescaped = 0;
+        let backslashes = 0;
+        for (const character of line) {
+          if (character === "\\") {
+            backslashes += 1;
+            continue;
+          }
+          if (character === "`" && backslashes % 2 === 0) unescaped += 1;
+          backslashes = 0;
+        }
+        return unescaped;
+      };
+
+      const hostile = dependency(name, { version: "1.2.0", licenses: [OUT_OF_ALLOWLIST_LICENCE] });
+      const document = render([hostile]);
+      const lines = document.split("\n");
+
+      // Exactly one line opens this entry's row, and it opens on the value as the document has to
+      // render it: a second line opening the row is what a break the renderer let through would make.
+      const rowLines = lines.filter((line) => line.startsWith(`| ${escaped(name)} |`));
+      expect(rowLines).toHaveLength(1);
+      const row = firstOf(rowLines, `the dependency table row of ${JSON.stringify(name)}`);
+      // The row still splits into its five cells, so the value hid no cell and added none.
+      expect(tableCells(row)).toHaveLength(5);
+      expect(tableCells(row)[0]).toBe(escaped(name));
+
+      // Its violation bullet carries the same escaped value, in the section a reviewer reads for
+      // problems, beside a licence span whose fence the value would otherwise pair with.
+      expect(document).toContain(`- ${escaped(name)}@1.2.0`);
+      expect(document.slice(document.indexOf("## Violations"))).toContain(`- ${escaped(name)}@1.2.0`);
+
+      // No line may leave an unescaped backtick unpaired, whichever shape carried it.
+      expect(lines.filter((line) => unescapedBackticks(line) % 2 !== 0)).toEqual([]);
+
+      // No line may open as a heading other than the document's own, which are the six a dependency
+      // value cannot add to: a line break the renderer let through would manufacture one from the
+      // rest of the value.
+      expect(lines.filter((line) => line.startsWith("#"))).toEqual([
+        "# Dependency inventory",
+        "## Sources",
+        "## Licence allowlist",
+        "## Dependencies",
+        "## Accepted through a development-only exception",
+        "## Violations",
+      ]);
+
+      // The escaping is cosmetic: that licence still fails the allowlist and is still reported.
+      expect(checkLicenses([hostile], deliveredAllowlist())).toHaveLength(1);
+      expect(document).toContain("## Violations");
+    },
+  );
 
   it("prints an entry's licences as one cell, joining its alternatives", () => {
     const document = render([dependency("pkg-multi", { version: "1.0.0", licenses: ["MIT", "Apache-2.0"] })]);

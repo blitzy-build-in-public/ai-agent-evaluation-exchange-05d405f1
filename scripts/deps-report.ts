@@ -1010,8 +1010,60 @@ export async function readInstalledTree(root: string = process.cwd()): Promise<r
 
 
 
-/** Escapes a value so it cannot break out of a Markdown table cell. */
-const escapeCell = (value: string): string => value.replace(/\|/g, '\\|');
+/**
+ * Replaces the line breaks in a rendered value with the two characters that name them.
+ *
+ * A value carrying a line feed or a carriage return would otherwise end the line it was placed on, so
+ * the rest of the value would render as a line of its own — a heading, a list item or a table row
+ * nobody wrote, which is how a dependency value hides its own row or fabricates one. Naming the break
+ * keeps the value on its line while a reader still sees what it carried; collapsing the break to a
+ * space or dropping it would lose that.
+ */
+const neutraliseLineBreaks = (value: string): string =>
+  value.replace(/\r\n|\r|\n/g, (lineBreak) =>
+    lineBreak === '\r\n' ? '\\r\\n' : lineBreak === '\r' ? '\\r' : '\\n',
+  );
+
+/**
+ * Escapes a value so it cannot break out of a Markdown table cell or a list item.
+ *
+ * Four characters would. A line break would end the line, so the rest of the value would render as a
+ * line of its own. A pipe would end the table cell. A bare backtick would pair with a fence elsewhere
+ * on the line — the fence of an inline code span the document itself opened — closing that span early
+ * and leaving its own closing fence stray. Each is rendered as the escape that names it, so a reader
+ * still sees what the value carried.
+ *
+ * The backslash is escaped first, ahead of the pipe and the backtick, because the escape this function
+ * adds is itself a backslash: a value's own backslash left in place would consume it, so a backslash
+ * immediately before a backtick would render as an escaped backslash followed by a bare backtick that
+ * opens a code span, and the same shape before a pipe would leave the pipe unescaped and end the cell.
+ * Escaping it first means every character the value carries is escaped once, by an escape of its own.
+ */
+const escapeCell = (value: string): string =>
+  neutraliseLineBreaks(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/`/g, '\\`');
+
+/**
+ * Renders a value as an inline code span no value can break out of.
+ *
+ * The fence is one backtick longer than the longest run of backticks in the value, which is the only
+ * fence the value cannot close early. A backtick is never backslash-escaped: a backslash is a literal
+ * character inside a code span, so the reader would see it. A value that starts or ends with a
+ * backtick is padded with one space inside the fence — the padding CommonMark strips, so it never
+ * reaches the reader — because a fence placed directly against the value's own backtick would read as
+ * a longer fence. The value is expected to have had its line breaks neutralised first.
+ */
+const codeSpan = (value: string): string => {
+  const longestRun = (value.match(/`+/g) ?? []).reduce(
+    (longest, run) => Math.max(longest, run.length),
+    0,
+  );
+  const fence = '`'.repeat(longestRun + 1);
+  const padded = value.startsWith('`') || value.endsWith('`') ? ` ${value} ` : value;
+  return `${fence}${padded}${fence}`;
+};
+
+/** Renders a licence as an inline code span, with its line breaks neutralised first. */
+const licenceSpan = (licence: string): string => codeSpan(neutraliseLineBreaks(licence));
 
 /** Renders an entry's licences as one table cell. */
 const licenceCell = (entry: DependencyEntry): string =>
@@ -1028,10 +1080,22 @@ const exceptionLicencesOf = (
     ),
   );
 
-/** Renders one declared package as the single line the `Declared packages` section lists it on. */
+/**
+ * Renders one declared package as the single line the `Declared packages` section lists it on.
+ *
+ * The name, the versions and the licences are values from a manifest or from the installed entry, so
+ * each is put through the same escaping the rest of the document uses — the name as an inline code
+ * span fenced to the value, the others escaped for a list item — because a value carrying a line
+ * break, a pipe, a backtick or a backslash would otherwise end the line it sits on or open a code
+ * span. The purpose is not escaped: it is this repository's own record of reviewed prose whose
+ * backticks are the document's own inline code, not a value read from a dependency.
+ */
 const declaredPackageLine = (declared: DeclaredPackage): string => {
-  const versions = declared.versions.length === 0 ? 'no version declared' : declared.versions.join(', ');
-  const licences = declared.licenses.length === 0 ? 'none declared' : declared.licenses.join(', ');
+  const name = codeSpan(neutraliseLineBreaks(declared.name));
+  const versions =
+    declared.versions.length === 0 ? 'no version declared' : declared.versions.map(escapeCell).join(', ');
+  const licences =
+    declared.licenses.length === 0 ? 'none declared' : declared.licenses.map(escapeCell).join(', ');
   const declarations =
     declared.declarations.length === 0
       ? 'no declaring manifest recorded'
@@ -1040,9 +1104,10 @@ const declaredPackageLine = (declared: DeclaredPackage): string => {
             (declaration) =>
               `${declaration.workspace} (${DECLARED_MAP_LABELS[declaration.map] ?? declaration.map})`,
           )
+          .map(escapeCell)
           .join(', ');
   const purpose = declared.purpose.trim().length === 0 ? NOT_RECORDED_PURPOSE : declared.purpose.trim();
-  return `- \`${declared.name}\` ${versions} — ${licences} — declared by ${declarations} — purpose: ${purpose}`;
+  return `- ${name} ${versions} — ${licences} — declared by ${declarations} — purpose: ${purpose}`;
 };
 
 /**
@@ -1158,9 +1223,11 @@ export function renderDependencyReport(input: {
   } else {
     for (const entry of accepted) {
       const licences = exceptionLicencesOf(entry, input.allowlist.developmentOnly)
-        .map((licence) => `\`${licence}\``)
+        .map(licenceSpan)
         .join(', ');
-      lines.push(`- ${entry.name}@${entry.version} — ${licences} (development graph)`);
+      lines.push(
+        `- ${escapeCell(entry.name)}@${escapeCell(entry.version)} — ${licences} (development graph)`,
+      );
     }
   }
 
@@ -1172,8 +1239,12 @@ export function renderDependencyReport(input: {
       const licences =
         violation.licenses.length === 0
           ? 'none declared'
-          : violation.licenses.map((licence) => `\`${licence}\``).join(', ');
-      lines.push(`- ${violation.name}@${violation.version} — licences: ${licences} — ${violation.reason}`);
+          : violation.licenses.map(licenceSpan).join(', ');
+      lines.push(
+        `- ${escapeCell(violation.name)}@${escapeCell(violation.version)} — licences: ${licences} — ${
+          escapeCell(violation.reason)
+        }`,
+      );
     }
   }
 
