@@ -9,18 +9,28 @@ This document describes the format exactly as `packages/shield/src/policy/` impl
 sentence here and a module disagree, the module is authoritative and this document is the thing to
 fix.
 
-## Where the format is implemented
+## The package's modules and the members they own
 
-| Module | The members it owns |
-| --- | --- |
-| `packages/shield/src/policy/policy-schema.ts` | `Decision`, `PolicyRule`, `Policy`, `PolicyValidationResult`, `validatePolicy`, `readPolicyVersion` |
-| `packages/shield/src/policy/load-policy.ts` | `loadPolicy`, `parsePolicyJson`, `PolicyLoadResult` |
-| `packages/shield/src/policy/match-rule.ts` | `RuleMatchTarget`, `ruleMatches`, `matchRule` |
-| `packages/shield/src/policy/example-policy.ts` | `examplePolicy` |
+The package's public entry is `packages/shield/src/index.ts`, and it is the only path an adopting
+application imports. The table maps every module of the package to the members it owns; the `In the
+package entry` column says which of those members the entry re-exports and which stay inside the
+package.
 
-The decision itself is made in `packages/shield/src/evaluate.ts`, which reads the policy through
-`validatePolicy` and the matching rule through `matchRule`. The audit event a decision appends is
-defined in `packages/shield/src/audit.ts`.
+| Module | The members it owns | In the package entry |
+| --- | --- | --- |
+| `packages/shield/src/evaluate.ts` | `evaluate`, `DecisionRecord`, `EvaluateContext`, `ToolCall` | all |
+| `packages/shield/src/policy/policy-schema.ts` | `Decision`, `PolicyRule`, `Policy`, `PolicyValidationResult`, `validatePolicy`, `readPolicyVersion` | all |
+| `packages/shield/src/policy/load-policy.ts` | `loadPolicy`, `parsePolicyJson`, `PolicyLoadResult` | `loadPolicy` and `PolicyLoadResult`; `parsePolicyJson` is not re-exported |
+| `packages/shield/src/policy/match-rule.ts` | `RuleMatchTarget`, `ruleMatches`, `matchRule` | all |
+| `packages/shield/src/policy/example-policy.ts` | `examplePolicy` | all |
+| `packages/shield/src/approvals.ts` | `createApprovalStore`, `ApprovalRecord`, `ApprovalStore` | all |
+| `packages/shield/src/audit.ts` | `createFileAuditSink`, `createInMemoryAuditLog`, `AuditEvent`, `AuditSink`, `InMemoryAuditLog` | all |
+| `packages/shield/src/adapters/reference-adapter.ts` | `toPolicy`, `toToolCall`, `GenericPolicy`, `GenericPolicyRule`, `GenericToolCall` | all |
+
+A decision is made by `evaluate`, which reads the policy through `validatePolicy` and the matching
+rule through `matchRule`. The audit event a decision appends is the `AuditEvent` shape
+`packages/shield/src/audit.ts` defines, and the reference adapter is the worked example of mapping an
+adopting application's own call and rule set onto the `ToolCall` and `Policy` shapes above.
 
 ## The document shape
 
@@ -98,7 +108,7 @@ therefore decided by its tool alone, and is refused with that rule's reason and 
 | `decision` | rule | yes | `allow`, `deny` or `needs_approval` | What the engine answers when the rule matches. |
 | `reason` | rule | yes | a non-empty string, free text | The policy author's own explanation, copied verbatim into a decision this rule makes. |
 | `arguments` | rule | no | an object | Argument constraints. Absent, the rule is decided by its tool alone. |
-| an `arguments` key | rule | — | a non-empty string | The name of a call argument the rule constrains. |
+| an `arguments` key | rule | — | a non-empty string other than the reserved `__proto__` | The name of a call argument the rule constrains. |
 | an `arguments` value | rule | — | a string, a finite number, a boolean, or `"*"` | What the call must carry at that key; `"*"` accepts any value the call carries there. |
 
 No other key is accepted at either level: `version` and `rules` at the document level, and `id`,
@@ -142,9 +152,14 @@ Order is the whole of precedence. Rules are walked from the first, the first mat
 and no later rule is consulted for a better or a more specific one — so a later rule never overrides
 an earlier one. Order the rules with that in mind: put the narrowest and the highest-risk rules
 first, so a rule written for one tool or one argument value is not pre-empted by a broader rule
-declared above it. A rule that cannot be read at all — an object whose `arguments` member is present
-but not a usable record while the rule lists constrained keys — is a refusal, never a match, because
-dropping constraints the author wrote would apply the rule to calls it was never written for.
+declared above it. A rule whose `arguments` member is present but is not a usable record does not
+match, whatever else the rule holds: the refusal does not wait for the member to list a constrained
+key, because an unreadable member lists none, and accepting it would drop constraints the author
+wrote and apply the rule to calls it was never written for. The call's side of the same test is
+deliberately narrower: a rule that does list at least one constrained key does not match a call whose
+own `arguments` member is not a usable record either, while a rule that lists none is decided by its
+tool alone and never reads the call's `arguments` at all — so a call carrying an unusable `arguments`
+member still matches an unconstrained rule.
 
 ## How the three outcomes are chosen
 
@@ -226,8 +241,10 @@ Each of these is a failure, and none of them is ever silently ignored:
 - a rule `id`, `tool` or `reason` that is missing, not a string or empty;
 - a `decision` outside `allow`, `deny` and `needs_approval`;
 - a rule id already used earlier in the same policy;
-- an `arguments` record that is not such an object, that holds an empty key, or that holds a value
-  which is neither a string, a finite number, a boolean nor `"*"`.
+- an `arguments` record that is not such an object, that holds an empty key, that holds the reserved
+  key `__proto__` — a name a validated record cannot carry as its own member, so keeping it would
+  drop the author's constraint — or that holds a value which is neither a string, a finite number, a
+  boolean nor `"*"`.
 
 The error is a short, lower-case message naming the place to fix, and no message carries a value
 taken from the candidate. Validation happens at load time, and the engine performs the same
@@ -241,7 +258,9 @@ already-parsed value, or the JSON text it was read from — a configuration file
 parsed itself, or a string it read from its own configuration. A string is the only input read as
 JSON text; every other value, `null`, `undefined`, a number, a boolean, a function and a cyclic
 object included, is validated exactly as it stands without being serialised first. `parsePolicyJson`
-handles the string case on its own, and the two return the same result shape, `PolicyLoadResult`:
+is the string-only entry point `packages/shield/src/policy/load-policy.ts` exports, and `loadPolicy`
+delegates a string input to it; an adopter holding only the package entry reaches the JSON-text case
+through `loadPolicy`, and the two return the same result shape, `PolicyLoadResult`:
 `{ ok: true; policy }` when the input is a policy, and `{ ok: false; error }` otherwise.
 
 `JSON.parse` is the sole parser, and text that is not valid JSON is a refusal — including text that
@@ -342,8 +361,10 @@ the loader's job.
   what the engine allows rather than widening it. An unreadable call and an invalid policy are both
   denied, and the engine never throws.
 - **Refusing beats matching.** A rule whose `arguments` cannot be read, or that names a key the call
-  does not carry, does not match. Dropping a constraint and matching anyway would apply the rule to
-  calls its author never wrote it for.
+  does not carry, does not match. A rule that lists constrained keys is not met by a call whose own
+  `arguments` member cannot be read either, while a rule that lists none is decided by its tool alone.
+  Dropping a constraint and matching anyway would apply the rule to calls its author never wrote it
+  for.
 - **A checkpoint can only release, never widen.** An approval releases a call a rule blocked with
   `needs_approval`; it cannot turn a `deny` into an `allow` and cannot add a rule to a policy.
 
@@ -360,5 +381,7 @@ claim — is listed in `docs/shield/EXCLUSIONS.md`.
 - `docs/shield/THREAT-MODEL.md` — the supported threat model, and the limits of keying approvals by
   call id alone.
 - `docs/shield/EXCLUSIONS.md` — what Shield does not cover.
+- `packages/shield/src/index.ts` — the package's public entry, and the whole surface an adopting
+  application imports.
 - `packages/shield/src/policy/` — the implementation of every rule stated here.
 

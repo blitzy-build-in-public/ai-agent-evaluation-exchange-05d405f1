@@ -39,8 +39,8 @@ function expectValid(candidate: unknown): Policy {
 }
 
 /** Read a rule by index, narrowing a possibly-absent member without a `!`. */
-function ruleAt(policy: Policy, index: number): PolicyRule {
-  const rule = policy.rules[index];
+function ruleAt(collection: readonly PolicyRule[], index: number): PolicyRule {
+  const rule = collection[index];
   if (rule === undefined) {
     throw new Error(`expected a rule at index ${index}`);
   }
@@ -208,6 +208,10 @@ describe("validatePolicy: strictness in the arguments record", () => {
     ["arguments as a number", policyWithRules([ruleWith({ arguments: 3 })])],
     ["arguments as null", policyWithRules([ruleWith({ arguments: null })])],
     ["an empty argument key", policyWithRules([ruleWith({ arguments: { "": "read_file" } })])],
+    // JSON text is the only input that can produce an own `__proto__` key, so both of these are
+    // built with `JSON.parse`: a JS object literal would set the prototype and add no own member.
+    ["an arguments record carrying the reserved key", policyWithRules([ruleWith({ arguments: JSON.parse('{"__proto__":"*"}') })])],
+    ["the reserved key beside a legitimate key", policyWithRules([ruleWith({ arguments: JSON.parse('{"scope":"workspace","__proto__":"*"}') })])],
     ["an object-valued argument", policyWithRules([ruleWith({ arguments: { path: {} } })])],
     ["an array-valued argument", policyWithRules([ruleWith({ arguments: { path: [] } })])],
     ["a null-valued argument", policyWithRules([ruleWith({ arguments: { path: null } })])],
@@ -222,6 +226,39 @@ describe("validatePolicy: strictness in the arguments record", () => {
   it.each(refused)("refuses %s", (_label, candidate) => {
     expectRefusal(candidate);
   });
+
+  // Catches a fix that keeps the reserved key instead of refusing it: the constraint a plain
+  // assignment would drop has to be refused, and the record's own prototype chain has to survive
+  // the refusal untouched. The fixture is JSON text because a JS literal adds no own `__proto__`.
+  it("refuses the reserved key carried as a real own key, leaving the prototype chain alone", () => {
+    const rawArguments: Record<string, unknown> = JSON.parse('{"__proto__":"*"}');
+    expect(Object.prototype.hasOwnProperty.call(rawArguments, "__proto__")).toBe(true);
+
+    const message = expectRefusal(policyWithRules([ruleWith({ arguments: rawArguments })]));
+
+    expect(message).toBe("rules[0].arguments: invalid argument key");
+    expect(message).not.toContain("__proto__");
+    expect(Object.getPrototypeOf(rawArguments)).toBe(Object.prototype);
+    const fresh: Record<string, unknown> = {};
+    expect(fresh.polluted, "validation must not set a prototype").toBeUndefined();
+  });
+
+  // The refusal is the reserved key alone. `constructor` and `toString` are ordinary inherited data
+  // properties rather than accessors, so assignment gives the record an own member of each and both
+  // constraints survive validation.
+  it("accepts constructor and toString, whose inherited members are data properties, and keeps them", () => {
+    const policy = expectValid(
+      policyWithRules([ruleWith({ arguments: { constructor: "*", toString: "*" } })]),
+    );
+    const accepted = ruleAt(policy.rules, 0).arguments;
+    if (accepted === undefined) {
+      throw new Error("expected the rule to carry the arguments record it supplied");
+    }
+
+    expect(Object.keys(accepted).sort()).toEqual(["constructor", "toString"]);
+    expect(Object.prototype.hasOwnProperty.call(accepted, "constructor")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(accepted, "toString")).toBe(true);
+  });
 });
 
 describe("validatePolicy: accepted shapes", () => {
@@ -235,20 +272,20 @@ describe("validatePolicy: accepted shapes", () => {
   it("accepts a rule that supplies no arguments and keeps the member absent", () => {
     const policy = expectValid(policyWithRules([ruleWith({})]));
 
-    expect(ruleAt(policy, 0)).toEqual<PolicyRule>({
+    expect(ruleAt(policy.rules, 0)).toEqual<PolicyRule>({
       id: "read",
       tool: "read_file",
       decision: "allow",
       reason: "reading is permitted",
     });
-    expect(Object.prototype.hasOwnProperty.call(ruleAt(policy, 0), "arguments")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(ruleAt(policy.rules, 0), "arguments")).toBe(false);
   });
 
   it("accepts an empty arguments record and keeps the member present", () => {
     const policy = expectValid(policyWithRules([ruleWith({ arguments: {} })]));
 
-    expect(ruleAt(policy, 0).arguments).toEqual({});
-    expect(Object.prototype.hasOwnProperty.call(ruleAt(policy, 0), "arguments")).toBe(true);
+    expect(ruleAt(policy.rules, 0).arguments).toEqual({});
+    expect(Object.prototype.hasOwnProperty.call(ruleAt(policy.rules, 0), "arguments")).toBe(true);
   });
 
   it("accepts string, number, boolean and wildcard argument values and keeps them", () => {
@@ -264,7 +301,7 @@ describe("validatePolicy: accepted shapes", () => {
       ]),
     );
 
-    expect(ruleAt(policy, 0).arguments).toEqual({
+    expect(ruleAt(policy.rules, 0).arguments).toEqual({
       path: "notes.txt",
       retries: 3,
       readonly: true,
@@ -303,15 +340,15 @@ describe("validatePolicy: accepted shapes", () => {
     const policy = expectValid(input);
 
     expect(policy).not.toBe(input);
-    expect(ruleAt(policy, 0)).not.toBe(ruleInput);
+    expect(ruleAt(policy.rules, 0)).not.toBe(ruleInput);
     expect(Object.keys(policy).sort()).toEqual(["rules", "version"]);
-    expect(Object.keys(ruleAt(policy, 0)).sort()).toEqual(["decision", "id", "reason", "tool"]);
+    expect(Object.keys(ruleAt(policy.rules, 0)).sort()).toEqual(["decision", "id", "reason", "tool"]);
   });
 
   it("carries arguments beside the recognised keys on a rule that supplied them", () => {
     const policy = expectValid(policyWithRules([ruleWith({ arguments: { path: "notes.txt" } })]));
 
-    expect(Object.keys(ruleAt(policy, 0)).sort()).toEqual([
+    expect(Object.keys(ruleAt(policy.rules, 0)).sort()).toEqual([
       "arguments",
       "decision",
       "id",
@@ -334,7 +371,7 @@ describe("validatePolicy: accepted shapes", () => {
     ruleInput.decision = "deny";
 
     expect(policy.version).toBe("1.0.0");
-    expect(ruleAt(policy, 0).decision).toBe("allow");
+    expect(ruleAt(policy.rules, 0).decision).toBe("allow");
   });
 
   it("returns an arguments record detached from the caller's own record", () => {
@@ -343,7 +380,7 @@ describe("validatePolicy: accepted shapes", () => {
 
     argumentsInput.path = "changed.txt";
 
-    expect(ruleAt(policy, 0).arguments).toEqual({ path: "notes.txt" });
+    expect(ruleAt(policy.rules, 0).arguments).toEqual({ path: "notes.txt" });
   });
 });
 
@@ -352,6 +389,38 @@ describe("validatePolicy: refusal messages", () => {
     const error = expectRefusal('{"version":"1.0.0","rules":[]}');
 
     expect(error).not.toContain("{");
+  });
+
+  // A key name and a rule id are text the candidate supplied, and either may be credential-shaped
+  // or enormous: the message names the place to fix and never the text that was there. Both markers
+  // are assembled at run time, so this file holds no credential-shaped literal.
+  it("keeps a credential-shaped key name and rule id out of the message", () => {
+    const credentialShapedKey = ["sk", "live", "0123456789abcdef"].join("-");
+    const keyMessage = expectRefusal({ version: "1.0.0", rules: [], [credentialShapedKey]: 1 });
+
+    expect(keyMessage).toBe("policy: unrecognised key");
+    expect(keyMessage).not.toContain(credentialShapedKey);
+
+    const credentialShapedId = ["ghp", "0123456789abcdef"].join("-");
+    const idMessage = expectRefusal(
+      policyWithRules([
+        ruleWith({ id: credentialShapedId }),
+        ruleWith({ id: credentialShapedId, tool: "write_file" }),
+      ]),
+    );
+
+    expect(idMessage).toBe("rules[1]: duplicate rule id");
+    expect(idMessage).not.toContain(credentialShapedId);
+  });
+
+  // The same promise holds for the rule-level key refusal, the third message that once named the
+  // text it had read.
+  it("keeps an unrecognised rule key out of the message", () => {
+    const credentialShapedKey = ["sk", "live", "fedcba9876543210"].join("-");
+    const message = expectRefusal(policyWithRules([ruleWith({ [credentialShapedKey]: 1 })]));
+
+    expect(message).toBe("rules[0]: unrecognised key");
+    expect(message).not.toContain(credentialShapedKey);
   });
 });
 

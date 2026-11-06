@@ -69,9 +69,12 @@ function isRecord(candidate: unknown): candidate is Record<string, unknown> {
  *
  * It refuses instead of raising: `false` for a rule, a tool, a call or an
  * `arguments` member it cannot read — a rule that is not a usable object, a tool
- * that is not a string, and an `arguments` member present but not a usable record
- * or not readable while the rule lists constrained keys. A member that cannot be
- * read is a refusal, never a match.
+ * that is not a string, and a rule's `arguments` member present but not a usable
+ * record. A member that cannot be read is a refusal, never a match, and the two
+ * sides refuse on different terms: a rule's own `arguments` is refused outright,
+ * while a call's is refused only when the rule lists a constrained key — a rule
+ * that lists none is decided by its tool alone and never reads the call's
+ * `arguments`.
  */
 export function ruleMatches(rule: PolicyRule, call: RuleMatchTarget): boolean {
   try {

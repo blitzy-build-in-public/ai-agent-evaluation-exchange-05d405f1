@@ -45,6 +45,18 @@ const POLICY_KEYS = new Set(["version", "rules"]);
 const RULE_KEYS = new Set(["id", "tool", "decision", "reason", "arguments"]);
 
 /**
+ * The one argument key a validated record can never hold.
+ *
+ * `Object.keys` on a record parsed from JSON does yield an own `"__proto__"` key, so it passes the
+ * empty-key check — but assigning that key onto an ordinary record reaches `Object.prototype`'s
+ * inherited accessor instead of adding a member, so the constraint would be gone while the rule was
+ * still accepted, and the rule would then match every call naming its tool. JSON text is the only
+ * input that can produce the key and a JSON policy is the primary input path, so the key is refused
+ * rather than kept: an author's constraint is never dropped in silence.
+ */
+const RESERVED_ARGUMENT_KEY = "__proto__";
+
+/**
  * True for a non-null, non-array object whose own enumerable string keys carry
  * the whole of it — the only container shape a policy, a rule or an argument
  * record may take. Arrays are excluded because an array would satisfy every
@@ -82,12 +94,16 @@ function isRecord(candidate: unknown): candidate is Record<string, unknown> {
  * non-null, non-array object; a rule `id`, `tool` or `reason` that is missing,
  * not a string or empty; a `decision` outside `"allow"`, `"deny"` and
  * `"needs_approval"`; a rule id already used earlier in the policy; and an
- * `arguments` record that holds an empty key or a value that is neither a
- * string, a finite number, a boolean nor `"*"`.
+ * `arguments` record that holds an empty key, that holds the reserved key
+ * `"__proto__"` — which a record cannot carry as an own member, so keeping it
+ * would drop the author's constraint in silence — or that holds a value that is
+ * neither a string, a finite number, a boolean nor `"*"`.
  *
  * It never throws: a candidate whose members cannot be read without raising is
- * refused with `policy: the candidate could not be read`, and no message ever
- * carries a value taken from the candidate.
+ * refused with `policy: the candidate could not be read`, and no message carries
+ * any text the candidate supplied — not an unrecognised key name, not a rule id,
+ * not an argument value — so a caller logging a refusal spreads none of the
+ * document it was handed.
  */
 export function validatePolicy(candidate: unknown): PolicyValidationResult {
   try {
@@ -97,7 +113,7 @@ export function validatePolicy(candidate: unknown): PolicyValidationResult {
 
     for (const key of Object.keys(candidate)) {
       if (!POLICY_KEYS.has(key)) {
-        return { ok: false, error: `policy: unrecognised key "${key}"` };
+        return { ok: false, error: "policy: unrecognised key" };
       }
     }
 
@@ -123,7 +139,7 @@ export function validatePolicy(candidate: unknown): PolicyValidationResult {
 
       for (const ruleKey of Object.keys(rawRule)) {
         if (!RULE_KEYS.has(ruleKey)) {
-          return { ok: false, error: `rules[${index}]: unrecognised key "${ruleKey}"` };
+          return { ok: false, error: `rules[${index}]: unrecognised key` };
         }
       }
 
@@ -132,7 +148,7 @@ export function validatePolicy(candidate: unknown): PolicyValidationResult {
         return { ok: false, error: `rules[${index}]: missing or empty id` };
       }
       if (acceptedIds.has(id)) {
-        return { ok: false, error: `rules[${index}]: duplicate rule id "${id}"` };
+        return { ok: false, error: `rules[${index}]: duplicate rule id` };
       }
 
       const tool = rawRule.tool;
@@ -166,7 +182,10 @@ export function validatePolicy(candidate: unknown): PolicyValidationResult {
 
       const accepted: Record<string, string | number | boolean | "*"> = {};
       for (const argumentKey of Object.keys(rawArguments)) {
-        if (argumentKey === "") {
+        // An empty key names nothing, and the reserved key could never become an own member of this
+        // record; either one would leave the author's constraint out of the policy returned as
+        // valid, so the two are refused with the same message.
+        if (argumentKey === "" || argumentKey === RESERVED_ARGUMENT_KEY) {
           return { ok: false, error: `rules[${index}].arguments: invalid argument key` };
         }
 

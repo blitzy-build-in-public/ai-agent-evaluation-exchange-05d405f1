@@ -199,8 +199,8 @@ function asGenericPolicy(value: unknown): GenericPolicy {
 }
 
 /** Read a rule by index, narrowing a possibly-absent member without a `!`. */
-function ruleAt(policy: Policy, index: number): PolicyRule {
-  const rule = policy.rules[index];
+function ruleAt(collection: readonly PolicyRule[], index: number): PolicyRule {
+  const rule = collection[index];
   if (rule === undefined) {
     throw new Error(`expected a rule at index ${index}`);
   }
@@ -339,8 +339,8 @@ describe("toPolicy: the policy mapping", () => {
   it("copies the constraints, and omits the member entirely when the host's rule states none", () => {
     const mapped = toPolicy(hostPolicy());
 
-    expect(ruleAt(mapped, 0).arguments).toEqual({ scope: "workspace" });
-    expect(Object.prototype.hasOwnProperty.call(ruleAt(mapped, 2), "arguments")).toBe(false);
+    expect(ruleAt(mapped.rules, 0).arguments).toEqual({ scope: "workspace" });
+    expect(Object.prototype.hasOwnProperty.call(ruleAt(mapped.rules, 2), "arguments")).toBe(false);
   });
 
   it("copies a string, a number, a boolean and the wildcard value of a constraint into a fresh record", () => {
@@ -363,7 +363,7 @@ describe("toPolicy: the policy mapping", () => {
         },
       ],
     });
-    const rule = ruleAt(mapped, 0);
+    const rule = ruleAt(mapped.rules, 0);
 
     expect(rule.arguments).toEqual({ scope: "workspace", depth: 2, follow_links: false, format: "*" });
     expect(rule.arguments).not.toBe(constraints);
@@ -380,8 +380,8 @@ describe("toPolicy: the policy mapping", () => {
 
     expect(mapped).not.toBe(policy);
     expect(mapped.rules).not.toBe(policy.rules);
-    expect(ruleAt(mapped, 0)).not.toBe(hostRule);
-    expect(ruleAt(mapped, 0).arguments).not.toBe(hostRule.arguments);
+    expect(ruleAt(mapped.rules, 0)).not.toBe(hostRule);
+    expect(ruleAt(mapped.rules, 0).arguments).not.toBe(hostRule.arguments);
 
     policy.version = "suite-2.0.0";
     hostRule.name = "delete_record";
@@ -472,7 +472,7 @@ describe("toPolicy: the refusal direction", () => {
       const mapped = toPolicy(
         asGenericPolicy({ version: "v", rules: [{ id: "r", name: "read_file", effect, message: "m" }] }),
       );
-      const rule = ruleAt(mapped, 0);
+      const rule = ruleAt(mapped.rules, 0);
       const record = evaluate(toToolCall({ callId: "call-1", name: "read_file", input: {} }), mapped);
 
       expect(["allow", "deny", "needs_approval"]).toContain<string>(rule.decision);

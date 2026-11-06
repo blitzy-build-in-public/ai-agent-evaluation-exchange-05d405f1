@@ -40,8 +40,8 @@ const UNMATCHED_TOOL = "http_request";
 const ANY_TARGET = "example-target";
 
 /** Read a rule by index, narrowing a possibly-absent member without a `!`. */
-function ruleAt(rules: readonly PolicyRule[], index: number): PolicyRule {
-  const rule = rules[index];
+function ruleAt(collection: readonly PolicyRule[], index: number): PolicyRule {
+  const rule = collection[index];
   if (rule === undefined) {
     throw new Error(`the worked example must declare a rule at index ${index}`);
   }

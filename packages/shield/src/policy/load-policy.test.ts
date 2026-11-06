@@ -16,7 +16,7 @@
 
 import { describe, it, expect } from "vitest";
 import { loadPolicy, parsePolicyJson } from "./load-policy";
-import type { Policy } from "./policy-schema";
+import type { Policy, PolicyRule } from "./policy-schema";
 
 /** The result shape both entry points return. */
 type LoadResult = ReturnType<typeof loadPolicy>;
@@ -31,18 +31,18 @@ function expectRefusal(result: LoadResult): string {
 }
 
 /** Assert acceptance and return the policy the loader validated. */
-function expectLoaded(result: LoadResult): Policy {
+function expectValid(result: LoadResult): Policy {
   if (!result.ok) {
     throw new Error(`expected the loader to accept this input: ${result.error}`);
   }
   return result.policy;
 }
 
-/** A policy's first rule, narrowing a possibly-absent member without a `!`. */
-function firstRule(policy: Policy): Policy["rules"][number] {
-  const rule = policy.rules[0];
+/** Read a rule by index, narrowing a possibly-absent member without a `!`. */
+function ruleAt(collection: readonly PolicyRule[], index: number): PolicyRule {
+  const rule = collection[index];
   if (rule === undefined) {
-    throw new Error("expected the policy to carry at least one rule");
+    throw new Error(`expected a rule at index ${index}`);
   }
   return rule;
 }
@@ -96,10 +96,10 @@ function asUnknownText(value: unknown): string {
 
 describe("loadPolicy: the two input forms", () => {
   it("loads a policy already parsed, preserving every field of its rule", () => {
-    const policy = expectLoaded(loadPolicy(validPolicy));
+    const policy = expectValid(loadPolicy(validPolicy));
 
     expect(policy.version).toBe("1.0.0");
-    const rule = firstRule(policy);
+    const rule = ruleAt(policy.rules, 0);
     expect(rule.tool).toBe("read_file");
     expect(rule.decision).toBe("allow");
     expect(rule.reason).toBe("Reading a file is allowed by this test policy.");
@@ -107,22 +107,22 @@ describe("loadPolicy: the two input forms", () => {
   });
 
   it("loads the same policy from its JSON text and agrees with the value path", () => {
-    const fromValue = expectLoaded(loadPolicy(validPolicy));
-    const fromText = expectLoaded(loadPolicy(JSON.stringify(validPolicy)));
+    const fromValue = expectValid(loadPolicy(validPolicy));
+    const fromText = expectValid(loadPolicy(JSON.stringify(validPolicy)));
 
     expect(fromText.version).toBe(fromValue.version);
-    expect(firstRule(fromText).id).toBe(firstRule(fromValue).id);
-    expect(firstRule(fromText).decision).toBe(firstRule(fromValue).decision);
+    expect(ruleAt(fromText.rules, 0).id).toBe(ruleAt(fromValue.rules, 0).id);
+    expect(ruleAt(fromText.rules, 0).decision).toBe(ruleAt(fromValue.rules, 0).decision);
     expect(fromText).toEqual(fromValue);
   });
 
   // Catches a loader that serialises a parsed value before validating it: this
   // fixture raises when it is serialised and validates as it stands.
   it("validates a parsed value as it stands, never serialising it", () => {
-    const policy = expectLoaded(loadPolicy(policyWhoseSerialisationRaises()));
+    const policy = expectValid(loadPolicy(policyWhoseSerialisationRaises()));
 
     expect(policy.version).toBe("1.0.0");
-    expect(firstRule(policy).tool).toBe("read_file");
+    expect(ruleAt(policy.rules, 0).tool).toBe("read_file");
   });
 
   // The same mistake from the other side, direction pinned: a loader that
@@ -180,6 +180,21 @@ describe("parsePolicyJson: text that cannot be a policy", () => {
     expectRefusal(parsePolicyJson('{"version":"","rules":"nope"}'));
     expect(parsePolicyJson('{"version":"1.0.0","rules":[]}').ok).toBe(true);
   });
+
+  // The reserved argument key reaches the validator through JSON text alone, and a policy file is
+  // the primary input path a policy takes: both entry points refuse that text and neither echoes
+  // any of it back, because a rule id and a key name are text the document may hold and the message
+  // is not the place to spread them.
+  it("refuses the text of a rule constrained on the reserved argument key, without echoing it", () => {
+    const text =
+      '{"version":"proto-1.0.0","rules":[{"id":"proto-rule","tool":"danger_tool","decision":"allow","reason":"x","arguments":{"__proto__":"*"}}]}';
+
+    const message = expectRefusal(parsePolicyJson(text));
+
+    expectRefusal(loadPolicy(text));
+    expect(message).not.toContain("__proto__");
+    expect(message).not.toContain(text);
+  });
 });
 
 const inputsThatAreNotAPolicy: Array<{ label: string; value: unknown }> = [
@@ -227,7 +242,7 @@ describe("loadPolicy: a string is only ever read as JSON text", () => {
   // Catches a loader that hands a string to the validator as a value instead of
   // reading it as JSON text, and one that fails to round trip a policy.
   it("round trips a policy through its JSON text", () => {
-    const policy = expectLoaded(parsePolicyJson(JSON.stringify(validPolicy)));
+    const policy = expectValid(parsePolicyJson(JSON.stringify(validPolicy)));
 
     expect(policy.version).toBe(validPolicy.version);
     expect(policy).toEqual(validPolicy);

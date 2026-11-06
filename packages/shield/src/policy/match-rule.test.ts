@@ -32,6 +32,13 @@ const asRule = (candidate: unknown): PolicyRule => candidate as PolicyRule;
 const asPolicy = (candidate: unknown): Policy => candidate as Policy;
 const asCall = (candidate: unknown): RuleMatchTarget => candidate as RuleMatchTarget;
 
+/** A proxy whose every read raises, the one container shape the matcher's catch answers for. */
+function revokedProxy(): unknown {
+  const { proxy, revoke } = Proxy.revocable({ tool: "read_file" }, {});
+  revoke();
+  return proxy;
+}
+
 const readRule: PolicyRule = { id: "read", tool: "read_file", decision: "allow", reason: "reading a report is allowed" };
 const sendRule: PolicyRule = { id: "send", tool: "send_message", decision: "needs_approval", reason: "sending needs approval" };
 const anyToolRule: PolicyRule = { id: "any-tool", tool: "*", decision: "allow", reason: "the rule names every tool" };
@@ -242,6 +249,26 @@ describe("refusals: input the matcher cannot read is refused, never raised on", 
     expect(ruleMatches(rule, buildCall("read_file"))).toBe(false);
   });
 
+  // A tool that is not a string is refused on either side, and the tool wildcard
+  // widens nothing: the guard answers before a name is compared. Dropping it turns
+  // every row below but the first into a match — the pairing row shares its own
+  // garbage between rule and call, and the three after it apply a `"*"` rule to a
+  // tool it cannot read — while a non-string tool against a readable name is refused
+  // by the name comparison as well. `buildCall` types its tool as a string, so the
+  // unreadable ones arrive through `asCall`, as an untyped caller hands them over.
+  const unreadableTools: Array<[string, PolicyRule, RuleMatchTarget, boolean]> = [
+    ["refuses a rule whose tool is a number", asRule({ ...readRule, tool: 7 }), buildCall("read_file"), false],
+    ["refuses a rule and a call whose tools are the same non-string", asRule({ ...readRule, tool: 7 }), asCall({ tool: 7, arguments: {} }), false],
+    ["refuses the tool wildcard against a call whose tool is a number", anyToolRule, asCall({ tool: 7, arguments: {} }), false],
+    ["refuses the tool wildcard against a call whose tool is null", anyToolRule, asCall({ tool: null, arguments: {} }), false],
+    ["refuses the tool wildcard against a call carrying no tool at all", anyToolRule, asCall({ arguments: {} }), false],
+  ];
+
+  it.each(unreadableTools)("%s", (_label, rule, call, expected) => {
+    expect(() => ruleMatches(rule, call)).not.toThrow();
+    expect(ruleMatches(rule, call)).toBe(expected);
+  });
+
   const notRecords: Array<[string, unknown]> = [
     ["null", null], ["a string", "report.txt"], ["an array", ["path"]], ["a number", 42],
   ];
@@ -279,5 +306,25 @@ describe("refusals: input the matcher cannot read is refused, never raised on", 
     // A rule that does list constraints cannot have them satisfied by a member it
     // cannot read, so it refuses.
     expect(ruleMatches(scopedRule, call)).toBe(false);
+  });
+
+  // A revoked proxy is a container whose every read raises, and the matcher's own
+  // catch is what has to answer for it rather than the raise escaping: `false` for a
+  // rule or a call, and the walk's `null` for a policy it cannot read. It is the one
+  // shape that gets that far — `isRecord` refuses the containers the tables above
+  // hand over, and `Array.isArray` raises for a revoked proxy, so this probe never
+  // returns at all — which is why no other case reaches these lines.
+  const unreadableContainers: Array<
+    [string, () => boolean | PolicyRule | null, boolean | PolicyRule | null]
+  > = [
+    ["a rule whose every read raises", () => ruleMatches(asRule(revokedProxy()), buildCall("read_file")), false],
+    ["a call whose every read raises", () => ruleMatches(readRule, asCall(revokedProxy())), false],
+    ["a policy whose every read raises", () => matchRule(asPolicy(revokedProxy()), buildCall("read_file")), null],
+    ["a call whose every read raises, walked by matchRule", () => matchRule(buildPolicy(readRule), asCall(revokedProxy())), null],
+  ];
+
+  it.each(unreadableContainers)("refuses %s rather than letting the read raise", (_label, run, expected) => {
+    expect(run).not.toThrow();
+    expect(run()).toBe(expected);
   });
 });
