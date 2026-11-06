@@ -28,15 +28,14 @@ function catchSeamError(candidate: unknown): ListingCategoryValidationError {
 
 describe("validateListingCategory", () => {
   it.each([
-    "aa",
+    "ab",
     "a1",
+    "a-b",
     "a--b",
     "ab-",
     "logistics-tools",
-    "customer-support",
-    "data-pipelines",
-    "document-processing",
     "x".repeat(32),
+    "a" + "-".repeat(31),
   ])("accepts the slug %s", (slug) => {
     const candidate = { ...validCategory, slug };
 
@@ -58,6 +57,7 @@ describe("validateListingCategory", () => {
     "logistics tools",
     "logistics.tools",
     "",
+    42,
   ])("refuses the slug %s", (slug) => {
     const error = catchSeamError({ ...validCategory, slug });
 
@@ -167,5 +167,38 @@ describe("validateListingCategory", () => {
     const error = catchSeamError({ ...validCategory, name: "" });
 
     expect(error.message).toBe('ListingCategory field "name" must be a non-empty string.');
+  });
+
+  /**
+   * The four categories `apps/api/src/seed/seed-data.ts` seeds, validated here as whole categories so
+   * a seeded slug that cannot satisfy this guard fails in the unit suite rather than at start-up.
+   * The pattern is the seam's contract: a seed slug that stops matching is a plan conflict to raise,
+   * never a reason to widen the pattern.
+   */
+  it.each([
+    {
+      slug: "customer-support",
+      name: "Customer support",
+      description: "Agents that answer, route and follow up on customer requests.",
+    },
+    {
+      slug: "data-pipelines",
+      name: "Data pipelines",
+      description: "Agents that ingest, transform and publish datasets.",
+    },
+    {
+      slug: "document-processing",
+      name: "Document processing",
+      description: "Agents that extract structure from documents.",
+    },
+    {
+      slug: "logistics-tools",
+      name: "Logistics tools",
+      description: "Agents that plan, track and reconcile shipments.",
+    },
+  ])("accepts the seeded category $slug", (category) => {
+    const validated = validateListingCategory(category);
+
+    expect(validated).toBe(category);
   });
 });
