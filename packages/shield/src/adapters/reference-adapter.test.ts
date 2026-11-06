@@ -27,6 +27,7 @@ import type { GenericPolicy, GenericToolCall } from "./reference-adapter";
 const ALLOW_READ_REASON = "Reading a file inside the demo workspace is permitted by this suite.";
 const APPROVE_WRITE_REASON = "Writing a file waits for an approval recorded for this call id.";
 const DENY_DELETE_REASON = "Deleting a record is refused by this suite.";
+const ALLOW_ANY_SCOPE_REASON = "Reading a file outside the demo workspace is permitted by this suite.";
 
 /** The policy the host states, in the host's own vocabulary. */
 function hostPolicy(): GenericPolicy {
@@ -52,6 +53,36 @@ function hostPolicy(): GenericPolicy {
         name: "delete_record",
         effect: "deny",
         message: DENY_DELETE_REASON,
+      },
+    ],
+  };
+}
+
+/**
+ * The policy whose first rule pins a constrained argument to one value and whose second accepts any
+ * value at that same key.
+ *
+ * It is what makes argument matching reachable through the mapping: the first rule decides a call
+ * carrying the pinned value, the second decides any other call carrying the key at all, and a call
+ * that omits the key matches neither.
+ */
+function scopedPolicy(): GenericPolicy {
+  return {
+    version: "suite-scope-1.0.0",
+    rules: [
+      {
+        id: "allow-read-workspace",
+        name: "read_file",
+        effect: "allow",
+        message: ALLOW_READ_REASON,
+        arguments: { scope: "workspace" },
+      },
+      {
+        id: "allow-read-any-scope",
+        name: "read_file",
+        effect: "allow",
+        message: ALLOW_ANY_SCOPE_REASON,
+        arguments: { scope: "*" },
       },
     ],
   };
@@ -251,6 +282,33 @@ describe("toPolicy: the policy mapping", () => {
     expect(Object.prototype.hasOwnProperty.call(ruleAt(mapped, 2), "arguments")).toBe(false);
   });
 
+  it("copies a string, a number, a boolean and the wildcard value of a constraint into a fresh record", () => {
+    const constraints: Record<string, string | number | boolean | "*"> = {
+      scope: "workspace",
+      depth: 2,
+      follow_links: false,
+      format: "*",
+    };
+
+    const mapped = toPolicy({
+      version: "suite-constraints-1.0.0",
+      rules: [
+        {
+          id: "allow-read",
+          name: "read_file",
+          effect: "allow",
+          message: ALLOW_READ_REASON,
+          arguments: constraints,
+        },
+      ],
+    });
+    const rule = ruleAt(mapped, 0);
+
+    expect(rule.arguments).toEqual({ scope: "workspace", depth: 2, follow_links: false, format: "*" });
+    expect(rule.arguments).not.toBe(constraints);
+    expect(validatePolicy(mapped).ok).toBe(true);
+  });
+
   it("returns fresh rules and constraints, so a later change to the host's policy cannot change the mapped one", () => {
     const policy = hostPolicy();
     const mapped = toPolicy(policy);
@@ -394,6 +452,59 @@ describe("the mapping and the engine together", () => {
     ],
   ])("decides a generic call under a generic policy, taking a matched rule's own message as the reason: %s", (_label, call, expected) => {
     expect(evaluate(toToolCall(call), toPolicy(hostPolicy()))).toEqual<DecisionRecord>(expected);
+  });
+
+  it("decides by the rule accepting any value at the constrained key when the pinned rule falls through", () => {
+    const mapped = toPolicy(scopedPolicy());
+    const call = toToolCall({ callId: "call-elsewhere", name: "read_file", input: { scope: "elsewhere" } });
+
+    expect(validatePolicy(mapped).ok).toBe(true);
+    expect(evaluate(call, mapped)).toEqual<DecisionRecord>({
+      decision: "allow",
+      reason: ALLOW_ANY_SCOPE_REASON,
+      ruleId: "allow-read-any-scope",
+    });
+  });
+
+  it("refuses a call that omits the key both matching rules constrain, because a missing argument matches nothing", () => {
+    const mapped = toPolicy(scopedPolicy());
+    const call = toToolCall({ callId: "call-scopeless", name: "read_file", input: { depth: 2 } });
+
+    expect(evaluate(call, mapped)).toEqual<DecisionRecord>(NO_MATCHING_RULE);
+  });
+
+  it.each<[string, Record<string, string | number | boolean | "*">, Record<string, unknown>, DecisionRecord]>([
+    [
+      "a number the call carries as that number",
+      { attempt: 2 },
+      { attempt: 2 },
+      { decision: "allow", reason: ALLOW_READ_REASON, ruleId: "allow-read-attempt" },
+    ],
+    ["a number the call carries as a string", { attempt: 2 }, { attempt: "2" }, NO_MATCHING_RULE],
+    [
+      "a boolean the call carries as that boolean",
+      { mode: true },
+      { mode: true },
+      { decision: "allow", reason: ALLOW_READ_REASON, ruleId: "allow-read-attempt" },
+    ],
+    ["a boolean the call carries as a string", { mode: true }, { mode: "true" }, NO_MATCHING_RULE],
+  ])("compares a constrained value strictly, without coercion, for %s", (_label, constraints, callArguments, expected) => {
+    const mapped = toPolicy({
+      version: "suite-strict-1.0.0",
+      rules: [
+        {
+          id: "allow-read-attempt",
+          name: "read_file",
+          effect: "allow",
+          message: ALLOW_READ_REASON,
+          arguments: constraints,
+        },
+      ],
+    });
+    const call = toToolCall({ callId: "call-attempt", name: "read_file", input: callArguments });
+
+    expect(validatePolicy(mapped).ok).toBe(true);
+    expect(evaluate(call, mapped)).toEqual<DecisionRecord>(expected);
   });
 
   it("releases a blocked call only for the call id its approval names", () => {
