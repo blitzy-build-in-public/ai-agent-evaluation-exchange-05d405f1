@@ -2,10 +2,15 @@
  * ADEM — the one in-repo value set for the public UI.
  *
  * The request names no component library, no theme and no token catalogue product,
- * so every colour, space, radius, border, type, layout and motion value the UI uses
- * is defined here, once, and consumed by app.css through var(). This file is
- * deliberately nothing more than that: it is not a design system and it does not
- * grow into one.
+ * so every colour, space, radius, border, type and motion value the UI uses is
+ * defined here, once, and consumed by app.css through var(), together with the three
+ * layout constants the shell and the page column share: --layout-max-width,
+ * --breakpoint-narrow and --touch-target-min. A dimension that belongs to one
+ * component's own box — such as the absent state's prose measure, the comparison
+ * table's grid tracks, a checkbox or radio control's box, a search filter's field
+ * basis — stays with that component's rule in app.css, because it is that
+ * component's geometry rather than a value of this set. This file is deliberately
+ * nothing more than that: it is not a design system and it does not grow into one.
  *
  * Everything that renders lives in app.css. This file holds exactly three rule
  * sets — the :root value set, one :focus-visible rule and one

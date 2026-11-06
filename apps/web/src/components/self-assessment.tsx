@@ -232,8 +232,12 @@ export function SelfAssessment(): JSX.Element {
         )}
       </form>
 
-      {result === null ? null : (
-        <div className="status-region" role="status" aria-live="polite">
+      {/* The region is rendered with the component, and only its content is written into it on
+          submit: the node therefore exists before the status changes it announces, which is what
+          makes the announcement reliable. role="status" already makes this a polite live region, so
+          the assertion is stated once here rather than twice. */}
+      <div className="status-region" role="status">
+        {result === null ? null : (
           <div className="notice notice--info self-assessment__result">
             <h3>Your readiness result</h3>
             <p>
@@ -261,8 +265,8 @@ export function SelfAssessment(): JSX.Element {
               and choose See my result to score it again.
             </p>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

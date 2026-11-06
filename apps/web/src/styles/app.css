@@ -1,10 +1,15 @@
 /*
  * ADEM — the layout and component stylesheet of the public UI.
  *
- * tokens.css holds every value this file uses: there is not one colour literal here, so a
- * contrast fix anywhere in the UI is a one-line edit in that file. This file owns what values
- * alone cannot express — the reset, the page shell, the navigation, and a rule for every
- * component and every route the UI renders.
+ * tokens.css holds every colour, space, radius, border, type and motion value this file uses,
+ * plus the three layout constants the shell and the page column share; there is not one colour
+ * literal here, so a contrast fix anywhere in the UI is a one-line edit in that file. A
+ * dimension that belongs to one component's own box — such as the absent state's prose
+ * measure, the comparison table's grid tracks, a checkbox or radio control's box, a search
+ * filter's field basis — stays with that component's rule below, because it is that
+ * component's geometry rather than a value of the set. This file owns what values alone cannot
+ * express — the reset, the page shell, the navigation, and a rule for every component and
+ * every route the UI renders.
  *
  * Four facts a later reader would otherwise break:
  *
@@ -180,8 +185,10 @@ canvas {
   border-block-end: var(--border-width-thin) solid var(--color-divider);
 }
 
-/* The shell's landmark and a page that is itself the landmark share one centred column, so a
-   page renders identically whether the shell wraps it or it stands alone. */
+/* The routed page owns the document's single <main> landmark: .app-main is only the plain
+   container the shell wraps a page in, never a landmark itself. Container and page share one
+   centred column, so a page renders identically whether the shell wraps it or it is mounted
+   directly by the router. */
 .app-main,
 .page {
   width: 100%;
@@ -196,7 +203,7 @@ canvas {
   flex-direction: column;
 }
 
-/* A page inside the shell's landmark inherits that element's centring and inline padding
+/* A page inside the shell's content wrapper inherits the wrapper's centring and inline padding
    instead of adding a second copy of it. */
 .app-main .page {
   max-width: none;
@@ -242,7 +249,10 @@ canvas {
   background-color: var(--color-accent);
   color: var(--color-accent-text);
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
+  /* Regular weight rather than the medium every other control takes: the bypass control is
+     revealed only while it has focus and is carried by its accent fill and by the focus ring
+     tokens.css draws, so its weight carries nothing a reader needs. */
+  font-weight: var(--font-weight-regular);
   text-decoration: none;
   transition: transform var(--motion-duration-fast) ease-out;
 }
@@ -255,13 +265,7 @@ canvas {
   background-color: var(--color-accent-strong);
 }
 
-/* The absent state: an explanation of what the address names, a way back into the app, and no
-   error styling, because nothing failed. */
-.not-found,
-.page-not-found {
-  gap: var(--space-4);
-}
-
+/* The absent state's elements. The route root above owns this page's gap and block padding. */
 .not-found__heading {
   margin-block: 0;
 }
@@ -288,6 +292,15 @@ canvas {
   display: inline-flex;
   align-items: center;
   min-height: var(--touch-target-min);
+}
+
+/* Pressed on a way back into the app: the sunken fill marks the press without a second
+   vocabulary, and the corner takes the smallest radius so the fill reads as a control rather
+   than as a band across the list. */
+.not-found__links a:active {
+  background-color: var(--color-surface-sunken);
+  color: var(--color-accent-strong);
+  border-radius: var(--radius-sm);
 }
 
 /* ==========================================================================
@@ -318,13 +331,25 @@ canvas {
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
+  /* The expanded state this disclosure moves to changes the boundary width and the label colour,
+     so those two properties take the base duration; background and border colour are the hover
+     cue and take the fast one. Both durations come from the tokens, so tokens.css's
+     prefers-reduced-motion guard collapses them and this file needs no second copy of it. */
   transition:
     background-color var(--motion-duration-fast) ease-out,
-    border-color var(--motion-duration-fast) ease-out;
+    border-color var(--motion-duration-fast) ease-out,
+    border-width var(--motion-duration-base) ease-out,
+    color var(--motion-duration-base) ease-out;
 }
 
 .nav__toggle:hover {
   background-color: var(--color-surface-sunken);
+}
+
+.nav__toggle:active {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent-strong);
+  border-width: var(--border-width-thick);
 }
 
 /* The disclosure states which way it will move by more than colour: the boundary thickens and
@@ -396,6 +421,14 @@ canvas {
   color: var(--color-heading);
   font-weight: var(--font-weight-bold);
   text-decoration: none;
+}
+
+/* Pressed on a destination: the same sunken fill the hover cue uses, with the rule under the
+   label and the label itself deepening to the strong accent. */
+.nav__link:active {
+  background-color: var(--color-surface-sunken);
+  border-block-end-color: var(--color-accent-strong);
+  color: var(--color-accent-strong);
 }
 
 @media (min-width: 48rem) {
@@ -513,7 +546,8 @@ canvas {
    above it by a rule, and rendered after the organic results on the home and listings pages.
    Nothing here can move it above them — no flex order, no absolute positioning, no grid
    placement — and the page renders nothing at all when the collection is empty, so this file
-   adds no empty box. */
+   adds no empty box. It takes the top of the radius scale, because it is a panel in its own
+   right rather than a card inside one. */
 .sponsored-block {
   display: flex;
   flex-direction: column;
@@ -525,7 +559,7 @@ canvas {
   border-style: solid;
   border-color: var(--color-sponsor-border);
   border-block-start-width: var(--border-width-thick);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background-color: var(--color-sponsor-surface);
   color: var(--color-text);
   min-width: 0;
@@ -1297,6 +1331,16 @@ input[type="radio"] {
   border-color: var(--color-accent);
 }
 
+/* Pressed: the fill sinks to the sunken surface, the boundary thickens to the thick width and
+   the accent deepens to its strong value — every one of them a token that already exists, so the
+   press adds no literal and no second vocabulary. Each :active rule sits directly under the
+   :hover rule it follows, above the disabled rule, which keeps its own tokens and cursor. */
+.button:active {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent-strong);
+  border-width: var(--border-width-thick);
+}
+
 .button--primary {
   background-color: var(--color-accent);
   border-color: var(--color-accent);
@@ -1306,6 +1350,15 @@ input[type="radio"] {
 .button--primary:hover {
   background-color: var(--color-accent-strong);
   border-color: var(--color-accent-strong);
+}
+
+/* The primary button's text sits on the strong accent fill, so the pressed rule restates the
+   colour that fill carries rather than letting the base variant's accent text go. */
+.button--primary:active {
+  background-color: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+  color: var(--color-accent-text);
+  border-width: var(--border-width-thick);
 }
 
 .button--secondary {
@@ -1318,6 +1371,12 @@ input[type="radio"] {
   background-color: var(--color-surface-sunken);
 }
 
+.button--secondary:active {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent-strong);
+  border-width: var(--border-width-thick);
+}
+
 .button--destructive {
   background-color: var(--color-danger-surface);
   border-color: var(--color-danger-surface);
@@ -1328,10 +1387,20 @@ input[type="radio"] {
   border-color: var(--color-heading);
 }
 
+.button--destructive:active {
+  background-color: var(--color-danger-surface);
+  border-color: var(--color-heading);
+  border-width: var(--border-width-thick);
+}
+
+/* Disabled: the dimmed fill, the dimmed text and the not-allowed cursor say the control cannot
+   act, and the boundary stays the thin one the :active rules above thicken, so a held press
+   cannot change the size of a control that cannot be activated. */
 .button[disabled],
 .button:disabled {
   background-color: var(--color-disabled-surface);
   border-color: var(--color-disabled-surface);
+  border-width: var(--border-width-thin);
   color: var(--color-disabled-text);
   cursor: not-allowed;
 }
