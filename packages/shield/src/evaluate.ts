@@ -161,18 +161,33 @@ function readCall(candidate: unknown): ReadCallResult {
  * `hasApproval`, a store that cannot answer and an answer that is not `true` all answer `false`,
  * which leaves the call blocked. The absence of an answer is not an approval: this can only ever
  * release a call that a rule blocked, never widen a refusal.
+ *
+ * The context and the store it carries are the caller's own objects, so the member read and the call
+ * are both made inside one guard: a context whose `approvals` member cannot be read — a revoked
+ * proxy, an accessor that throws — and a store whose `hasApproval` raises are answered as "no
+ * approval" rather than raised on. A blocked call that stays blocked is the only outcome this
+ * consult may produce, and it is the one it produces when it cannot get an answer.
  */
-function hasRecordedApproval(approvals: unknown, callId: string): boolean {
-  if (typeof approvals !== "object" || approvals === null) {
+function hasRecordedApproval(context: unknown, callId: string): boolean {
+  try {
+    const approvals: unknown = (context as { approvals?: unknown } | null | undefined)?.approvals;
+
+    if (typeof approvals !== "object" || approvals === null) {
+      return false;
+    }
+
+    const hasApproval: unknown = (approvals as { hasApproval?: unknown }).hasApproval;
+    if (typeof hasApproval !== "function") {
+      return false;
+    }
+
+    return (hasApproval as (id: string) => unknown).call(approvals, callId) === true;
+  } catch {
+    // The promise that evaluate never throws outranks the store's answer, so the member read and the
+    // call are made inside this one guard. Nothing permissive is substituted: `false` is the answer a
+    // store that answers no gives, and only an explicit `true` could ever release a blocked call.
     return false;
   }
-
-  const hasApproval: unknown = (approvals as { hasApproval?: unknown }).hasApproval;
-  if (typeof hasApproval !== "function") {
-    return false;
-  }
-
-  return (hasApproval as (id: string) => unknown).call(approvals, callId) === true;
 }
 
 /**
@@ -318,7 +333,7 @@ export function evaluate(
         // one, and without an approval store at all, it stays blocked. The rule id is the blocking
         // rule in both branches, because that rule produced the outcome, and releasing a call is
         // the only way the engine's reason "approved" ever appears.
-        record = hasRecordedApproval(context?.approvals, matchingCall.id)
+        record = hasRecordedApproval(context, matchingCall.id)
           ? { decision: "allow", reason: REASON_APPROVED, ruleId: matched.id }
           : { decision: "needs_approval", reason: matched.reason, ruleId: matched.id };
       } else {

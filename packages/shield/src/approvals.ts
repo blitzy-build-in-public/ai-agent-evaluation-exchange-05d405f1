@@ -34,8 +34,9 @@ export interface ApprovalRecord {
 export interface ApprovalStore {
   /**
    * Records the first approval for a call id and returns nothing; a record
-   * without a usable call id is ignored (leaving the call blocked) and this
-   * method never throws. The caller learns the outcome through
+   * without a usable call id, and a record whose members cannot be read at all,
+   * are both ignored (leaving the call blocked) and this method never throws.
+   * The caller learns the outcome through
    * {@link ApprovalStore.hasApproval} or {@link ApprovalStore.getApproval}.
    */
   recordApproval(approval: ApprovalRecord): void;
@@ -94,17 +95,26 @@ export function createApprovalStore(): ApprovalStore {
   }
 
   function recordApproval(approval: ApprovalRecord): void {
-    const callId = readCallId(approval);
-    if (callId === null || approvals.has(callId)) {
-      return;
+    try {
+      const callId = readCallId(approval);
+      if (callId === null || approvals.has(callId)) {
+        return;
+      }
+      const record: ApprovalRecord = {
+        callId,
+        approvedBy: approval.approvedBy,
+        reason: approval.reason,
+        at: approval.at,
+      };
+      approvals.set(callId, Object.freeze(record));
+    } catch {
+      // The promise that this method never throws outranks a record it cannot read, so the call-id
+      // read and the three member reads sit inside this one guard. A record whose members raise —
+      // an accessor that throws, a revoked proxy — is ignored rather than raised on, and the guard
+      // records nothing: no default and no empty string stands in for a member that could not be
+      // read, the record is built in full before any of it is stored, and the call that unreadable
+      // record might have named is therefore left blocked, exactly as an absent record leaves it.
     }
-    const record: ApprovalRecord = {
-      callId,
-      approvedBy: approval.approvedBy,
-      reason: approval.reason,
-      at: approval.at,
-    };
-    approvals.set(callId, Object.freeze(record));
   }
 
   function hasApproval(callId: string): boolean {

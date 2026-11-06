@@ -45,6 +45,23 @@ function storedRecord(store: ReturnType<typeof createApprovalStore>, callId: str
   return record;
 }
 
+/**
+ * Builds a complete approval record for a call id whose named member is an accessor that raises
+ * when it is read, so a caller-supplied record whose members cannot be read can be shown to be
+ * ignored rather than raised on. Everything else about it is a complete, ordinary record.
+ */
+function unreadableRecord(member: "callId" | "approvedBy" | "reason" | "at"): ApprovalRecord {
+  const record = approvalFor("call-1");
+  Object.defineProperty(record, member, {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      throw new Error(`the record's ${member} cannot be read`);
+    },
+  });
+  return record;
+}
+
 describe("the approval store", () => {
   describe("default state", () => {
     it("reports no approval for a call id that was never recorded", () => {
@@ -142,14 +159,15 @@ describe("the approval store", () => {
 
     it("never loses a recorded approval, so its count only grows", () => {
       const store = createApprovalStore();
-      let previous = store.listApprovals().length;
 
-      for (const callId of ["call-1", "call-2", "call-3"]) {
+      for (const [index, callId] of ["call-1", "call-2", "call-3"].entries()) {
         store.recordApproval(approvalFor(callId));
 
-        const current = store.listApprovals().length;
-        expect(current).toBeGreaterThanOrEqual(previous);
-        previous = current;
+        // Each recording adds exactly one record and neither replaces nor drops an earlier one, so
+        // the count after the nth call id is n. Asserting that exact count is what fails for a
+        // store that loses a record, where "no fewer than before" holds even for one that records
+        // nothing at all.
+        expect(store.listApprovals()).toHaveLength(index + 1);
       }
 
       store.recordApproval(approvalFor("call-1"));
@@ -240,6 +258,39 @@ describe("the approval store", () => {
       expect(() => store.recordApproval(null)).not.toThrow();
 
       expect(store.listApprovals()).toEqual([]);
+    });
+
+    it.each(["callId", "approvedBy", "reason", "at"] as const)(
+      "is ignored, leaving the call blocked and the store empty, when its %s cannot be read",
+      (member) => {
+        const store = createApprovalStore();
+
+        expect(() => store.recordApproval(unreadableRecord(member))).not.toThrow();
+
+        expect(store.listApprovals()).toEqual([]);
+        expect(store.hasApproval("call-1")).toBe(false);
+        expect(store.getApproval("call-1")).toBeNull();
+        // Nothing was recorded for the call the unreadable record named, so the complete record
+        // that follows is still the first approval that id receives, and it is stored whole.
+        store.recordApproval(approvalFor("call-1"));
+        expect(storedRecord(store, "call-1")).toEqual(approvalFor("call-1"));
+      },
+    );
+
+    it("is ignored when the record itself cannot be read at all, leaving the call blocked", () => {
+      const store = createApprovalStore();
+      const revocable = Proxy.revocable(approvalFor("call-1"), {});
+      revocable.revoke();
+
+      expect(() => store.recordApproval(revocable.proxy)).not.toThrow();
+
+      expect(store.listApprovals()).toEqual([]);
+      expect(store.hasApproval("call-1")).toBe(false);
+      expect(store.getApproval("call-1")).toBeNull();
+      // A record nobody can read supplies no approval event, so it leaves the call blocked and a
+      // complete record for the same id is still the first one recorded.
+      store.recordApproval(approvalFor("call-1"));
+      expect(storedRecord(store, "call-1")).toEqual(approvalFor("call-1"));
     });
   });
 

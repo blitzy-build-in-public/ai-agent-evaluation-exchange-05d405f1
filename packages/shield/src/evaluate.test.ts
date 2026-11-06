@@ -20,11 +20,14 @@ import type { Policy, PolicyRule } from "./policy/policy-schema";
  * absence of an approval store is not an approval. Every decision appends exactly one audit event,
  * the refusals included, and a sink that fails changes no decision.
  *
- * The example policy is the fixture and is never modified here. Its rule ids, tool names and reason
- * texts are read back out of it rather than repeated in this file, so a case that stops naming a
- * rule fails loudly instead of quietly passing against a fixture that moved. The only literals
- * written out below are the three reason strings the engine authors itself, the tool names the
- * example policy's rules work with, and the timestamps a caller supplies.
+ * The example policy is the fixture and is never modified here. Its rule ids and reason texts are
+ * read back out of it and never repeated in this file, so a case that stops naming a rule fails
+ * loudly instead of quietly passing against a fixture that moved. The literals this suite takes from
+ * outside itself are the three reason strings the engine authors, the fictional tool names it calls
+ * with — including the one no rule names, which is what makes the default deny reachable — the
+ * wildcard the example policy writes for a rule covering every tool, the version label of a policy
+ * that is deliberately broken, and the timestamps a caller supplies; every other literal below is
+ * this suite's own, such as a call id, an approver label or an argument value.
  *
  * Reproducibility is the point rather than a side effect: a fixed clock is supplied wherever a
  * timestamp is recorded, so every run observes the same trail, and a decision record is asserted
@@ -55,6 +58,11 @@ const UNMATCHED_TOOL = "list_repository";
 const FIXED_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 /** The timestamp of the approvals this suite records, supplied by the caller because Shield reads no clock. */
 const APPROVAL_AT = "2024-01-01T00:00:00.000Z";
+/**
+ * The shape of the timestamp the engine records when it falls back to the clock, which is the one
+ * value below that no example can pin: the fallback is asserted as an ISO-8601 instant instead.
+ */
+const ISO_8601_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 /** A version label for a policy that carries one and still fails validation, so the trail can name it. */
 const BROKEN_POLICY_VERSION = "example-broken-9.9.9";
 
@@ -404,9 +412,64 @@ describe("the Shield decision for one call under one policy", () => {
         ruleId: DENY_DELETE_RULE.id,
       });
     });
+
+    /**
+     * The stores a caller might supply in place of a working approval checkpoint: each carries no
+     * callable `hasApproval` at all, or answers something other than an explicit `true`. None of them
+     * is an approval, so the held call stays blocked with the rule's own reason and id — the store's
+     * answer can release a blocked call, and can never widen anything else.
+     */
+    const storesThatCannotRelease: ReadonlyArray<{
+      readonly described: string;
+      readonly approvals: unknown;
+    }> = [
+      { described: "a store carrying no callable hasApproval", approvals: { hasApproval: "yes" } },
+      { described: "a store answering undefined", approvals: { hasApproval: () => undefined } },
+      {
+        described: "a store answering a promise that resolves true",
+        approvals: { hasApproval: async () => true },
+      },
+      {
+        described: "a store answering a truthy value that is not true",
+        approvals: { hasApproval: () => "yes" },
+      },
+    ];
+
+    for (const entry of storesThatCannotRelease) {
+      it(`holds the call for ${entry.described}`, () => {
+        const record = decide(heldWriteCall("call-write-9"), examplePolicy, {
+          approvals: entry.approvals as NonNullable<EvaluateContext["approvals"]>,
+        });
+        expectRecord(record, {
+          decision: "needs_approval",
+          reason: APPROVAL_RULE.reason,
+          ruleId: APPROVAL_RULE.id,
+        });
+      });
+    }
   });
 
   describe("malformed input", () => {
+    /**
+     * A candidate call whose members cannot be read, because the proxy that carried it has been
+     * revoked: every member read on it raises, and the engine has to refuse the call rather than let
+     * the raise out.
+     */
+    const revokedCall = Proxy.revocable(call("call-1", READ_TOOL, {}), {});
+    revokedCall.revoke();
+
+    /**
+     * A candidate call carrying an accessor that raises, the other way a call's own member cannot be
+     * read: the id, the tool and the arguments are all there, and reading one of them raises.
+     */
+    const throwingAccessorCall: Record<string, unknown> = {
+      id: "call-1",
+      get tool(): string {
+        throw new Error("call member down");
+      },
+      arguments: {},
+    };
+
     /** Every value a caller could hand the engine as a call that is not one. */
     const malformedCalls: ReadonlyArray<{ readonly described: string; readonly candidate: unknown }> = [
       { described: "null", candidate: null },
@@ -423,6 +486,8 @@ describe("the Shield decision for one call under one policy", () => {
       },
       { described: "an object whose id is empty", candidate: { id: "", tool: READ_TOOL, arguments: {} } },
       { described: "an object whose tool is empty", candidate: { id: "call-1", tool: "", arguments: {} } },
+      { described: "a revoked proxy", candidate: revokedCall.proxy },
+      { described: "an object whose tool accessor raises", candidate: throwingAccessorCall },
     ];
 
     describe("a call the engine cannot read", () => {
@@ -645,6 +710,12 @@ describe("the Shield decision for one call under one policy", () => {
       throw new Error("clock down");
     };
 
+    /** A supplier a caller might pass as `now` that is not a function at all. */
+    const notAFunctionNow: unknown = "not-a-function";
+
+    /** A clock that answers with something other than a string, standing in for a broken one. */
+    const nonStringNow = (): number => 7;
+
     /** The decisions a failing sink must leave untouched, one per branch the engine can take. */
     const decisionsUnderAFailingSink: ReadonlyArray<{
       readonly described: string;
@@ -700,6 +771,103 @@ describe("the Shield decision for one call under one policy", () => {
       });
       expect(log.size()).toBe(0);
     });
+
+    it("records the clock's own timestamp when the caller's now is not a function", () => {
+      const log = createInMemoryAuditLog();
+      const record = decide(readableCall("call-read-13"), examplePolicy, {
+        audit: log,
+        now: notAFunctionNow as () => string,
+      });
+
+      expectRecord(record, {
+        decision: "allow",
+        reason: ALLOW_READ_RULE.reason,
+        ruleId: ALLOW_READ_RULE.id,
+      });
+
+      // The fallback is asserted by its shape rather than by its value: reading the clock is the one
+      // thing a fixed example cannot pin, and an ISO-8601 string is what the audit record declares.
+      const event = onlyEvent(log);
+      expect(event.timestamp).toMatch(ISO_8601_TIMESTAMP);
+      expect(event.timestamp).not.toBe(notAFunctionNow);
+    });
+
+    it("records the clock's own timestamp when the caller's now answers a non-string", () => {
+      const log = createInMemoryAuditLog();
+      const record = decide(readableCall("call-read-14"), examplePolicy, {
+        audit: log,
+        now: nonStringNow as unknown as () => string,
+      });
+
+      expectRecord(record, {
+        decision: "allow",
+        reason: ALLOW_READ_RULE.reason,
+        ruleId: ALLOW_READ_RULE.id,
+      });
+
+      const event = onlyEvent(log);
+      expect(event.timestamp).toMatch(ISO_8601_TIMESTAMP);
+      // The answer is replaced rather than rendered: a non-string never reaches the record, not even
+      // in the string form a caller's own `String(answer)` would give it.
+      expect(event.timestamp).not.toBe("7");
+    });
+
+    /** A store whose members cannot be read at all, because the proxy carrying it has been revoked. */
+    const revokedStore = Proxy.revocable({}, {});
+    revokedStore.revoke();
+
+    /** A context whose members cannot be read at all, because the proxy carrying it has been revoked. */
+    const revokedContext = Proxy.revocable({}, {});
+    revokedContext.revoke();
+
+    /**
+     * The contexts whose approval checkpoint cannot be read at all: the store's member raises, or the
+     * store or the context itself is a revoked proxy. The promise that the engine never throws
+     * outranks the store's answer, so each of them leaves the held call blocked with the blocking
+     * rule's own reason and id, and none of them raises.
+     */
+    const contextsWhoseStoreCannotAnswer: ReadonlyArray<{
+      readonly described: string;
+      readonly context: unknown;
+    }> = [
+      {
+        described: "a store whose hasApproval raises",
+        context: {
+          approvals: {
+            hasApproval(): boolean {
+              throw new Error("approval store down");
+            },
+          },
+        },
+      },
+      {
+        described: "a store whose hasApproval member raises when it is read",
+        context: {
+          approvals: {
+            get hasApproval(): boolean {
+              throw new Error("approval reader down");
+            },
+          },
+        },
+      },
+      { described: "a store that is a revoked proxy", context: { approvals: revokedStore.proxy } },
+      { described: "a context that is a revoked proxy", context: revokedContext.proxy },
+    ];
+
+    for (const entry of contextsWhoseStoreCannotAnswer) {
+      it(`leaves the call blocked for ${entry.described}, raising nothing`, () => {
+        const record = decide(
+          heldWriteCall("call-write-10"),
+          examplePolicy,
+          entry.context as EvaluateContext,
+        );
+        expectRecord(record, {
+          decision: "needs_approval",
+          reason: APPROVAL_RULE.reason,
+          ruleId: APPROVAL_RULE.id,
+        });
+      });
+    }
   });
 
   describe("the record it returns", () => {
@@ -708,24 +876,41 @@ describe("the Shield decision for one call under one policy", () => {
       const callBefore = { id: message.id, tool: message.tool, arguments: { ...message.arguments } };
       const rulesBefore = [...examplePolicy.rules];
 
+      // Each decision is asserted field by field against the rule the example policy carries, so a
+      // wrong-but-deterministic engine fails here: comparing the function with its own return would
+      // pass whatever it answered, twice over.
+      const expected: DecisionRecord = {
+        decision: "allow",
+        reason: ALLOW_MESSAGE_RULE.reason,
+        ruleId: ALLOW_MESSAGE_RULE.id,
+      };
+
       const first = decide(message, examplePolicy);
       const second = decide(message, examplePolicy);
 
-      expect(first).toEqual(second);
+      expectRecord(first, expected);
+      expectRecord(second, expected);
       expect(message).toEqual(callBefore);
       expect(examplePolicy.rules).toEqual(rulesBefore);
     });
 
     it("refuses a malformed call identically on every decision", () => {
-      expect(decide(null, examplePolicy)).toEqual(decide(null, examplePolicy));
+      // The refusal is asserted field by field on each decision rather than against the function's
+      // own return, so a wrong-but-deterministic engine fails this case.
+      const expected: DecisionRecord = { decision: "deny", reason: MALFORMED_REASON, ruleId: null };
+
+      expectRecord(decide(null, examplePolicy), expected);
+      expectRecord(decide(null, examplePolicy), expected);
     });
 
     it("refuses an unreadable policy identically on every decision", () => {
       const broken: unknown = { version: BROKEN_POLICY_VERSION, rules: "not-an-array" };
+      const expected: DecisionRecord = { decision: "deny", reason: MALFORMED_REASON, ruleId: null };
 
-      const first = decide(readableCall("call-read-11"), broken);
-      expectRecord(first, { decision: "deny", reason: MALFORMED_REASON, ruleId: null });
-      expect(decide(readableCall("call-read-12"), broken)).toEqual(first);
+      // Both decisions are asserted against the same expected refusal record, so either of them
+      // answering anything else fails the case.
+      expectRecord(decide(readableCall("call-read-11"), broken), expected);
+      expectRecord(decide(readableCall("call-read-12"), broken), expected);
     });
   });
 });
