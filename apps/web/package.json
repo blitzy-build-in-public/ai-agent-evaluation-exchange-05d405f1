@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "main": "src/main.tsx",
+  "exports": {
+    ".": "./src/main.tsx"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "vite build"
   },
   "dependencies": {
     "@adem/shared": "0.1.0",
@@ -20,6 +21,7 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
     "@vitejs/plugin-react": "4.3.4",
+    "typescript": "5.4.5",
     "vite": "5.4.21"
   }
 }

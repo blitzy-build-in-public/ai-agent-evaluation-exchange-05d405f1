@@ -11,15 +11,14 @@
     "examples/*"
   ],
   "engines": {
-    "node": ">=20.20.2 <21 || >=22.12.0"
+    "node": ">=20.0.0 <21"
   },
   "scripts": {
-    "build": "tsc -b && npm run build -w @adem/web",
-    "typecheck": "tsc -b --pretty false",
-    "clean": "tsc -b --clean",
+    "build": "tsc --build && npm run build --workspace @adem/web",
+    "typecheck": "tsc --build",
     "start": "tsx apps/api/src/index.ts",
-    "dev": "npm run dev -w @adem/web",
-    "seed": "npm run seed -w @adem/api",
+    "dev": "npm run dev --workspace @adem/web",
+    "seed": "npm run seed --workspace @adem/api",
     "test": "npm run test:unit && npm run test:integration && npm run test:scan",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
