@@ -11,7 +11,10 @@
  *
  * The last group drives a generic call and a generic policy through the mapping into `evaluate` and
  * asserts the decision records, which is how this example proves it maps a host's shapes onto the
- * engine's rather than describing an integration it does not have.
+ * engine's rather than describing an integration it does not have. The file closes with the policy
+ * this package ships — `policy/example-policy.ts` — stated in the host's own vocabulary and driven
+ * through that same mapping, so the shipped example is proven along the path an adopter's own policy
+ * travels and its standing role in this package is demonstrable rather than assumed.
  */
 
 import { describe, expect, it } from "vitest";
@@ -19,6 +22,7 @@ import { describe, expect, it } from "vitest";
 import { createApprovalStore } from "../approvals";
 import { evaluate } from "../evaluate";
 import type { DecisionRecord, ToolCall } from "../evaluate";
+import { examplePolicy } from "../policy/example-policy";
 import { validatePolicy } from "../policy/policy-schema";
 import type { Policy, PolicyRule } from "../policy/policy-schema";
 import { toPolicy, toToolCall } from "./reference-adapter";
@@ -28,6 +32,11 @@ const ALLOW_READ_REASON = "Reading a file inside the demo workspace is permitted
 const APPROVE_WRITE_REASON = "Writing a file waits for an approval recorded for this call id.";
 const DENY_DELETE_REASON = "Deleting a record is refused by this suite.";
 const ALLOW_ANY_SCOPE_REASON = "Reading a file outside the demo workspace is permitted by this suite.";
+const EXAMPLE_HIGH_RISK_REASON = "A call marked high risk is refused before any later rule can match it.";
+const EXAMPLE_ALLOW_READ_REASON = "Reading a file inside the workspace is permitted by this example policy.";
+const EXAMPLE_APPROVE_WRITE_REASON = "Writing a file inside the workspace waits for an approval event for the call.";
+const EXAMPLE_SEND_MESSAGE_REASON = "Sending a message on the demo channel at normal priority is permitted here.";
+const EXAMPLE_DELETE_RECORD_REASON = "Deleting a record is refused by this example policy.";
 
 /** The policy the host states, in the host's own vocabulary. */
 function hostPolicy(): GenericPolicy {
@@ -53,6 +62,58 @@ function hostPolicy(): GenericPolicy {
         name: "delete_record",
         effect: "deny",
         message: DENY_DELETE_REASON,
+      },
+    ],
+  };
+}
+
+/**
+ * The shipped example policy, re-stated in the host's own vocabulary.
+ *
+ * It is the worked policy this package ships — `policy/example-policy.ts` — written the way an
+ * adopter would write it: the same rule ids, tool names, messages and constraints, in the same order,
+ * with the host's three effects standing where the shipped example carries its three decisions.
+ * Mapping it must reproduce the shipped example exactly, which is what holds the two together: an
+ * edit to either one that the other does not follow fails this suite rather than letting the fixture
+ * the package ships and the mapping it documents drift apart.
+ */
+function hostExamplePolicy(): GenericPolicy {
+  return {
+    version: "example-1.0.0",
+    rules: [
+      {
+        id: "deny-high-risk-call",
+        name: "*",
+        effect: "deny",
+        message: EXAMPLE_HIGH_RISK_REASON,
+        arguments: { risk: "high" },
+      },
+      {
+        id: "allow-read-file",
+        name: "read_file",
+        effect: "allow",
+        message: EXAMPLE_ALLOW_READ_REASON,
+        arguments: { scope: "workspace" },
+      },
+      {
+        id: "approve-write-file",
+        name: "write_file",
+        effect: "ask",
+        message: EXAMPLE_APPROVE_WRITE_REASON,
+        arguments: { scope: "workspace", target: "*" },
+      },
+      {
+        id: "allow-send-message",
+        name: "send_message",
+        effect: "allow",
+        message: EXAMPLE_SEND_MESSAGE_REASON,
+        arguments: { channel: "demo-channel", priority: 1, urgent: false },
+      },
+      {
+        id: "deny-delete-record",
+        name: "delete_record",
+        effect: "deny",
+        message: EXAMPLE_DELETE_RECORD_REASON,
       },
     ],
   };
@@ -399,6 +460,28 @@ describe("toPolicy: the refusal direction", () => {
     expect(record.decision).toBe("deny");
     expect(record).toEqual<DecisionRecord>(MALFORMED);
   });
+
+  // Five names every object inherits from its prototype chain. They reach the mapping as the string
+  // an untyped host stated, so the member a plain lookup would find is not a decision this module may
+  // hand on: each is outside the host's three and must be read as an own key of the table.
+  const inheritedEffectNames: string[] = ["toString", "valueOf", "hasOwnProperty", "constructor", "__proto__"];
+
+  it.each(inheritedEffectNames)(
+    "renders the rule invalid for the effect %s, which only the prototype chain carries, and the engine refuses the policy",
+    (effect) => {
+      const mapped = toPolicy(
+        asGenericPolicy({ version: "v", rules: [{ id: "r", name: "read_file", effect, message: "m" }] }),
+      );
+      const rule = ruleAt(mapped, 0);
+      const record = evaluate(toToolCall({ callId: "call-1", name: "read_file", input: {} }), mapped);
+
+      expect(["allow", "deny", "needs_approval"]).toContain<string>(rule.decision);
+      expect(rule.decision).toBe("deny");
+      expect(rule.id).toBe("");
+      expect(validatePolicy(mapped).ok).toBe(false);
+      expect(record).toEqual<DecisionRecord>(MALFORMED);
+    },
+  );
 });
 
 describe("toPolicy: a policy it cannot read", () => {
@@ -559,5 +642,90 @@ describe("the mapping and the engine together", () => {
     expect(firstPolicy).toEqual(secondPolicy);
     expect(firstPolicy).not.toBe(secondPolicy);
     expect(evaluate(firstCall, firstPolicy)).toEqual(evaluate(secondCall, secondPolicy));
+  });
+});
+
+describe("the shipped example policy through the adapter", () => {
+  it("maps the host's own words for the shipped example onto exactly the policy the package ships", () => {
+    const mapped = toPolicy(hostExamplePolicy());
+
+    expect(mapped).toEqual<Policy>(examplePolicy);
+    expect(validatePolicy(examplePolicy).ok).toBe(true);
+  });
+
+  it.each<[string, GenericToolCall, DecisionRecord]>([
+    [
+      "a call the read rule permits",
+      { callId: "example-call-read", name: "read_file", input: { scope: "workspace" } },
+      { decision: "allow", reason: EXAMPLE_ALLOW_READ_REASON, ruleId: "allow-read-file" },
+    ],
+    [
+      "a call the shipped example's first rule refuses",
+      { callId: "example-call-risk", name: "read_file", input: { risk: "high", scope: "workspace" } },
+      { decision: "deny", reason: EXAMPLE_HIGH_RISK_REASON, ruleId: "deny-high-risk-call" },
+    ],
+    [
+      "a call the write rule blocks",
+      { callId: "example-call-write", name: "write_file", input: { scope: "workspace", target: "notes.txt" } },
+      { decision: "needs_approval", reason: EXAMPLE_APPROVE_WRITE_REASON, ruleId: "approve-write-file" },
+    ],
+    [
+      "a call the message rule permits",
+      { callId: "example-call-send", name: "send_message", input: { channel: "demo-channel", priority: 1, urgent: false } },
+      { decision: "allow", reason: EXAMPLE_SEND_MESSAGE_REASON, ruleId: "allow-send-message" },
+    ],
+    [
+      "a call the delete rule refuses",
+      { callId: "example-call-delete", name: "delete_record", input: {} },
+      { decision: "deny", reason: EXAMPLE_DELETE_RECORD_REASON, ruleId: "deny-delete-record" },
+    ],
+    [
+      "a call naming a tool the shipped example leaves out of every rule",
+      { callId: "example-call-unlisted", name: "http_request", input: {} },
+      { decision: "deny", reason: "no_matching_rule", ruleId: null },
+    ],
+  ])("decides by the shipped example's own rules, taking each matched rule's own message as the reason: %s", (_label, call, expected) => {
+    const mapped = toPolicy(hostExamplePolicy());
+
+    expect(validatePolicy(mapped).ok).toBe(true);
+    expect(evaluate(toToolCall(call), mapped)).toEqual<DecisionRecord>(expected);
+  });
+
+  it("releases the shipped example's blocked write only for the call id its approval names", () => {
+    const policy = toPolicy(hostExamplePolicy());
+    const store = createApprovalStore();
+    const blocked = toToolCall({ callId: "example-call-approve", name: "write_file", input: { scope: "workspace", target: "notes.txt" } });
+
+    expect(evaluate(blocked, policy)).toEqual<DecisionRecord>({
+      decision: "needs_approval",
+      reason: EXAMPLE_APPROVE_WRITE_REASON,
+      ruleId: "approve-write-file",
+    });
+
+    store.recordApproval({
+      callId: "example-call-another",
+      approvedBy: "demo-operator",
+      reason: "looked at a different call",
+      at: "2024-01-01T00:00:00.000Z",
+    });
+
+    expect(evaluate(blocked, policy, { approvals: store })).toEqual<DecisionRecord>({
+      decision: "needs_approval",
+      reason: EXAMPLE_APPROVE_WRITE_REASON,
+      ruleId: "approve-write-file",
+    });
+
+    store.recordApproval({
+      callId: "example-call-approve",
+      approvedBy: "demo-operator",
+      reason: "looked at this call",
+      at: "2024-01-01T00:00:00.000Z",
+    });
+
+    expect(evaluate(blocked, policy, { approvals: store })).toEqual<DecisionRecord>({
+      decision: "allow",
+      reason: "approved",
+      ruleId: "approve-write-file",
+    });
   });
 });

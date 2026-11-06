@@ -17,12 +17,17 @@
  *
  * Specifiers are extensionless, matching the package's `moduleResolution: "bundler"`.
  *
- * `types/demo-label` is re-exported with `export type *` because it declares types only:
- * nothing is emitted for it, and the form says so. Every other module below exports at
- * least one runtime value — the closed-vocabulary tuples and the schema objects — so
- * `export *` is what keeps those values reachable through the entry. No identifier may be
- * exported by two of these modules: `export *` would collide on it, and the fix is to
- * rename the provider rather than to drop a re-export and silently remove a public name.
+ * Three of the modules below declare types only — `types/demo-label`, `types/inquiry` and
+ * `types/thread`. Every other module below exports at least one runtime value — the
+ * closed-vocabulary tuples and the schema objects — so `export *` is what keeps those
+ * values reachable through the entry. `export type *` is used only where the module
+ * declares no value: `types/demo-label` is re-exported with it because that module declares
+ * types only, nothing is emitted for it, and the form says so. `types/inquiry` and
+ * `types/thread` declare types only as well and are re-exported with `export *`, which is
+ * sound for a module that exports no runtime value because it publishes no runtime name
+ * either way. No identifier may be exported by two of these modules: `export *` would
+ * collide on it, and the fix is to rename the provider rather than to drop a re-export and
+ * silently remove a public name.
  */
 
 export * from "./constants";

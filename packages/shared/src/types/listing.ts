@@ -457,7 +457,7 @@ export interface ListingSearchQuery {
   /** License code to narrow to. */
   license?: string;
   /** Pricing model to narrow to, one of {@link PRICING_MODELS}. */
-  model?: string;
+  model?: PricingModel;
   /** Standard version identifier to narrow to, as a report states it. */
   standard?: string;
   /** The resolved ordering, defaulting to {@link DEFAULT_LISTING_SORT}. */

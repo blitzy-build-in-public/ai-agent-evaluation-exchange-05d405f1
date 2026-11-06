@@ -174,12 +174,19 @@ function readRequiredString(value: unknown): string {
  * Nothing is guessed at. The host's vocabulary is closed to `"allow"`, `"deny"` and `"ask"`, so an
  * effect outside it — a misspelling, a value of some other type, or the target decision vocabulary
  * written where the host's own word belongs — answers `undefined` rather than being mapped to a
- * decision of this module's choosing. The caller renders such a rule invalid, which is the refusal
- * direction: the policy is refused as a whole instead of a rule being repaired into one the host
- * never wrote, and no unrecognised effect can become an `allow` on the way.
+ * decision of this module's choosing. An effect named after a member every object inherits, such as
+ * `toString`, `constructor` or `__proto__`, is not one of the host's three either: it too answers
+ * `undefined`, which is why the table is read through an own-key test rather than down the prototype
+ * chain. The caller renders such a rule invalid, which is the refusal direction: the policy is
+ * refused as a whole instead of a rule being repaired into one the host never wrote, and no
+ * unrecognised effect can become an `allow` on the way.
  */
 function readDecision(effect: unknown): Decision | undefined {
-  return typeof effect === "string" ? DECISIONS_BY_EFFECT[effect] : undefined;
+  if (typeof effect !== "string" || !Object.prototype.hasOwnProperty.call(DECISIONS_BY_EFFECT, effect)) {
+    return undefined;
+  }
+
+  return DECISIONS_BY_EFFECT[effect];
 }
 
 /**

@@ -101,8 +101,14 @@ export type CaseSeverity = (typeof CASE_SEVERITIES)[number];
 export type ReportCaseId = string;
 
 /**
- * One row of `report_case_results`: the evidence a single fixture case
- * produced, written in the same transaction as its report.
+ * The per-case evidence for one fixture case, as `GET /evaluations/{id}` returns
+ * it in a report's `case_results`.
+ *
+ * The stored `report_case_results` row carries these five values beside the `id`
+ * that identifies the row and the `report_id` that pairs it with its report,
+ * written in the same transaction as that report. This shape deliberately leaves
+ * those two keys out: the evidence is always read nested under the report that
+ * supplies them.
  *
  * `expected` and `actual` are **canonical JSON strings** — property order fixed
  * and insignificant whitespace removed — which is what makes the comparison
