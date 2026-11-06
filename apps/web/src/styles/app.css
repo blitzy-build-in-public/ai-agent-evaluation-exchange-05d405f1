@@ -1,0 +1,1551 @@
+/*
+ * ADEM — the layout and component stylesheet of the public UI.
+ *
+ * tokens.css holds every value this file uses: there is not one colour literal here, so a
+ * contrast fix anywhere in the UI is a one-line edit in that file. This file owns what values
+ * alone cannot express — the reset, the page shell, the navigation, and a rule for every
+ * component and every route the UI renders.
+ *
+ * Four facts a later reader would otherwise break:
+ *
+ *   - One breakpoint, mobile-first. The only media condition below is (min-width: 48rem), the
+ *     literal form of --breakpoint-narrow, which cannot parameterise a media condition and is
+ *     therefore repeated. Everything above the breakpoint is the narrow layout: nothing here
+ *     sets a fixed width above 100%, uses 100vw, or puts overflow-x on html or body, so a
+ *     360px viewport reflows rather than scrolling sideways.
+ *
+ *   - Nothing that discloses something is ever hidden. No rule below sets display: none,
+ *     visibility: hidden, clipping, an ellipsis or a fixed narrow width on the demonstration
+ *     banner, the "Sponsored" label, the sample badge's scope text, a form label, a live
+ *     region, or the bypass link while it has focus. The two deliberate collapses — the
+ *     navigation menu and a card's limitation excerpt — are stated at their own rule.
+ *
+ *   - Hover is never the only way to reach anything. Each hover rule below restates a cue the
+ *     reader already has from the resting appearance, the visible label, or the focus ring
+ *     tokens.css draws, so no meaning is carried on hover alone.
+ *
+ *   - The ledger and item tables here are read layouts. No rule in this file is a control over
+ *     stored history, and the amount, entry type and reference columns are styled to wrap
+ *     rather than to scroll.
+ *
+ * Class names follow one convention, which is what lets this file and the components agree: a
+ * block class is the component's kebab-case file stem (nav.tsx styles .nav), an element is
+ * block__element, and state is .is-open or an ARIA attribute selector. Layout, spacing, border
+ * and background sit on the block itself, so a block still renders correctly when its
+ * component omits an inner element class; the block__element rules refine that rather than
+ * carry it.
+ */
+
+/* ==========================================================================
+   1. Reset and base text
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  /* A long identifier — a report id, a version string, a case id — wraps rather than widening
+     the page. Rules below repeat this where the value is machine data. */
+  overflow-wrap: break-word;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  font-size: var(--font-size-3xl);
+}
+
+h2 {
+  font-size: var(--font-size-2xl);
+}
+
+h3 {
+  font-size: var(--font-size-xl);
+}
+
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-lg);
+}
+
+p {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+}
+
+a {
+  color: var(--color-accent);
+  /* The underline stays in place: inside a sentence, colour is never the only thing that
+     marks a link. */
+  text-decoration: underline;
+}
+
+a:hover {
+  color: var(--color-accent-strong);
+}
+
+ul,
+ol {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+  padding-inline-start: var(--space-5);
+}
+
+ul ul,
+ul ol,
+ol ul,
+ol ol {
+  margin-block: var(--space-2) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+  white-space: pre-wrap;
+}
+
+strong,
+b {
+  font-weight: var(--font-weight-bold);
+}
+
+hr {
+  margin-block: var(--space-6);
+  margin-inline: 0;
+  border: 0;
+  border-block-start: var(--border-width-thin) solid var(--color-divider);
+}
+
+img,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* ==========================================================================
+   2. Shell, page column and the bypass link
+   ========================================================================== */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-4);
+  background-color: var(--color-surface-elevated);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+}
+
+/* The shell's landmark and a page that is itself the landmark share one centred column, so a
+   page renders identically whether the shell wraps it or it stands alone. */
+.app-main,
+.page {
+  width: 100%;
+  max-width: var(--layout-max-width);
+  min-width: 0;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A page inside the shell's landmark inherits that element's centring and inline padding
+   instead of adding a second copy of it. */
+.app-main .page {
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: 0;
+}
+
+/* The thirteen route roots. Each one separates its own top-level sections and leaves room at
+   the foot of the page, so a page mounted directly by the shell is spaced exactly like one
+   inside it. */
+.page-home,
+.page-mission,
+.page-listings,
+.page-listing-detail,
+.page-compare,
+.page-developer,
+.page-challenges,
+.page-threads,
+.page-standards,
+.page-report,
+.page-academy,
+.page-opportunity-index,
+.page-not-found {
+  gap: var(--space-7);
+  padding-block: var(--space-6) var(--space-8);
+}
+
+/* The bypass link is this plan's own choice rather than a requirement of the request: the
+   shell's markup is not fixed, and WCAG 2.4.1 "Bypass Blocks" is a Level A criterion of the
+   target, so the link is styled here. It sits above the viewport until focus reaches it and is
+   then fully visible with tokens.css's ring — it is never permanently hidden, and it is never
+   an unstyled block in the middle of the header. */
+.app-skip-link {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: var(--space-4);
+  z-index: 1;
+  transform: translateY(-200%);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-accent-strong);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background-color: var(--color-accent);
+  color: var(--color-accent-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  transition: transform var(--motion-duration-fast) ease-out;
+}
+
+.app-skip-link:focus {
+  transform: translateY(0);
+}
+
+.app-skip-link:hover {
+  background-color: var(--color-accent-strong);
+}
+
+/* The absent state: an explanation of what the address names, a way back into the app, and no
+   error styling, because nothing failed. */
+.not-found,
+.page-not-found {
+  gap: var(--space-4);
+}
+
+.not-found__heading {
+  margin-block: 0;
+}
+
+.not-found__message {
+  margin-block: 0;
+  max-width: 40rem;
+}
+
+.not-found__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin-block: var(--space-2) 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+.not-found__links li {
+  margin: 0;
+}
+
+.not-found__links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
+}
+
+/* ==========================================================================
+   3. Navigation, collapsing on narrow screens
+   ========================================================================== */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nav__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    border-color var(--motion-duration-fast) ease-out;
+}
+
+.nav__toggle:hover {
+  background-color: var(--color-surface-sunken);
+}
+
+/* The disclosure states which way it will move by more than colour: the boundary thickens and
+   the label darkens, so the open state survives a reader who cannot see the tint. */
+.nav__toggle[aria-expanded="true"] {
+  border-width: var(--border-width-thick);
+  border-color: var(--color-accent);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-accent-strong);
+}
+
+.nav__menu {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-block: 0;
+  margin-inline: 0;
+  padding-inline-start: 0;
+  min-width: 0;
+  max-width: 100%;
+  list-style: none;
+}
+
+/* The menu opens when the component says it is open, by either mechanism the shell may use:
+   the class on the list, the class on the navigation, or the disclosure button's own state.
+   The list can therefore stay mounted, so aria-controls always resolves. */
+.nav__menu.is-open,
+.nav.is-open .nav__menu,
+.nav__toggle[aria-expanded="true"] + .nav__menu {
+  display: flex;
+}
+
+/* Kept in its own rule on purpose: a browser that cannot parse :has() drops only this rule,
+   leaving the three selectors above intact. It covers a menu shown by removing the hidden
+   attribute rather than by a class, which the state on the disclosure button still announces. */
+.nav:has(.nav__toggle[aria-expanded="true"]) .nav__menu {
+  display: flex;
+}
+
+.nav__item {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nav__link {
+  display: flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-3);
+  border-block-end: var(--border-width-thick) solid var(--color-divider);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--color-accent);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+.nav__link:hover {
+  background-color: var(--color-surface-sunken);
+  color: var(--color-accent-strong);
+}
+
+/* The current destination is marked without colour alone: the rule under it takes the accent,
+   the weight rises to bold and the underline gives way to that rule. */
+.nav__link[aria-current="page"] {
+  border-block-end-color: var(--color-accent);
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+  text-decoration: none;
+}
+
+@media (min-width: 48rem) {
+  .app-header {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3) var(--space-6);
+    padding-inline: var(--space-6);
+  }
+
+  .nav {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  /* At this width every destination is visible at once, so the disclosure has nothing left to
+     disclose and the collapsed state it expressed is unreachable. */
+  .nav__toggle {
+    display: none;
+  }
+
+  /* Author styles beat the user agent's [hidden] rule, which is what keeps the menu visible
+     when the component left the attribute on it as the viewport grew. */
+  .nav__menu,
+  .nav__menu[hidden] {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-4);
+  }
+}
+
+/* ==========================================================================
+   4. Demonstration identity: the banner and the account switcher
+   ========================================================================== */
+
+/* The persistent demonstration label. It stays visible and legible at every width: no rule
+   here hides it, truncates it or pins it to a narrow width, and its text wraps on the surface
+   it is drawn on. */
+.demo-banner {
+  margin-block: 0;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-banner-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-banner-surface);
+  color: var(--color-banner-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.demo-banner p {
+  margin-block: 0;
+}
+
+/* Rendered directly under the shell, the band carries its own inset so its rounded edge never
+   meets the viewport. */
+.app-shell > .demo-banner {
+  margin-block: var(--space-3) 0;
+  margin-inline: var(--space-4);
+}
+
+.demo-account-switcher {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.demo-account-switcher label {
+  color: var(--color-heading);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.demo-account-switcher select {
+  width: auto;
+  min-height: var(--touch-target-min);
+  max-width: 100%;
+}
+
+.demo-account-switcher optgroup,
+.demo-account-switcher option {
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+}
+
+.demo-account-switcher__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (min-width: 48rem) {
+  /* The banner takes its own line inside the header row rather than sharing it with the
+     navigation, so the disclosure reads as a band across the shell. */
+  .demo-banner {
+    flex-basis: 100%;
+  }
+}
+
+/* ==========================================================================
+   5. Disclosures: the sponsored block, its label and the sample badge
+   ========================================================================== */
+
+/* The sponsored collection: its own labelled block on its own surface, separated from what is
+   above it by a rule, and rendered after the organic results on the home and listings pages.
+   Nothing here can move it above them — no flex order, no absolute positioning, no grid
+   placement — and the page renders nothing at all when the collection is empty, so this file
+   adds no empty box. */
+.sponsored-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-block: var(--space-7) 0;
+  padding-block: var(--space-5);
+  padding-inline: var(--space-4);
+  border-width: var(--border-width-thin);
+  border-style: solid;
+  border-color: var(--color-sponsor-border);
+  border-block-start-width: var(--border-width-thick);
+  border-radius: var(--radius-md);
+  background-color: var(--color-sponsor-surface);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sponsored-block > h2,
+.sponsored-block > h3 {
+  margin-block: 0;
+}
+
+.sponsored-block ul,
+.sponsored-block ol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-block: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+/* The label itself. Criterion 7 asserts that this text is rendered inside each sponsored item,
+   so nothing here hides, truncates, clips or repositions it, and it stays legible at 360px. */
+.sponsored-label {
+  display: inline-block;
+  align-self: flex-start;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2);
+  border: var(--border-width-thin) solid var(--color-sponsor-border);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-sponsor-surface);
+  color: var(--color-sponsor-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+/* The badge names the standard version, the scope of what was measured and the report id. Each
+   of those is part of a disclosure, so the text wraps at 360px rather than truncating, and the
+   border stays visible around it. */
+.sample-badge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  align-self: flex-start;
+  min-width: 0;
+  max-width: 100%;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-badge-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-badge-surface);
+  color: var(--color-badge-text);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-base);
+  overflow-wrap: anywhere;
+}
+
+.sample-badge__scope {
+  font-weight: var(--font-weight-medium);
+}
+
+.sample-badge__version,
+.sample-badge__report-id {
+  font-family: var(--font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   6. Explanatory states: empty, absent, malformed and throttled
+   ========================================================================== */
+
+/* An empty search, an empty board and a listing with no evaluation yet are states of the
+   product rather than failures: each renders as a heading, a sentence and an optional next
+   step. Nothing in this section is monospace, a stack trace or an error banner. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding-block: var(--space-5);
+  padding-inline: var(--space-5);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.empty-state h2,
+.empty-state h3,
+.empty-state h4 {
+  margin-block: 0;
+}
+
+.empty-state p {
+  margin-block: 0;
+}
+
+.empty-state > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* A write that failed, and a write that was throttled and may be repeated. The message has
+   room to wrap, and the retry instruction is part of the text rather than a tooltip. */
+.error-notice,
+.notice {
+  display: block;
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border-width: var(--border-width-thin);
+  border-style: solid;
+  border-color: var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.error-notice > :first-child,
+.notice > :first-child {
+  margin-block-start: 0;
+}
+
+.error-notice > :last-child,
+.notice > :last-child {
+  margin-block-end: 0;
+}
+
+.error-notice,
+.notice--error {
+  background-color: var(--color-notice-error-surface);
+  border-color: var(--color-notice-error-border);
+  color: var(--color-notice-error-text);
+}
+
+.notice--warning {
+  background-color: var(--color-notice-warning-surface);
+  border-color: var(--color-notice-warning-border);
+  color: var(--color-notice-warning-text);
+}
+
+.notice--success {
+  background-color: var(--color-notice-success-surface);
+  border-color: var(--color-notice-success-border);
+  color: var(--color-notice-success-text);
+}
+
+.notice--info {
+  background-color: var(--color-notice-info-surface);
+  border-color: var(--color-notice-info-border);
+  color: var(--color-notice-info-text);
+}
+
+/* Status changes the app announces politely — an evaluation result, a throttled-write retry
+   notice, a posted reply. The region is visible in the layout and wraps; it is never
+   display: none, never clipped, and never collapsed to no height. */
+.status-region,
+[aria-live] {
+  display: block;
+  margin-block: var(--space-4) 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.status-region > :first-child {
+  margin-block-start: 0;
+}
+
+.status-region > :last-child {
+  margin-block-end: 0;
+}
+
+
+/* ==========================================================================
+   7. Cards and lists
+   ========================================================================== */
+
+/* One listing: its identity, the outcome that was measured, the standard version and label it
+   carries, the license and pricing model it is offered under, an excerpt of its stated
+   limitations, and the control that adds it to a comparison. Layout, surface and border sit on
+   the card itself, so it reads correctly whichever inner element classes the component renders. */
+.listing-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block: var(--space-5);
+  padding-inline: var(--space-5);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.listing-card > * {
+  min-width: 0;
+}
+
+.listing-card h2,
+.listing-card h3,
+.listing-card p {
+  margin-block: 0;
+}
+
+.listing-card ul {
+  margin-block: 0;
+}
+
+.listing-card__title {
+  font-size: var(--font-size-xl);
+}
+
+/* The chip carrying the outcome of the latest report. Both directions are styled from their own
+   pair of custom properties, and the word itself carries the meaning, so the chip reads without
+   its tint. */
+.listing-card__outcome {
+  display: inline-block;
+  align-self: flex-start;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+.listing-card__outcome--pass {
+  background-color: var(--color-outcome-pass-surface);
+  border-color: var(--color-outcome-pass-border);
+  color: var(--color-outcome-pass-text);
+}
+
+.listing-card__outcome--fail {
+  background-color: var(--color-outcome-fail-surface);
+  border-color: var(--color-outcome-fail-border);
+  color: var(--color-outcome-fail-text);
+}
+
+/* The version that was measured and the standard version it was measured against: machine
+   data, so monospaced and always wrapping. */
+.listing-card__version,
+.listing-card__standard,
+.listing-card__report-id {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.listing-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* The one text this file clamps, and only here: the excerpt of a card's stated limitations. The
+   whole sentence stays in the document, so assistive technology reads it in full, and the
+   listing page renders the limitations unclamped. The label, the outcome and the version are
+   never clamped. */
+.listing-card__limitations {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin-block: 0;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+/* A version with no report yet is explained rather than flagged: it is a state of the product,
+   not a failure of it. */
+.listing-card__no-report {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.listing-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-block-start: var(--space-1);
+}
+
+/* The control that adds a listing to a comparison, and the checkbox behind it, are a real
+   target rather than a bare box. */
+.listing-card__compare,
+.listing-card__actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding-inline: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+/* The boards and catalogues the pages render directly: the challenges board, the thread board
+   and the standards catalogue. Separators come from --color-divider, the value intended for a
+   rule that is not a control boundary. */
+.item-list,
+.standards-catalogue {
+  display: flex;
+  flex-direction: column;
+  margin-block: 0;
+  padding-inline-start: 0;
+  min-width: 0;
+  max-width: 100%;
+  list-style: none;
+}
+
+.item-list__item,
+.standards-catalogue > * {
+  padding-block: var(--space-4);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.standards-catalogue > * + * {
+  border-block-start: var(--border-width-thin) solid var(--color-divider);
+}
+
+/* No separator after the last item, so a board reads the same with one item, with none, and
+   with many. */
+.item-list__item {
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+}
+
+.item-list__item:last-child {
+  border-block-end: 0;
+}
+
+.item-list__item > :last-child,
+.standards-catalogue > * > :last-child {
+  margin-block-end: 0;
+}
+
+/* ==========================================================================
+   8. Tables: the shared table, the ledger reads and the illustrative index
+   ========================================================================== */
+
+/* Tables wrap instead of scrolling. The layout is fixed — every column takes an equal share of
+   the table's width — and the cells wrap, so a long case id, version string or amount stays
+   inside a 360px viewport whatever the column count, and no sideways scroll container is
+   created, which would itself have to be reachable by keyboard to stay usable. Measured against
+   an auto layout on the dense tables at 360px, equal shares also keep more short words on one
+   line, because an auto layout lets a column holding a long identifier take the width a short
+   header word needed; neither layout overflowed. */
+.table__wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.table {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--font-size-sm);
+}
+
+.table caption {
+  padding-block-end: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  text-align: start;
+}
+
+/* The inline padding is the narrowest value of the two below on purpose: a dense table at 360px
+   has little width per column, and every pixel given back to the text is a word that stays
+   whole. The breakpoint above restores the roomier value. */
+.table th,
+.table td {
+  padding-block: var(--space-2);
+  padding-inline: var(--space-2);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.table th {
+  background-color: var(--color-surface-elevated);
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+/* Amounts, entry types and the references tying an entry to its transaction or its report:
+   machine data, monospaced, and always wrapping rather than widening the table. */
+.table--ledger .table__amount,
+.ledger-table__amount,
+.opportunity-index-table__amount {
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.table--ledger .table__identifier,
+.ledger-table__identifier,
+.opportunity-index-table__identifier {
+  font-family: var(--font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+/* The ledger panels read an append-only store; nothing here is a control over it. The note on
+   the founder-allocation view about the contract structure being undecided is legible and is
+   never truncated. */
+.ledger-table,
+.opportunity-index-table {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ledger-table__note,
+.opportunity-index-table__note {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.ledger-table summary,
+.opportunity-index-table summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
+  cursor: pointer;
+}
+
+/* ==========================================================================
+   9. The comparison table and its mobile reflow
+   ========================================================================== */
+
+/* Two to four listings compared side by side. Below the breakpoint the listings stack, one
+   readable block each, so no column has to be reached by scrolling sideways; at the breakpoint
+   the same blocks sit in a row and wrap when a fourth does not fit. Inside a block, a label is
+   paired with its value as a two-column row that keeps the value the larger share at every
+   width.
+
+   A component that renders a real <table class="compare-table"> instead is supported by the
+   element-qualified rules below, which keep that table inside the viewport: fixed layout,
+   wrapping cells, no minimum width above the content box. Criterion 9 asserts that /compare has
+   no page-level horizontal scroll at 360px, and either shape satisfies it. */
+.compare-table {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  margin-block: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.compare-table__listing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.compare-table__listing > * {
+  min-width: 0;
+}
+
+.compare-table__listing > h2,
+.compare-table__listing > h3,
+.compare-table__listing > h4 {
+  margin-block: 0;
+}
+
+.compare-table__row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 40%) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
+.compare-table__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.compare-table__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A listing named in the comparison that cannot be shown states which one is missing, rather
+   than failing the whole page. */
+.compare-table__absent {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* A real table inside this block keeps its own layout and still stays inside the viewport. */
+table.compare-table {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--font-size-sm);
+}
+
+table.compare-table th,
+table.compare-table td {
+  padding-block: var(--space-2);
+  /* The same narrow inline padding as the shared table, and for the same measured reason: a
+     comparison table at 360px has one column per listing and little width for each. */
+  padding-inline: var(--space-2);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+table.compare-table th {
+  background-color: var(--color-surface-elevated);
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+}
+
+@media (min-width: 48rem) {
+  .compare-table {
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  }
+}
+
+
+/* ==========================================================================
+   10. Fields, controls and buttons
+   ========================================================================== */
+
+/* A field is a real label above its control, an optional hint, and — when the control is
+   invalid — a sentence beside it explaining what to change. The label is never hidden with
+   display: none, clipping or any other technique that removes it from the layout or from the
+   accessibility tree; where a label has to be reduced visually, .visually-hidden is the only
+   mechanism this file offers. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-block: 0 var(--space-5);
+  margin-inline: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* A fieldset groups controls rather than being one, so its own frame and padding are reset and
+   its legend aligns with every other field's label above it. */
+fieldset.field {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+fieldset.field > legend {
+  padding-inline: 0;
+  margin-block-end: var(--space-2);
+}
+
+.field > * {
+  min-width: 0;
+}
+
+.field__label {
+  display: block;
+  color: var(--color-heading);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.field__hint {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The error sentence belongs beside its own control, and the state it describes is carried by
+   this text and by the boundary below — never by colour alone. */
+.field__error {
+  margin-block: 0;
+  color: var(--color-notice-error-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+/* Text controls, selects and textareas share one appearance, drawn with --color-border — the
+   custom property that holds 3:1 against every surface a control can sit on, so the boundary of
+   each control is perceivable on its own. */
+select,
+textarea,
+input[type="text"],
+input[type="search"],
+input[type="number"],
+input[type="url"],
+.field__input {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    border-color var(--motion-duration-fast) ease-out;
+}
+
+select:hover,
+textarea:hover,
+input[type="text"]:hover,
+input[type="search"]:hover,
+input[type="number"]:hover,
+input[type="url"]:hover,
+.field__input:hover {
+  border-color: var(--color-accent);
+}
+
+/* An invalid control is marked by a thicker boundary as well as by the colour of that boundary,
+   and the sentence beside it says what is wrong. */
+select[aria-invalid="true"],
+textarea[aria-invalid="true"],
+input[aria-invalid="true"],
+.field--error select,
+.field--error textarea,
+.field--error .field__input {
+  border-width: var(--border-width-thick);
+  border-color: var(--color-notice-error-border);
+}
+
+/* Multiline text grows downward only, at least three touch targets tall, and a long case id
+   wraps inside it rather than widening the page. */
+textarea {
+  min-height: calc(var(--touch-target-min) * 3);
+  resize: vertical;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The evaluation submission is an array of recorded outputs: machine data, monospaced, wrapping. */
+.field__input--mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A disabled control is marked by its fill, by dimmed text and by the cursor, so the state does
+   not rest on the colour shift alone. */
+select:disabled,
+textarea:disabled,
+input:disabled {
+  background-color: var(--color-disabled-surface);
+  border-color: var(--color-divider);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+}
+
+/* The option groups: the checkout panel's offers and the Academy's answers. Each option is a
+   real label with a hit area of at least one touch target, and the options wrap rather than
+   compressing into one line. */
+.field__group {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.field__group label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-1);
+  color: var(--color-text);
+  font-size: var(--font-size-base);
+  cursor: pointer;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+/* One button, three named variants. Every state carries a cue other than colour: disabled dims
+   the fill and the text and changes the cursor, focus is the outline tokens.css draws, and each
+   variant is named by its own label in the component. Hover only ever repeats the resting
+   appearance, so nothing a reader needs is reachable on hover alone. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-5);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-base);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    border-color var(--motion-duration-fast) ease-out,
+    color var(--motion-duration-fast) ease-out;
+}
+
+.button:hover {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent);
+}
+
+.button--primary {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-text);
+}
+
+.button--primary:hover {
+  background-color: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+}
+
+.button--secondary {
+  background-color: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.button--secondary:hover {
+  background-color: var(--color-surface-sunken);
+}
+
+.button--destructive {
+  background-color: var(--color-danger-surface);
+  border-color: var(--color-danger-surface);
+  color: var(--color-danger-text);
+}
+
+.button--destructive:hover {
+  border-color: var(--color-heading);
+}
+
+.button[disabled],
+.button:disabled {
+  background-color: var(--color-disabled-surface);
+  border-color: var(--color-disabled-surface);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+}
+
+.button[aria-busy="true"] {
+  cursor: progress;
+}
+
+/* ==========================================================================
+   11. Form and panel blocks
+   ========================================================================== */
+
+/* The filter bar above the listings: one column of fields on a narrow screen, a wrapping row of
+   them above the breakpoint where the fields share the width instead of each taking a line. */
+.search-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.search-filters .field {
+  margin-block-end: 0;
+}
+
+/* The panels that carry a form: the buyer's inquiry, the buyer's challenge, a reply on a
+   thread, a standards proposal. Each is its own surface, so it reads as one block beside the
+   content it acts on. */
+.inquiry-form,
+.challenge-form,
+.thread-reply-form,
+.standards-proposal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.inquiry-form > .field,
+.challenge-form > .field,
+.thread-reply-form > .field,
+.standards-proposal-form > .field {
+  margin-block-end: 0;
+}
+
+.inquiry-form .button,
+.challenge-form .button,
+.thread-reply-form .button,
+.standards-proposal-form .button {
+  align-self: flex-start;
+}
+
+/* Offer selection and the simulated transaction. Every amount here is integer minor units of
+   the synthetic currency, monospaced and never truncated, and the disclosure beside it is plain
+   text in the layout rather than a title attribute. */
+.checkout-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.checkout-panel__disclosure {
+  margin-block: 0;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-notice-warning-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-notice-warning-surface);
+  color: var(--color-notice-warning-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.checkout-panel__amount {
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+/* The operator's listing actions. Each is a named variant with its own label, so the action
+   reads without its fill. */
+.moderation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-sunken);
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (min-width: 48rem) {
+  .search-filters {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .search-filters .field {
+    flex: 1 1 12rem;
+    min-width: 0;
+  }
+
+  /* Roomier cells once the table has the width for them. */
+  .table th,
+  .table td {
+    padding-inline: var(--space-3);
+  }
+
+  table.compare-table th,
+  table.compare-table td {
+    padding-inline: var(--space-3);
+  }
+}
+
+/* The Academy's questionnaire. Its result appears in the visible status region below it rather
+   than in a dialog or a tooltip, and nothing about it is persisted. */
+.self-assessment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.self-assessment__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.self-assessment__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.self-assessment__result {
+  margin-block: 0;
+}
+
+.self-assessment__gaps {
+  margin-block: var(--space-2) 0;
+}
+
+
+/* ==========================================================================
+   12. Utilities and shrink guards
+   ========================================================================== */
+
+/* The one way text is reduced visually, and a last resort: the text stays in the document and in
+   the accessibility tree. It is never applied to the demonstration banner, the sponsored label,
+   the sample badge, a form label, a live region or any other disclosure. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* An element with intrinsic content — a table, a textarea, an inline SVG — is capped at the
+   column it sits in, and the flex and grid children that could otherwise refuse to shrink are
+   allowed to. Together with the wrapping rules above, this is what keeps a 360px viewport free
+   of horizontal scrolling. */
+table,
+pre,
+textarea,
+input,
+select,
+button,
+fieldset,
+figure {
+  max-width: 100%;
+}
+
+.app-shell > *,
+.app-header > *,
+.app-main > *,
+.page > *,
+.item-list > *,
+.compare-table > *,
+.checkout-panel > *,
+.ledger-table > *,
+.opportunity-index-table > * {
+  min-width: 0;
+}
+
