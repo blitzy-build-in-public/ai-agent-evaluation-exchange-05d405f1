@@ -35,7 +35,6 @@
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "20.19.43",
     "license-checker-rseidelsohn": "4.3.1",
-    "playwright-core": "1.45.3",
     "tsx": "4.16.5",
     "typescript": "5.4.5",
     "vitest": "1.6.1"

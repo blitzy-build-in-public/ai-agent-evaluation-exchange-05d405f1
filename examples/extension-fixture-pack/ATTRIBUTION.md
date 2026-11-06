@@ -12,9 +12,9 @@ this file under that same rule, as part of the manual review checklist in
 
 ## License
 
-This extension is released under the Apache License 2.0 declared in this folder's `LICENSE`, which
-is not the repository's root MIT licence: this folder is the worked example of a contributor keeping
-their own terms for their own contribution.
+This extension is released under the MIT licence declared in this folder's own `LICENSE`, and that
+file carries the extension's own copyright line: this folder is the worked example of a contributor
+keeping their own terms for their own contribution.
 
 ## What a contributed extension declares
 

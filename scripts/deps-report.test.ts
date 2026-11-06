@@ -31,11 +31,14 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
+  DECLARED_PACKAGE_PURPOSES,
   checkLicenses,
+  collectDeclaredPackages,
   isAllowlisted,
   loadAllowlist,
   main,
   normalizeLicense,
+  readInstalledTree,
   renderDependencyReport,
   runDepsReport,
 } from "./deps-report";
@@ -745,6 +748,109 @@ describe("the generated document", () => {
       "transitive",
       "runtime",
     ]);
+  });
+});
+
+describe("the declared-package inventory", () => {
+  /**
+   * Every package name the root manifest or a workspace manifest declares, with the versions stated,
+   * read here independently of the module so the inventory cannot pass by agreeing with itself. The
+   * root manifest's workspace globs are `apps/*`, `packages/*` and `examples/*`, so the directories
+   * under those three are the workspaces whose manifests declare packages.
+   */
+  function declaredInManifests(): ReadonlyMap<string, ReadonlySet<string>> {
+    const directories = [
+      REPO_ROOT,
+      ...["apps", "packages", "examples"].flatMap((group) =>
+        readdirSync(join(REPO_ROOT, group)).map((member) => join(REPO_ROOT, group, member)),
+      ),
+    ];
+    const declared = new Map<string, Set<string>>();
+    for (const directory of directories) {
+      const manifestPath = join(directory, "package.json");
+      if (!existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      for (const name of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+        const declarations = manifest[name];
+        if (declarations === null || typeof declarations !== "object") continue;
+        for (const [packageName, version] of Object.entries(declarations as Record<string, unknown>)) {
+          const versions = declared.get(packageName) ?? new Set<string>();
+          if (typeof version === "string") versions.add(version);
+          declared.set(packageName, versions);
+        }
+      }
+    }
+    return declared;
+  }
+
+  it("lists every declared package with its declared version, a licence and a recorded purpose, and renders no section when none are supplied", async () => {
+    const allowlist = deliveredAllowlist();
+    const entries = await readInstalledTree(REPO_ROOT);
+    const declared = collectDeclaredPackages(REPO_ROOT, entries);
+    const document = renderDependencyReport({
+      entries,
+      allowlist,
+      generatedBy: GENERATED_BY,
+      sources: REPORT_SOURCES,
+      declaredPackages: declared,
+    });
+
+    // Every package the manifests declare is inventoried, in name order, at the versions they state.
+    const fromManifests = declaredInManifests();
+    expect(declared.map((declaredPackage) => declaredPackage.name)).toEqual(
+      [...fromManifests.keys()].sort(),
+    );
+    for (const declaredPackage of declared) {
+      const manifestVersions = [...(fromManifests.get(declaredPackage.name) ?? [])].sort();
+      expect(manifestVersions.length).toBeGreaterThan(0);
+      expect([...declaredPackage.versions].sort()).toEqual(manifestVersions);
+      // The purpose is the record's, and it is recorded: nothing on the delivered set is left blank.
+      expect(DECLARED_PACKAGE_PURPOSES[declaredPackage.name]).toBe(declaredPackage.purpose);
+      expect(declaredPackage.purpose.trim().length).toBeGreaterThan(0);
+      expect(declaredPackage.purpose).not.toBe("not recorded");
+
+      const line = firstOf(
+        document.split("\n").filter((candidate) => candidate.startsWith(`- \`${declaredPackage.name}\` `)),
+        `a declared-package line for ${declaredPackage.name}`,
+      );
+      for (const version of declaredPackage.versions) {
+        expect(line).toContain(version);
+      }
+      expect(line).toContain(firstOf(declaredPackage.licenses, `a licence for ${declaredPackage.name}`));
+      expect(line).toContain("— purpose: ");
+      expect(line).not.toContain("purpose: not recorded");
+    }
+
+    // The four packages this checkpoint's findings name are inventoried like every other declaration.
+    const findings: ReadonlyArray<readonly [string, string]> = [
+      ["@types/node", "20.19.43"],
+      ["@types/better-sqlite3", "9.6.0"],
+      ["@types/react", "18.3.31"],
+      ["@types/react-dom", "18.3.7"],
+    ];
+    for (const [name, version] of findings) {
+      const declaredPackage = firstOf(
+        declared.filter((candidate) => candidate.name === name),
+        `the ${name} inventory entry`,
+      );
+      expect(declaredPackage.versions).toEqual([version]);
+      expect(declaredPackage.licenses.length).toBeGreaterThan(0);
+      expect(declaredPackage.purpose).toBe(DECLARED_PACKAGE_PURPOSES[name]);
+    }
+
+    // A caller that supplies no declared packages gets no such section, and no other section changes.
+    const withoutDeclared = renderDependencyReport({
+      entries,
+      allowlist,
+      generatedBy: GENERATED_BY,
+      sources: REPORT_SOURCES,
+    });
+    const sectionStart = document.indexOf("## Declared packages");
+    const nextSection = document.indexOf("## Accepted through a development-only exception");
+    expect(withoutDeclared).not.toContain("## Declared packages");
+    expect(sectionStart).toBeGreaterThan(-1);
+    expect(nextSection).toBeGreaterThan(sectionStart);
+    expect(document.slice(0, sectionStart) + document.slice(nextSection)).toBe(withoutDeclared);
   });
 });
 

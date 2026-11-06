@@ -6,7 +6,7 @@
  * allowlist appears in the tree. The allowlist is data (`scripts/license-allowlist.json`), so
  * widening it is a reviewable diff rather than a code change.
  *
- * Three properties the report rests on:
+ * Four properties the report rests on:
  *
  * - **It is generated, never hand-edited.** The document is committed, so identical input must render
  *   byte-identically: no timestamp, no machine name, no absolute path, no run counter. A spurious
@@ -16,6 +16,10 @@
  * - **Graph membership decides the development-only exception.** A licence listed under
  *   `developmentOnlyExceptions` passes only for an entry in the development graph, so the same
  *   licence reaching a runtime graph fails the gate instead of slipping through on a name match.
+ * - **A declared package carries version, licence and purpose.** The `Declared packages` section gives
+ *   every package a manifest declares the three fields an inventory entry needs, taking the purpose
+ *   from {@link DECLARED_PACKAGE_PURPOSES} and rendering `not recorded` where it holds none, so a
+ *   declaration outside an inventory is visible in the review diff rather than fatal to the run.
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -65,6 +69,26 @@ const ALL_DEPENDENCY_MAPS: readonly string[] = [
 
 /** Which graph a package belongs to: what the product ships, or what only builds and tests it. */
 export type DependencyGraph = 'runtime' | 'development';
+
+/** The workspace label the repository root manifest is listed under in the declared-package section. */
+const ROOT_WORKSPACE_LABEL = 'root';
+
+/**
+ * The label each dependency map is rendered with in the declared-package section.
+ *
+ * `prod` and `dev` are the maps the manifests of this repository declare in; a package reachable only
+ * through `peerDependencies` or `optionalDependencies` is named as such rather than folded into one of
+ * them, because neither carries the promise a plain dependency does.
+ */
+const DECLARED_MAP_LABELS: Readonly<Record<string, string>> = {
+  dependencies: 'prod',
+  devDependencies: 'dev',
+  peerDependencies: 'peer',
+  optionalDependencies: 'optional',
+};
+
+/** What a declared package whose purpose the record does not hold renders as, in place of a failure. */
+const NOT_RECORDED_PURPOSE = 'not recorded';
 
 /** One dependency of the delivered product, with the licence the installed tree reports for it. */
 export interface DependencyEntry {
@@ -155,6 +179,90 @@ export interface RunDepsReportOptions {
   /** Allowlist to check against instead of reading the data file. */
   readonly allowlist?: Allowlist;
 }
+
+/** One manifest's declaration of a package: the workspace declaring it, the map and the version. */
+export interface DeclaredPackageDeclaration {
+  /** `root` for the repository root manifest, otherwise the declaring workspace's package name. */
+  readonly workspace: string;
+  /** The dependency map the declaration sits in, for example `dependencies` or `devDependencies`. */
+  readonly map: string;
+  /** The version that manifest declares, exactly as written: every manifest here pins an exact one. */
+  readonly version: string;
+}
+
+/**
+ * One declared package's inventory entry: what a package the manifests declare has to answer for.
+ *
+ * AAP §0.4.1 fixes an inventory entry as the package's exact version, its licence and its purpose, and
+ * the workspace it belongs to. The version, the workspace and the map come from the declaring
+ * manifests, the licence comes from the entry the installed tree reports (an in-repo workspace's own
+ * manifest licence for `@adem/*`), and the purpose comes from {@link DECLARED_PACKAGE_PURPOSES}.
+ */
+export interface DeclaredPackage {
+  /** Package name as published, for example `fastify` or `@types/node`. */
+  readonly name: string;
+  /**
+   * Every distinct version the declaring manifests state, in declaration order. One element on the
+   * delivered set, where every manifest declares the same exact version; more than one only where
+   * workspaces disagree, which the report then shows rather than picking one silently.
+   */
+  readonly versions: readonly string[];
+  /** The licences the installed entry for this package reports; empty when none is installed. */
+  readonly licenses: readonly string[];
+  /**
+   * Who declares the package, root first and then by workspace name, so the list is stable across
+   * runs and machines whatever order the manifests were read in.
+   */
+  readonly declarations: readonly DeclaredPackageDeclaration[];
+  /** The package's purpose, or an empty string when the record holds none for its name. */
+  readonly purpose: string;
+}
+
+/**
+ * The purpose half of a declared package's inventory entry.
+ *
+ * AAP §0.4.1 fixes a package's inventory entry as its exact version, its licence and its purpose, and
+ * it requires an entry before a package is declared. The version and the licence a declaration answers
+ * for come from the manifest and the installed tree; the purpose — why the product needs the package
+ * at all — has no other home, because it is a statement about the design rather than about the tree.
+ * That is what this record holds: one line for every package the root manifest or a workspace
+ * manifest declares, phrased in the plan's own words where §0.4.1 lists the package and in the plan's
+ * requirements where it does not.
+ *
+ * A package the record does not hold is not an error: the generated section renders it as
+ * `purpose: not recorded`, so an uninventoried declaration shows up in the review diff of
+ * `docs/DEPENDENCIES.md` rather than failing the run. Adding a package therefore means adding its
+ * purpose here, and an entry is removed with the declaration it describes.
+ */
+export const DECLARED_PACKAGE_PURPOSES: Readonly<Record<string, string>> = Object.freeze({
+  '@adem/commerce-sim': 'Offers, simulated checkout, three ledgers, refunds and fictional configuration',
+  '@adem/sgi-core':
+    'Standards, scoring, reports, proposals, appeals, events and the extension seams adopters implement',
+  '@adem/sgi-fixtures': 'Read-only fixture pack and typed loader, with no runtime dependencies',
+  '@adem/shared': 'Types, constants and JSON schemas used by more than one workspace',
+  '@axe-core/playwright': 'Accessibility checks on four pages at two viewports',
+  '@fastify/rate-limit': '60 requests per minute per client on write routes',
+  '@fastify/static': 'Serves the built web app from `npm start`',
+  '@playwright/test': 'End-to-end tests against the built app',
+  '@types/better-sqlite3':
+    'Declarations for better-sqlite3, which ships none, used by the driver and repository files the plan maps for apps/api, packages/sgi-core and packages/commerce-sim',
+  '@types/node': 'Node type declarations for the six workspaces whose tsconfigs set `types: ["node"]`',
+  '@types/react':
+    'Declarations for the React JSX build of apps/web, which compiles `src/**/*.tsx` under `jsx: react-jsx`',
+  '@types/react-dom':
+    'Declarations for the React JSX build of apps/web, which compiles `src/**/*.tsx` under `jsx: react-jsx`',
+  '@vitejs/plugin-react': 'React transform for Vite',
+  'better-sqlite3': 'Embedded storage and SQL execution',
+  fastify: 'HTTP API and JSON-schema request validation',
+  'license-checker-rseidelsohn': 'Generates `docs/DEPENDENCIES.md`',
+  react: 'UI rendering',
+  'react-dom': 'Browser renderer',
+  'react-router-dom': 'Client routing for the 13 route files',
+  tsx: 'Runs the seed, exclusion-scan and dependency-report scripts without a build step',
+  typescript: 'Strict typing and `tsc --build` project references',
+  vite: 'Build and dev server; produces the static bundle Fastify serves',
+  vitest: 'Unit and integration test runner',
+});
 
 /** Narrows an unknown value to a plain JSON object. */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -496,6 +604,8 @@ interface Manifest {
   readonly workspaces: readonly string[];
   /** Declared dependency names, keyed by dependency map. */
   readonly dependencyMaps: Readonly<Record<string, readonly string[]>>;
+  /** The version string declared for each dependency name, keyed by dependency map. */
+  readonly declaredVersions: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 /** Reads the dependency maps of a manifest, keeping only the names it declares. */
@@ -506,6 +616,31 @@ const readDependencyMaps = (parsed: Record<string, unknown>): Readonly<Record<st
     maps[map] = isRecord(value)
       ? Object.keys(value).filter((name) => name.trim().length > 0)
       : [];
+  }
+  return maps;
+};
+
+/**
+ * Reads the version each declared dependency is declared at, keyed by dependency map.
+ *
+ * A declaration whose value is not a string is kept with an empty version rather than dropped: the
+ * package is still declared, and {@link collectDeclaredPackages} reports that no version could be read
+ * instead of omitting the package from the inventory.
+ */
+const readDeclaredVersions = (
+  parsed: Record<string, unknown>,
+): Readonly<Record<string, Readonly<Record<string, string>>>> => {
+  const maps: Record<string, Readonly<Record<string, string>>> = {};
+  for (const map of ALL_DEPENDENCY_MAPS) {
+    const value = parsed[map];
+    const versions: Record<string, string> = {};
+    if (isRecord(value)) {
+      for (const [name, declared] of Object.entries(value)) {
+        if (name.trim().length === 0) continue;
+        versions[name] = typeof declared === 'string' ? declared.trim() : '';
+      }
+    }
+    maps[map] = versions;
   }
   return maps;
 };
@@ -536,6 +671,7 @@ const toManifest = (dir: string, parsed: unknown): Manifest => {
     license,
     workspaces,
     dependencyMaps: readDependencyMaps(parsed),
+    declaredVersions: readDeclaredVersions(parsed),
   };
 };
 
@@ -585,6 +721,103 @@ const expandWorkspaceGlobs = (rootDir: string, globs: readonly string[]): readon
   }
   return uniqueStrings(directories);
 };
+
+/** The repository's manifests: the root, and every workspace it declares. */
+interface RepositoryManifests {
+  /** The repository root manifest. */
+  readonly root: Manifest;
+  /** Every in-repo workspace manifest, in the order the root manifest's workspace globs give. */
+  readonly workspaces: readonly Manifest[];
+}
+
+/** Reads the root manifest followed by every in-repo workspace manifest. */
+const readRepositoryManifests = (rootDir: string): RepositoryManifests => {
+  const root = requireManifest(rootDir);
+  return {
+    root,
+    workspaces: expandWorkspaceGlobs(rootDir, root.workspaces).map((dir) => requireManifest(dir)),
+  };
+};
+
+/** Orders one package's declarations: the root first, then by workspace name, then by map order. */
+const sortDeclarations = (
+  declarations: readonly DeclaredPackageDeclaration[],
+): readonly DeclaredPackageDeclaration[] => {
+  const rankOfMap = (map: string): number => {
+    const index = ALL_DEPENDENCY_MAPS.indexOf(map);
+    return index === -1 ? ALL_DEPENDENCY_MAPS.length : index;
+  };
+  return [...declarations].sort(
+    (left, right) =>
+      Number(right.workspace === ROOT_WORKSPACE_LABEL) - Number(left.workspace === ROOT_WORKSPACE_LABEL) ||
+      compareStrings(left.workspace, right.workspace) ||
+      rankOfMap(left.map) - rankOfMap(right.map),
+  );
+};
+
+/** Returns the licences of the entry the installed tree reports for a declared package. */
+const licencesOfDeclaredPackage = (
+  name: string,
+  versions: readonly string[],
+  entries: readonly DependencyEntry[],
+): readonly string[] => {
+  const installed = entries.filter((entry) => entry.name === name);
+  const declared = installed.find((entry) => versions.includes(entry.version));
+  const [firstInstalled] = installed;
+  const chosen = declared ?? firstInstalled;
+  return chosen === undefined ? [] : chosen.licenses;
+};
+
+/**
+ * Collects the inventory entry of every package the root manifest or a workspace manifest declares.
+ *
+ * The declared set is what the manifests say, not what the tree happens to hold: a package declared
+ * but not installed still appears, with no licence recorded, so the gap is visible in the report
+ * rather than hidden by it. Licences come from the entry the installed tree reports for the declared
+ * version, which is the same source the dependency table uses.
+ *
+ * @param rootDir - Repository root whose manifests are read.
+ * @param entries - The entries the installed tree reports, as {@link readInstalledTree} returns them.
+ * @returns One inventory entry per declared package, in name order; empty when the root holds no
+ * manifest, which is the case a caller supplies its own entries and no repository for.
+ * @throws When the root manifest or a workspace manifest is unreadable or malformed.
+ */
+export function collectDeclaredPackages(
+  rootDir: string,
+  entries: readonly DependencyEntry[],
+): readonly DeclaredPackage[] {
+  const root = resolvePath(rootDir);
+  if (!existsSync(join(root, 'package.json'))) return [];
+
+  const { root: rootManifest, workspaces } = readRepositoryManifests(root);
+  const declarations = new Map<string, DeclaredPackageDeclaration[]>();
+  for (const [index, manifest] of [rootManifest, ...workspaces].entries()) {
+    const workspace = index === 0 ? ROOT_WORKSPACE_LABEL : manifest.name;
+    for (const map of ALL_DEPENDENCY_MAPS) {
+      for (const name of manifest.dependencyMaps[map] ?? []) {
+        const declared = declarations.get(name) ?? [];
+        declared.push({ workspace, map, version: manifest.declaredVersions[map]?.[name] ?? '' });
+        declarations.set(name, declared);
+      }
+    }
+  }
+
+  const packages: DeclaredPackage[] = [];
+  for (const name of [...declarations.keys()].sort(compareStrings)) {
+    const named = sortDeclarations(declarations.get(name) ?? []);
+    const versions = uniqueStrings(
+      named.map((declaration) => declaration.version).filter((version) => version.length > 0),
+    );
+    packages.push({
+      name,
+      versions,
+      licenses: licencesOfDeclaredPackage(name, versions, entries),
+      declarations: named,
+      purpose: DECLARED_PACKAGE_PURPOSES[name] ?? '',
+    });
+  }
+  return packages;
+}
 
 /** Resolves a dependency name from an installed package, the way Node walks `node_modules`. */
 const resolveInstalledPackage = (fromDir: string, name: string): string | null => {
@@ -733,10 +966,7 @@ export async function readInstalledTree(root: string = process.cwd()): Promise<r
   const rootDir = resolvePath(root);
   if (!existsSync(join(rootDir, 'node_modules'))) return [];
 
-  const rootManifest = requireManifest(rootDir);
-  const workspaceManifests = expandWorkspaceGlobs(rootDir, rootManifest.workspaces).map((dir) =>
-    requireManifest(dir),
-  );
+  const { root: rootManifest, workspaces: workspaceManifests } = readRepositoryManifests(rootDir);
   const manifests: readonly Manifest[] = [rootManifest, ...workspaceManifests];
   const declaredNames = collectDeclaredNames(manifests);
   const runtime = collectRuntimeGraph(manifests);
@@ -798,15 +1028,33 @@ const exceptionLicencesOf = (
     ),
   );
 
+/** Renders one declared package as the single line the `Declared packages` section lists it on. */
+const declaredPackageLine = (declared: DeclaredPackage): string => {
+  const versions = declared.versions.length === 0 ? 'no version declared' : declared.versions.join(', ');
+  const licences = declared.licenses.length === 0 ? 'none declared' : declared.licenses.join(', ');
+  const declarations =
+    declared.declarations.length === 0
+      ? 'no declaring manifest recorded'
+      : declared.declarations
+          .map(
+            (declaration) =>
+              `${declaration.workspace} (${DECLARED_MAP_LABELS[declaration.map] ?? declaration.map})`,
+          )
+          .join(', ');
+  const purpose = declared.purpose.trim().length === 0 ? NOT_RECORDED_PURPOSE : declared.purpose.trim();
+  return `- \`${declared.name}\` ${versions} — ${licences} — declared by ${declarations} — purpose: ${purpose}`;
+};
+
 /**
  * Renders the document.
  *
  * Byte-identical for identical input by design: no timestamp, no machine name, no absolute path and
  * no run counter, so regenerating the committed file produces no spurious diff. Only what the tree,
- * the policy and the source list carry reaches the page.
+ * the policy, the source list and the declared packages carry reaches the page.
  *
  * @param input - The entries to list, the policy they were checked against, the command that
- * generated the file and the manifests it was generated from.
+ * generated the file, the manifests it was generated from and, when a caller has them, the packages
+ * those manifests declare. A caller that supplies no declared packages gets no such section.
  * @returns The complete Markdown document, ending in a newline.
  */
 export function renderDependencyReport(input: {
@@ -814,6 +1062,7 @@ export function renderDependencyReport(input: {
   readonly allowlist: Allowlist;
   readonly generatedBy: string;
   readonly sources: readonly string[];
+  readonly declaredPackages?: readonly DeclaredPackage[];
 }): string {
   const entries = sortEntries(input.entries);
   const violations = checkLicenses(entries, input.allowlist);
@@ -835,8 +1084,8 @@ export function renderDependencyReport(input: {
   lines.push(
     `Generated by \`${input.generatedBy}\`. This file must not be edited by hand: it is regenerated from`,
   );
-  lines.push('the installed dependency tree on every run, so edit a manifest — or the allowlist data — and');
-  lines.push(`run \`${input.generatedBy}\` again.`);
+  lines.push('the installed dependency tree on every run, so edit a manifest — or the purpose record in');
+  lines.push(`\`scripts/deps-report.ts\`, or the allowlist data — and run \`${input.generatedBy}\` again.`);
   lines.push('');
   lines.push('## Sources');
   lines.push('');
@@ -883,6 +1132,22 @@ export function renderDependencyReport(input: {
         entry.direct ? 'direct' : 'transitive'
       } | ${entry.graph} |`,
     );
+  }
+
+  const declaredPackages = [...(input.declaredPackages ?? [])].sort((left, right) =>
+    compareStrings(left.name, right.name),
+  );
+  if (declaredPackages.length > 0) {
+    lines.push('');
+    lines.push('## Declared packages');
+    lines.push('');
+    lines.push('Every package the root manifest or a workspace manifest declares: the exact version it is');
+    lines.push('declared at, the licence the installed entry reports, the workspaces declaring it and the map');
+    lines.push('each one uses (`prod` for `dependencies`, `dev` for `devDependencies`), and its purpose. A');
+    lines.push(`package whose purpose the record does not hold renders \`purpose: ${NOT_RECORDED_PURPOSE}\` rather`);
+    lines.push('than failing the run.');
+    lines.push('');
+    for (const declared of declaredPackages) lines.push(declaredPackageLine(declared));
   }
 
   lines.push('');
@@ -954,6 +1219,7 @@ export async function runDepsReport(options: RunDepsReportOptions = {}): Promise
     allowlist,
     generatedBy: REPORT_COMMAND,
     sources: REPORT_SOURCES,
+    declaredPackages: collectDeclaredPackages(rootDir, entries),
   });
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, document, 'utf8');
