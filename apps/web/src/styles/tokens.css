@@ -1,0 +1,255 @@
+/*
+ * ADEM — the one in-repo value set for the public UI.
+ *
+ * The request names no component library, no theme and no token catalogue product,
+ * so every colour, space, radius, border, type, layout and motion value the UI uses
+ * is defined here, once, and consumed by app.css through var(). This file is
+ * deliberately nothing more than that: it is not a design system and it does not
+ * grow into one.
+ *
+ * Everything that renders lives in app.css. This file holds exactly three rule
+ * sets — the :root value set, one :focus-visible rule and one
+ * prefers-reduced-motion guard. There is no reset, no element rule and no
+ * component rule here, and app.css contains no colour literal at all, so a
+ * contrast fix anywhere in the UI is a one-line edit in this file.
+ *
+ * Contrast. Every ratio quoted below is the WCAG 2.1 relative-luminance contrast
+ * ratio (L1 + 0.05) / (L2 + 0.05), computed from the values as written. Body text
+ * holds 4.5:1 (success criterion 1.4.3) and the boundary of an interactive
+ * control, a focus indicator and a graphical object holds 3:1 (1.4.11).
+ *
+ * Two facts a later reader would otherwise break:
+ *
+ *   - A custom property cannot be used in a media query condition, so
+ *     --breakpoint-narrow documents the single breakpoint rather than
+ *     parameterising it: app.css must repeat the literal 48rem in its
+ *     @media (min-width: 48rem) conditions.
+ *
+ *   - No dark surface exists anywhere in this value set, and that is a choice
+ *     rather than an omission. The focus ring is a dark outline drawn at an
+ *     offset, so it always lands on the light surface around the focused control;
+ *     a dark region would swallow it. The dark values here are text colours and
+ *     the fills of the primary and destructive buttons, both of which themselves
+ *     sit on light surfaces.
+ */
+
+:root {
+  /* ---- Colour: surfaces ---------------------------------------------------
+     --color-surface is the page background. --color-surface-elevated is the fill
+     of cards, panels and table headers that rest on the page. The sunken surface
+     is the inset block used inside a card: empty-state bodies, the report evidence
+     block, ledger summaries. */
+
+  --color-surface: #ffffff;
+  --color-surface-elevated: #f8f9fb;
+  --color-surface-sunken: #f1f3f6;
+
+  /* ---- Colour: text -------------------------------------------------------
+     Body and secondary text, quoted against the surface each is rendered on.
+     --color-text-muted carries captions, helper text and table footnotes, so it
+     holds the 4.5:1 body-text floor on every surface it can land on rather than
+     only on the page background. */
+
+  --color-heading: #10141b; /* 18.45:1 on surface */
+  --color-text: #1b1f27; /* 16.51:1 on surface, 15.67:1 on elevated, 14.85:1 on sunken */
+  --color-text-muted: #616a78; /* 5.47:1 on surface, 5.19:1 on elevated, 4.92:1 on sunken */
+
+  /* ---- Colour: borders ----------------------------------------------------
+     --color-border is the boundary of every interactive control — text inputs,
+     selects, textareas, the navigation disclosure button, the filter and compare
+     controls, the comparison table's cell edges — and holds 3:1 wherever a
+     control can sit, so the boundary of a control is perceivable on its own
+     (criterion 1.4.11) and not only by its fill.
+
+     --color-divider is for non-interactive separators only, never an interactive
+     control boundary: list separators, section rules and table row lines, where a
+     low-contrast hairline is correct and a 3:1 edge would be noise. */
+
+  --color-border: #7d8798; /* 3.63:1 on surface, 3.44:1 on elevated, 3.26:1 on sunken */
+  --color-divider: #dfe3ea;
+
+  /* ---- Colour: accent and focus -------------------------------------------
+     The accent has to satisfy both directions at once and does: it is legible as
+     text on the page surface (links, active navigation) and legible as a fill
+     under --color-accent-text (primary buttons). --color-accent-strong is the
+     hover and active fill. */
+
+  --color-accent: #1f5fb4; /* 6.26:1 as text on surface, and 6.26:1 for accent-text on this fill */
+  --color-accent-strong: #174a8e; /* 8.73:1 as text on surface, and 8.73:1 for accent-text on this fill */
+  --color-accent-text: #ffffff; /* the same light value as --color-surface, repeated on purpose: this is text laid on a dark accent fill, not a surface */
+
+  /* --color-focus-ring is drawn with --focus-ring-offset, so it lands on the
+     surface around the control. It holds 13.22:1 on the page surface and never
+     falls below 11.37:1 on any of the light surfaces defined in this file,
+     including every notice, badge, sponsor and banner fill below. */
+  --color-focus-ring: #0f2f5e;
+
+  /* ---- Colour: notices ----------------------------------------------------
+     The four states error-notice.tsx and empty-state.tsx render: a message body
+     on a tinted surface with a matching border. Each text-on-surface ratio is
+     quoted; each border also clears 3:1 against its own surface, so the block
+     edge stays visible. */
+
+  --color-notice-error-surface: #fbeaea;
+  --color-notice-error-border: #c2352f; /* 4.70:1 on its surface */
+  --color-notice-error-text: #a01b1b; /* 6.77:1 on its surface */
+
+  --color-notice-warning-surface: #fdf6e6;
+  --color-notice-warning-border: #b7791f; /* 3.38:1 on its surface */
+  --color-notice-warning-text: #8a5a12; /* 5.49:1 on its surface */
+
+  --color-notice-success-surface: #eaf7ee;
+  --color-notice-success-border: #2f855a; /* 4.12:1 on its surface */
+  --color-notice-success-text: #1c6b45; /* 5.88:1 on its surface */
+
+  --color-notice-info-surface: #eaf2fd;
+  --color-notice-info-border: #2b6cb0; /* 4.80:1 on its surface */
+  --color-notice-info-text: #1a5490; /* 6.86:1 on its surface */
+
+  /* ---- Colour: disclosures ------------------------------------------------
+     Three labels that must stay legible rather than decorative, because each one
+     tells the reader what a thing is: the sample-badge chip on a report, the
+     "Sponsored" label on a sponsored item, and the persistent demo banner that
+     states the session is a demonstration. Each keeps its text above 4.5:1 on its
+     own surface at the small type the UI renders these at. */
+
+  --color-badge-surface: #eef1f5;
+  --color-badge-border: #5b7290; /* 4.36:1 on its surface */
+  --color-badge-text: #1d3a5c; /* 10.23:1 on its surface */
+
+  --color-sponsor-surface: #f3f0e4;
+  --color-sponsor-border: #8f6f1f; /* 4.12:1 on its surface */
+  --color-sponsor-text: #5c4a10; /* 7.53:1 on its surface */
+
+  --color-banner-surface: #e8eff8;
+  --color-banner-border: #35507c; /* 7.00:1 on its surface */
+  --color-banner-text: #123c69; /* 9.67:1 on its surface */
+
+  /* ---- Colour: outcome chip -----------------------------------------------
+     The PASS/FAIL chip listing-card.tsx and report.tsx render. These six names
+     alias the success and error notice triples rather than restating them, so an
+     outcome and its notice can never drift apart and one edit moves both. */
+
+  --color-outcome-pass-surface: var(--color-notice-success-surface);
+  --color-outcome-pass-border: var(--color-notice-success-border);
+  --color-outcome-pass-text: var(--color-notice-success-text);
+
+  --color-outcome-fail-surface: var(--color-notice-error-surface);
+  --color-outcome-fail-border: var(--color-notice-error-border);
+  --color-outcome-fail-text: var(--color-notice-error-text);
+
+  /* ---- Colour: control states ---------------------------------------------
+     The destructive button variant and the disabled control. Disabled text is
+     exempt from the contrast floor as inactive content, but it is kept above
+     4.5:1 anyway so a disabled control never becomes unreadable text. */
+
+  --color-danger-surface: #9d1c17;
+  --color-danger-text: #ffffff; /* 8.04:1 on the danger fill, and the same light value as --color-surface for the same reason as accent-text */
+  --color-disabled-surface: #eceef2;
+  --color-disabled-text: #5c6472; /* 5.13:1 on the disabled fill, 5.96:1 on the page surface */
+
+  /* ---- Space --------------------------------------------------------------
+     One scale for every margin, padding and gap in app.css, from the gap between
+     an icon and its label to the separation between page sections. In rem so the
+     whole layout follows the reader's own font size. */
+
+  --space-1: 0.25rem; /* 4px  — icon/label gap, chip padding */
+  --space-2: 0.5rem; /* 8px  — gap inside a control group, table cell padding */
+  --space-3: 0.75rem; /* 12px — card padding on narrow screens */
+  --space-4: 1rem; /* 16px — default gap and padding */
+  --space-5: 1.5rem; /* 24px — card padding, gap between form fields */
+  --space-6: 2rem; /* 32px — gap between blocks within a section */
+  --space-7: 3rem; /* 48px — separation between sections */
+  --space-8: 4rem; /* 64px — page top and bottom breathing room */
+
+  /* ---- Radius -------------------------------------------------------------
+     Decorative, so in px: a corner does not scale with the reader's font size. */
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-pill: 9999px;
+
+  /* ---- Border widths and the focus ring -----------------------------------
+     --focus-ring is the composed shorthand the :focus-visible rule below uses, so
+     ring colour, width and style are decided in one place. */
+
+  --border-width-thin: 1px;
+  --border-width-thick: 2px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring: var(--focus-ring-width) solid var(--color-focus-ring);
+
+  /* ---- Type ---------------------------------------------------------------
+     System stacks only: the product calls no external service, so a downloaded
+     webfont is not an option, and a network font would also be the one thing that
+     could make the UI unreadable offline.
+
+     The scale is in rem for the same reason as the spacing scale: a fixed px size
+     would defeat the reader's own text-size setting. --font-size-base is 1rem, so
+     mobile browsers do not apply text inflation to body copy, and the scale stays
+     usable when the page is zoomed to 200% (criterion 1.4.4) or has its spacing
+     overridden (1.4.12) — which is why --line-height-base is 1.5 rather than
+     something tighter.
+
+     --font-family-mono is for the evaluation submission textarea, ledger amounts
+     and the identifiers the UI shows (report ID, version strings, case IDs). */
+
+  --font-family-base: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --font-size-sm: 0.875rem; /* 14px — labels, captions, table footnotes */
+  --font-size-base: 1rem; /* 16px — body copy; the floor for mobile text */
+  --font-size-lg: 1.125rem; /* 18px — lead paragraphs, listing summaries */
+  --font-size-xl: 1.25rem; /* 20px — card and section titles */
+  --font-size-2xl: 1.5rem; /* 24px — page section headings */
+  --font-size-3xl: 2rem; /* 32px — the page title */
+
+  --line-height-tight: 1.25; /* headings */
+  --line-height-base: 1.5; /* body copy */
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  /* ---- Layout -------------------------------------------------------------
+     --layout-max-width is a maximum the shell and <main> centre inside, never a
+     fixed page width: at 360px the layout is bounded by the viewport, so nothing
+     here introduces a horizontal scrollbar.
+
+     --touch-target-min is the smallest a control may be, as a minimum rather than
+     a size — it covers the navigation disclosure button, the filter controls, the
+     compare selection controls and the demo-account switcher. In rem, so the
+     target grows with the reader's font size like the text inside it. */
+
+  --layout-max-width: 75rem; /* 1200px */
+  --breakpoint-narrow: 48rem; /* 768px — documentation; app.css repeats the literal in its media conditions */
+  --touch-target-min: 2.75rem; /* 44px at the default root size */
+
+  /* ---- Motion -------------------------------------------------------------
+     app.css must reference these two names for every transition and animation
+     duration and write no literal time, because the guard below neutralises
+     exactly these. */
+
+  --motion-duration-fast: 150ms; /* hover and focus transitions */
+  --motion-duration-base: 250ms; /* disclosure and panel transitions */
+}
+
+/* One focus rule for the whole UI: every link, button, input, select, textarea,
+   radio control, the navigation disclosure button and the demo-account switcher
+   inherit it, and app.css never repeats or narrows it. outline is never removed,
+   so a keyboard user always sees where focus is (criterion 2.4.7). */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Readers who ask for less motion get none: every duration collapses to zero, so
+   each transition and animation that references a --motion-duration-* token is
+   neutralised without app.css needing a second copy of this guard. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-fast: 0ms;
+    --motion-duration-base: 0ms;
+  }
+}
