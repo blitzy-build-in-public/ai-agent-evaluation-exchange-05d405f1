@@ -20,6 +20,41 @@ const allocationCases = [
   { amountMinorUnits: 10000, rateBasisPoints: 200, expected: 200 },
 ];
 
+/**
+ * Arguments that are not numbers at all, in either position: a refusal has to be the
+ * documented `RangeError` whoever calls the function, so an untyped caller's value may not
+ * escape as a conversion failure, and the message still names the offending argument. A
+ * symbol and an object whose own text conversion raises are the two shapes an untyped caller
+ * reaches; every fixture is typed as the parameter's type through `unknown`, as an untyped
+ * caller's value is.
+ */
+const nonNumberCases = [
+  {
+    label: 'a symbol as the amount',
+    amountMinorUnits: Symbol('amount') as unknown as number,
+    rateBasisPoints: 25,
+    offendingArgument: 'amountMinorUnits',
+  },
+  {
+    label: 'a symbol as the rate',
+    amountMinorUnits: 10000,
+    rateBasisPoints: Symbol('rate') as unknown as number,
+    offendingArgument: 'rateBasisPoints',
+  },
+  {
+    label: 'an amount whose text conversion raises',
+    amountMinorUnits: { toString: null } as unknown as number,
+    rateBasisPoints: 25,
+    offendingArgument: 'amountMinorUnits',
+  },
+  {
+    label: 'a rate whose text conversion raises',
+    amountMinorUnits: 10000,
+    rateBasisPoints: { toString: null } as unknown as number,
+    offendingArgument: 'rateBasisPoints',
+  },
+];
+
 describe('allocate', () => {
   describe('arithmetic', () => {
     for (const { amountMinorUnits, rateBasisPoints, expected } of allocationCases) {
@@ -38,7 +73,13 @@ describe('allocate', () => {
     });
 
     it('returns the same allocation for the same arguments', () => {
-      expect(allocate(10000, 25)).toBe(allocate(10000, 25));
+      // The anchor is what makes this case able to fail: without it, comparing the function
+      // with its own return would hold for any deterministic allocation, a wrong one included.
+      const first = allocate(10000, 25);
+      const second = allocate(10000, 25);
+
+      expect(first).toBe(25);
+      expect(second).toBe(first);
     });
   });
 
@@ -90,6 +131,17 @@ describe('allocate', () => {
       // whose product overflows would return an allocation rounded from a wrong value.
       expect(() => allocate(Number.MAX_SAFE_INTEGER, 10000)).toThrow(RangeError);
       expect(() => allocate(Number.MAX_SAFE_INTEGER, 10000)).toThrow('amountMinorUnits');
+    });
+
+    // Values that are not numbers, as distinct from numbers out of range: the refusals above
+    // cover the range, this group covers the type, which is what an untyped caller reaches.
+    describe('values that are not numbers', () => {
+      for (const { label, amountMinorUnits, rateBasisPoints, offendingArgument } of nonNumberCases) {
+        it(`refuses ${label} with the documented RangeError naming ${offendingArgument}`, () => {
+          expect(() => allocate(amountMinorUnits, rateBasisPoints)).toThrow(RangeError);
+          expect(() => allocate(amountMinorUnits, rateBasisPoints)).toThrow(offendingArgument);
+        });
+      }
     });
   });
 });

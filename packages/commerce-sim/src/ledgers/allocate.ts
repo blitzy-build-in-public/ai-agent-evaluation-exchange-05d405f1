@@ -23,13 +23,13 @@
 export function allocate(amountMinorUnits: number, rateBasisPoints: number): number {
   if (!Number.isSafeInteger(amountMinorUnits) || amountMinorUnits < 0) {
     throw new RangeError(
-      `allocate: amountMinorUnits must be a non-negative safe integer, received ${amountMinorUnits}`,
+      `allocate: amountMinorUnits must be a non-negative safe integer, received ${renderReceived(amountMinorUnits)}`,
     );
   }
 
   if (!Number.isSafeInteger(rateBasisPoints) || rateBasisPoints < 0) {
     throw new RangeError(
-      `allocate: rateBasisPoints must be a non-negative safe integer, received ${rateBasisPoints}`,
+      `allocate: rateBasisPoints must be a non-negative safe integer, received ${renderReceived(rateBasisPoints)}`,
     );
   }
 
@@ -40,7 +40,7 @@ export function allocate(amountMinorUnits: number, rateBasisPoints: number): num
   // refused call is a better outcome than a wrong allocation, so it is refused here.
   if (!Number.isSafeInteger(product)) {
     throw new RangeError(
-      `allocate: the product of amountMinorUnits ${amountMinorUnits} and rateBasisPoints ${rateBasisPoints} is not a safe integer`,
+      `allocate: the product of amountMinorUnits ${renderReceived(amountMinorUnits)} and rateBasisPoints ${renderReceived(rateBasisPoints)} is not a safe integer`,
     );
   }
 
@@ -55,4 +55,18 @@ export function allocate(amountMinorUnits: number, rateBasisPoints: number): num
   const frac = product % 10000;
 
   return whole / 10000 + (frac >= 5000 ? 1 : 0);
+}
+
+/**
+ * Renders a received value for a refusal message. A refusal must be the documented
+ * `RangeError` whatever an untyped caller passes, which interpolating the value into the
+ * message cannot promise: `String` is defined for a symbol, and a value whose own text
+ * conversion raises is answered with text read from its type, which no value can influence.
+ */
+function renderReceived(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return `a value of type ${typeof value}`;
+  }
 }
