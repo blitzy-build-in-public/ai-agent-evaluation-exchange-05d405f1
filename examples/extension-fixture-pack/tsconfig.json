@@ -10,5 +10,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/sgi-core" }, { "path": "../../packages/sgi-fixtures" }]
+  "references": [{ "path": "../../packages/sgi-fixtures" }, { "path": "../../packages/sgi-core" }]
 }
