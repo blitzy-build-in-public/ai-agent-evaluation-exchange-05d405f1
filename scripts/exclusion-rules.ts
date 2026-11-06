@@ -325,16 +325,16 @@ const IPV4_ADDRESS_PATTERN = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 /**
  * The address line of a git commit header. Its address is the committing tool's identity — every
  * commit this repository carries has one — so that line is not treated as content: a clean run on
- * the delivered repository is what the requirement needs. An address in file content has a
- * different shape or no such prefix and still fires.
+ * the delivered repository is what the requirement needs. The exemption follows that line's shape
+ * wherever it is read from, so an address of another shape, or with no such prefix, still fires.
  */
 const GIT_METADATA_ADDRESS_PATTERN = /^(?:Author|Committer):\s[^<>]*<[^<>]+>\s*$/;
 
 /**
  * The deprecation-notice field npm copies verbatim from the registry into a lockfile. One such
  * notice names the package maintainer, so the address belongs to upstream registry metadata the
- * repository hands on rather than to the repository's own content, and the lockfile cannot be
- * edited: `npm ci` regenerates it.
+ * repository hands on rather than to the repository's own content, and the lockfile stays as npm
+ * wrote it and is never hand-edited: `npm ci` installs from it without rewriting it.
  */
 const LOCKFILE_DEPRECATION_FIELD_PATTERN = /"deprecated"\s*:\s*"/;
 
@@ -433,6 +433,21 @@ const STRICT_PHONE_CANDIDATE_SOURCE =
 const PHONE_STRUCTURE_PATTERN = /[ .()-]/;
 const PHONE_DOT_OR_DASH_PATTERN = /[.()-]/;
 
+/**
+ * The characters that group a number as a written number rather than as an identifier span: a space,
+ * a dot or a parenthesis. A candidate carrying one of them is grouped in a way a bare identifier
+ * span is not, and one opening with `+` is written as an international number.
+ */
+const PHONE_GROUPING_BEYOND_HYPHEN_PATTERN = /[ .()]/;
+
+/**
+ * How many digit groups a shape-only candidate needs before a grouping by hyphen alone says number:
+ * a token of two digit groups joined by one hyphen is the shape of an identifier span or a numeric
+ * range (a migration range, a ZIP+4 code, a version bound) as often as it is a telephone number, so
+ * the shape-only path refuses it while a keyword-anchored number is reported whatever its shape.
+ */
+const MIN_SHAPE_ONLY_DIGIT_GROUPS = 3;
+
 /** Shapes that are machine-written, never a telephone number. */
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const ISO_DATE_TIME_PATTERN =
@@ -467,9 +482,14 @@ type TelephoneAnchor = 'specific-keyword' | 'general-keyword' | 'shape-only';
  * way is a strict shape on its own, which must carry a separator, a parenthesised group or a
  * leading plus, so an ungrouped run of digits is never reported on its own. Refuses, by returning
  * no match, a candidate that is not 7 to 15 digits, one adjacent to a letter, a digit, a hash or a
- * separator that ties it to a longer token, and any candidate whose surrounding token is a UUID, a
+ * separator that ties it to a longer token, any candidate whose surrounding token is a UUID, a
  * date, timestamp or clock time, a long hex digest, a sha or integrity-prefixed digest, a
- * node-v<digits>-<architecture> triple, a dotted quad, a dotted version or a dotted fraction.
+ * node-v<digits>-<architecture> triple, a dotted quad, a dotted version or a dotted fraction, and,
+ * on the shape-only way alone, a candidate of fewer than three digit groups that opens with no plus
+ * and carries no space, dot or parenthesis: a two-group token joined by a single hyphen is the shape
+ * of an identifier span or a numeric range rather than evidence of a telephone number. That last
+ * refusal belongs to the shape-only way, so a number beside a keyword is still reported at any of
+ * those shapes.
  *
  * The rule detects a pattern, not a person: a number written in words, or with its digits split by
  * unrelated text, is invisible to it, which is why the manual privacy review exists alongside it.
@@ -537,6 +557,13 @@ function isPlausibleTelephoneCandidate(
   }
   if (anchor === 'shape-only') {
     if (!hasStructure || (spaceGroupedOnly && countDigitGroups(value) < 3)) {
+      return false;
+    }
+    if (
+      countDigitGroups(value) < MIN_SHAPE_ONLY_DIGIT_GROUPS &&
+      !startsWithPlus &&
+      !PHONE_GROUPING_BEYOND_HYPHEN_PATTERN.test(value)
+    ) {
       return false;
     }
   }
@@ -625,8 +652,10 @@ const CREDENTIAL_ASSIGNMENT_SOURCE = `\\b(?:${CREDENTIAL_KEYWORD_SOURCE})\\b["'\
 /** A bare value of letters only is a word or an identifier, never a credential. */
 const BARE_VALUE_WORD_PATTERN = /^[A-Za-z]+$/;
 
-/** The floor below which a value is a word rather than a credential, and the entropy gate's own. */
-const CREDENTIAL_SCALAR_MIN_LENGTH = 12;
+/**
+ * The one length floor a value has to clear, the entropy gate's own: a shorter value is refused
+ * before it is scored, because its bits-per-character score would mean nothing.
+ */
 const CREDENTIAL_ENTROPY_MIN_LENGTH = 16;
 const CREDENTIAL_MIN_ENTROPY_BITS = 3.5;
 
@@ -654,12 +683,12 @@ const PLACEHOLDER_MARKERS: readonly string[] = Object.freeze([
  *
  * Returns one match per assignment, excerpted through `maskExcerpt`. Refuses, by returning no
  * match, an assignment to an array or an object, an empty value, a boolean, null or undefined, a
- * value under either length floor, a value carrying a placeholder marker, a value that opens with a
+ * value under the length floor, a value carrying a placeholder marker, a value that opens with a
  * bracket or a placeholder character, and a value whose Shannon entropy is under 3.5 bits per
- * character. Both length floors are applied: the scalar floor refuses a short word, and the entropy
- * gate's floor refuses a value too short for its score to mean anything. A bare value is refused as
- * well when it is the callee of a call or a word of letters alone — an expression reference such as
- * `token = readToken(...)` is code, not a credential.
+ * character. The floor is the entropy gate's own: a value shorter than 16 characters is refused
+ * before it is scored, since a shorter value's bits-per-character score could not mean anything. A
+ * bare value is refused as well when it is the callee of a call or a word of letters alone — an
+ * expression reference such as `token = readToken(...)` is code, not a credential.
  *
  * An entropy-gated keyword match is best effort by construction: no pattern reliably separates a
  * placeholder from a real credential, so this rule must never be described as proving the absence
@@ -687,10 +716,7 @@ function matchCredentialAssignment(context: RuleLineContext): readonly RuleMatch
 
 /** Whether an assigned value is a credential-shaped scalar rather than a placeholder or a word. */
 function isCredentialLikeValue(value: string): boolean {
-  if (
-    value.length < CREDENTIAL_SCALAR_MIN_LENGTH ||
-    value.length < CREDENTIAL_ENTROPY_MIN_LENGTH
-  ) {
+  if (value.length < CREDENTIAL_ENTROPY_MIN_LENGTH) {
     return false;
   }
   if (
@@ -762,7 +788,7 @@ export const EXCLUSION_RULES: readonly ExclusionRule[] = Object.freeze([
     id: TELEPHONE_NUMBER_RULE_ID,
     class: 'telephone-number',
     description:
-      'Anchored beside tel, phone, sms and similar keywords, or recognised by a strictly grouped shape on its own, with the guards the scan needs: a run of 7 to 15 digits, never a date, a timestamp, a clock time, a UUID, a hex digest or a node-v<digits>-<architecture> triple. It detects a pattern rather than a person, which is why the manual review stands beside it.',
+      'Anchored beside tel, phone, sms and similar keywords, or recognised by a strictly grouped shape on its own, with the guards the scan needs: a run of 7 to 15 digits, never a date, a timestamp, a clock time, a UUID, a hex digest or a node-v<digits>-<architecture> triple. Recognised by a shape alone, a token of two digit groups joined by a single hyphen and carrying no plus, space, dot or parenthesis is treated as an identifier span or a numeric range rather than a number, while a number beside one of those keywords is still reported at any of those shapes. It detects a pattern rather than a person, which is why the manual review stands beside it.',
     appliesTo: CONTENT_KINDS,
     kind: 'line',
     matchLine: matchTelephoneNumber,
@@ -780,7 +806,7 @@ export const EXCLUSION_RULES: readonly ExclusionRule[] = Object.freeze([
     id: CREDENTIAL_ASSIGNMENT_RULE_ID,
     class: 'credential-material',
     description:
-      'A credential keyword (password, secret, token, api key, client secret, private key, bearer and similar) assigned to a scalar value that clears the placeholder denylist, both length floors and a 3.5-bit-per-character entropy gate. Best effort by construction: no pattern reliably separates a placeholder from a real credential, so a clean run never proves the absence of secrets.',
+      'A credential keyword (password, secret, token, api key, client secret, private key, bearer and similar) assigned to a scalar value that clears the placeholder denylist, the length floor and a 3.5-bit-per-character entropy gate. Best effort by construction: no pattern reliably separates a placeholder from a real credential, so a clean run never proves the absence of secrets.',
     appliesTo: CONTENT_KINDS,
     kind: 'line',
     matchLine: matchCredentialAssignment,
@@ -815,6 +841,8 @@ export const SCAN_LIMITATIONS: readonly string[] = Object.freeze([
   'It does not detect personal names.',
   'It does not detect contextual disclosure of private or nonpublic information.',
   'It does not detect references to private projects, products or datasets.',
+  'It reports no address inside a lockfile, and none inside the deprecation notice npm copies verbatim from the registry wherever that notice is read, because both are upstream metadata the repository passes on rather than its own content and the committed lockfile stays exactly as npm wrote it.',
+  'It reports no address on a git commit\'s Author: or Committer: line, or on any line whose whole text has that header\'s shape, because every commit this repository carries is authored with the committing tool\'s identity rather than a person\'s address.',
   'It reads the working tree and the local git history, and nothing outside the checkout.',
   'It matches patterns rather than meaning, so a clean run is not evidence that the repository holds no private information, and the scan must never be described as guaranteeing that absence.',
   'It is supplementary to the manual privacy review in docs/REVIEW-CHECKLIST.md, and never a substitute for it.',
