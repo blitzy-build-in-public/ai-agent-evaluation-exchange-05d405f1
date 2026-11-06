@@ -9,9 +9,17 @@
  * The `categories` table and its four seeded rows belong to `apps/api/src/seed/seed-data.ts`,
  * not to this module: nothing here reads or writes a table, opens a connection or resolves a
  * path. The guard exists so that validation happens once, at registration and seed time, leaving
- * the API layer without a second validator. The seeded slugs are owned by that seed file and must
- * themselves satisfy the pattern below; a seed slug that cannot match is a plan conflict to raise
- * in the pull request, never a reason to widen the pattern here.
+ * the API layer without a second validator.
+ *
+ * A category's `description` is registration metadata the registered value carries rather than a
+ * stored column: the row of `packages/shared/migrations/0001_accounts_and_categories.sql` holds
+ * the id, slug and name a listing is filtered by, and the catalogue a seed registers states the
+ * description beside each of its categories. Nothing here claims a row stores the member, and
+ * nothing reads one back.
+ *
+ * The seeded slugs are owned by that seed file and must themselves satisfy the pattern below; a
+ * seed slug that cannot match is a defect to fix in that file, never a reason to widen the
+ * pattern here.
  *
  * A violation is a composition-time programming error rather than a request the product can
  * answer, so the guard throws {@link ListingCategoryValidationError} — carrying the stable code
@@ -24,7 +32,7 @@
  * lowercase letters, digits and hyphens only.
  *
  * It deliberately accepts a repeated hyphen (`a--b`) and a trailing hyphen (`ab-`): the pattern is
- * fixed by the plan and no further rule may be layered on top of it. It refuses an underscore, a
+ * this seam's own, and no further rule is layered on top of it. It refuses an underscore, a
  * space, an uppercase letter, a leading digit, a leading hyphen, a single-character slug and any
  * slug longer than thirty-two characters.
  *
@@ -68,7 +76,10 @@ export interface ListingCategory {
   /** The human-facing label shown wherever the category is listed, for example `Logistics tools`. */
   readonly name: string;
 
-  /** A short, non-empty explanation of which agents the category covers. */
+  /**
+   * A short, non-empty explanation of which agents the category covers. It is registration
+   * metadata: the `categories` row stores the category's id, slug and name, not this member.
+   */
   readonly description: string;
 }
 

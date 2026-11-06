@@ -3,6 +3,9 @@
 -- evaluation is scored against, and the proposals the community reviews. Applied by
 -- apps/api/src/db/migrate.ts after 0004, whose accounts this file references.
 
+-- As in 0001, every id is declared NOT NULL beside PRIMARY KEY: SQLite's legacy rule would
+-- otherwise let a NULL primary key into a row.
+
 -- A standard is the named thing the community governs; its criteria live in standard_versions
 -- so that changing a threshold creates a version rather than editing a criterion.
 -- One row exists in this release, code 'SGI-SO-1.0.0', written by the seed
@@ -10,7 +13,7 @@
 -- UNIQUE on code is what lets a standard be addressed by the identifier people quote; no
 -- timestamp column exists because nothing in the read path displays or orders by one.
 CREATE TABLE standards (
-  id      TEXT PRIMARY KEY,
+  id      TEXT PRIMARY KEY NOT NULL,
   code    TEXT NOT NULL UNIQUE,
   title   TEXT NOT NULL,
   summary TEXT NOT NULL
@@ -27,7 +30,7 @@ CREATE TABLE standards (
 -- docs/STANDARD-SGI-SO-1.0.0.md. The thresholds beside it are the numbers that document
 -- states — 20 cases, 5 of them critical, 18 matches required, 0 critical failures allowed.
 CREATE TABLE standard_versions (
-  id                        TEXT PRIMARY KEY,
+  id                        TEXT PRIMARY KEY NOT NULL,
   standard_id               TEXT NOT NULL REFERENCES standards (id),
   version_label             TEXT NOT NULL,
   status                    TEXT NOT NULL CHECK (status IN ('provisional', 'active')),
@@ -39,6 +42,14 @@ CREATE TABLE standard_versions (
   definition_json           TEXT NOT NULL,
   published_at              TEXT NOT NULL,
   UNIQUE (standard_id, version_label),
+  -- SQLite's type affinity does not keep a REAL, TEXT or BLOB value out of an INTEGER column, and
+  -- its type ordering places every integer below any TEXT or BLOB, so `>= 0` alone accepts 'abcd'.
+  -- These four guards are what make the columns hold the integers the pass rule is arithmetic on;
+  -- with them the three cross-column guards below always compare integer to integer.
+  CHECK (typeof(total_cases) = 'integer'),
+  CHECK (typeof(critical_cases) = 'integer'),
+  CHECK (typeof(pass_threshold_matches) = 'integer'),
+  CHECK (typeof(critical_failures_allowed) = 'integer'),
   -- Three cross-column guards, so a combination the evaluator could not apply is
   -- unrepresentable: a row that cannot be corrected once written must not be writable in a
   -- state that contradicts itself. The seeded row holds 5 <= 20, 18 <= 20 and 0 <= 5.
@@ -56,7 +67,7 @@ CREATE TABLE standard_versions (
 -- created_at is an ISO-8601 UTC string written by the application at insert time and carries no
 -- default, because SQLite's CURRENT_TIMESTAMP yields a form this contract does not accept.
 CREATE TABLE standard_proposals (
-  id                  TEXT PRIMARY KEY,
+  id                  TEXT PRIMARY KEY NOT NULL,
   standard_id         TEXT NOT NULL REFERENCES standards (id),
   proposer_account_id TEXT NOT NULL REFERENCES accounts (id),
   title               TEXT NOT NULL,

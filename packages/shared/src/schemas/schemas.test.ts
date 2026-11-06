@@ -4,9 +4,8 @@
  * It asserts what those modules guarantee rather than restating their text, and it does
  * so **without a validation engine**: the dependency inventory is closed and names no
  * schema library, so every expectation below is structural — `Object.keys`, `required`,
- * `enum`, `default`, `minimum`, `minItems`/`maxItems`, `minContains`/`maxContains`,
- * `pattern` and `additionalProperties` — plus one compiled `RegExp` for the compare
- * bound.
+ * `enum`, `default`, `minimum`, `minItems`/`maxItems`, `const`, `contains`, `pattern`
+ * and `additionalProperties` — plus one compiled `RegExp` for the compare bound.
  *
  * Four of those facts are traps a later reader could "fix" away, so each is asserted
  * here by name:
@@ -24,24 +23,32 @@
  *   client has no way to address a predecessor.
  * - The fixture set is exactly 20 cases of which exactly 5 are `critical`.
  *
- * **What this module deliberately does not prove, and where that proof lives.** It
+ * **What this module deliberately does not prove, and where that proof belongs.** It
  * proves the schema side of the contract in-process — no HTTP server, no database, no
- * filesystem, no fake timer and no snapshot — so the runtime outcomes belong elsewhere
- * and must not be duplicated here:
+ * fake timer, no snapshot, and one deliberate exception: the fixture-count group reads
+ * the delivered fixture pack, `packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/cases.json`,
+ * which is the one file this suite opens, because the exact `critical` count is not
+ * expressible in the schema dialect the product validates with — so the runtime outcomes
+ * belong elsewhere and must not be duplicated here. Each proof below is recorded as the
+ * assignment the plan makes, and belongs to the file it names rather than to this module:
  *
- * - The `400`/`401`/`403`/`404`/`409`/`422` outcomes of the real routes are proven by
- *   `apps/api/test/integration/route-walk.test.ts` and `api-contract.test.ts`, which
- *   drive a real `createServer(options)` instance on an ephemeral port.
- * - Reproducibility of a re-run and the three seed outcomes are proven by
+ * - The `400`/`401`/`403`/`404`/`409`/`422` outcomes of the real routes belong to the
+ *   integration suite — `apps/api/test/integration/route-walk.test.ts` and
+ *   `api-contract.test.ts` — which drives a real `createServer(options)` instance on an
+ *   ephemeral port.
+ * - Reproducibility of a re-run and the three seed outcomes belong to
  *   `apps/api/test/integration/api-contract.test.ts` and
  *   `packages/sgi-core/src/scoring/score-submission.test.ts`.
- * - The absence of an import path from `sgi-core` to commercial or sponsored data is
- *   proven by `apps/api/test/integration/boundary-check.ts`.
+ * - The absence of an import path from `sgi-core` to commercial or sponsored data
+ *   belongs to `apps/api/test/integration/boundary-check.ts`.
  *
  * No snapshot baseline is used for any of it: a snapshot would turn a genuine schema
  * change into a failing byte comparison rather than a named expectation, and the
  * determinism criterion needs the suite's `update: false` mode to stay meaningful.
  */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
@@ -56,6 +63,7 @@ import {
 } from './challenges-threads-schema';
 import {
   checkoutSimulationBodySchema,
+  inquiryCreateBodySchema,
   refundCreateBodySchema,
   transactionIdParamsSchema,
 } from './commerce-schema';
@@ -267,10 +275,16 @@ describe('the SGI-SO-1.0.0 fixture envelope', () => {
     expect(fixtureCaseSetSchema.minItems).toBe(FIXTURE_CASE_COUNT);
     expect(fixtureCaseSetSchema.maxItems).toBe(FIXTURE_CASE_COUNT);
     expect(fixtureCaseSetSchema.items).toBe(fixtureCaseSchema);
-    expect(fixtureCaseSetSchema.minContains).toBe(FIXTURE_CRITICAL_CASE_COUNT);
-    expect(fixtureCaseSetSchema.maxContains).toBe(FIXTURE_CRITICAL_CASE_COUNT);
+    expect(fixtureCaseSetSchema.contains.type).toBe('object');
     expect(fixtureCaseSetSchema.contains.required).toContain('severity');
     expect(fixtureCaseSetSchema.contains.properties.severity.const).toBe('critical');
+    // Asserted as absent so a later reader cannot "restore" keywords the product's
+    // validator cannot run: "exactly five of them are critical" is not expressible in
+    // draft-07 — the dialect that validator implements — so the fragment states only what
+    // it can enforce and the exact count is asserted over the delivered pack in the group
+    // below.
+    expect(fixtureCaseSetSchema).not.toHaveProperty('minContains');
+    expect(fixtureCaseSetSchema).not.toHaveProperty('maxContains');
   });
 
   it('holds a case to four fields, with input and expected_output as any JSON value', () => {
@@ -306,6 +320,67 @@ describe('the SGI-SO-1.0.0 fixture envelope', () => {
       expect(Object.keys(fragment).filter((key) => SECTION_KEYS.includes(key))).toEqual(
         [],
       );
+    }
+  });
+});
+
+/**
+ * The schema folder's own guard over the delivered fixture pack, and the reason it is
+ * data-side: "exactly five of them are critical" cannot be stated in the case-set
+ * fragment, because `minContains`/`maxContains` belong to a JSON Schema vocabulary the
+ * product's validator does not implement, so the count is asserted over the pack the
+ * fixture package's own loader test asserts — read from the file itself, so a pack whose
+ * `critical_cases` key disagreed with its own array fails this run.
+ */
+describe('the delivered SGI-SO-1.0.0 fixture pack', () => {
+  interface DeliveredCase {
+    readonly id: string;
+    readonly input: unknown;
+    readonly expected_output: unknown;
+    readonly severity: string;
+  }
+
+  interface DeliveredPack {
+    readonly total_cases: number;
+    readonly critical_cases: number;
+    readonly cases: readonly DeliveredCase[];
+  }
+
+  const packPath = fileURLToPath(
+    new URL(
+      '../../../../packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/cases.json',
+      import.meta.url,
+    ),
+  );
+
+  const pack = JSON.parse(readFileSync(packPath, 'utf8')) as DeliveredPack;
+
+  it('carries the two counts the case-set fragment cannot state', () => {
+    expect(pack.cases).toHaveLength(FIXTURE_CASE_COUNT);
+    expect(
+      pack.cases.filter((fixtureCase) => fixtureCase.severity === 'critical'),
+    ).toHaveLength(FIXTURE_CRITICAL_CASE_COUNT);
+    // The pack restates both counts as keys beside its array for a reader of the file, and
+    // a file whose key said 5 while its array held 4 is exactly the drift this group
+    // exists to catch, so the keys are held to the same two constants as the array.
+    expect(pack.total_cases).toBe(FIXTURE_CASE_COUNT);
+    expect(pack.critical_cases).toBe(FIXTURE_CRITICAL_CASE_COUNT);
+  });
+
+  it('gives every case a unique id and exactly the four fields the fragment declares', () => {
+    expect(new Set(pack.cases.map((fixtureCase) => fixtureCase.id)).size).toBe(
+      pack.cases.length,
+    );
+
+    for (const fixtureCase of pack.cases) {
+      expect(Object.keys(fixtureCase).sort()).toEqual([
+        'expected_output',
+        'id',
+        'input',
+        'severity',
+      ]);
+      expect(fixtureCase.id.length).toBeGreaterThan(0);
+      expect(CASE_SEVERITIES).toContain(fixtureCase.severity);
     }
   });
 });
@@ -398,6 +473,41 @@ describe('demoAccountHeaderSchema', () => {
       'set-cookie',
     ]) {
       expect(properties).not.toHaveProperty(authenticationHeader);
+    }
+  });
+});
+
+describe('inquiryCreateBodySchema', () => {
+  it('requires the listing and the message, and declares no other property', () => {
+    expect(Object.keys(inquiryCreateBodySchema)).toEqual(['body']);
+    expect(inquiryCreateBodySchema.body.required).toEqual(['listing_id', 'message']);
+    expect(Object.keys(inquiryCreateBodySchema.body.properties)).toEqual([
+      'listing_id',
+      'message',
+    ]);
+    expect(inquiryCreateBodySchema.body.properties.listing_id).toEqual({
+      type: 'string',
+      minLength: 1,
+    });
+    expect(inquiryCreateBodySchema.body.properties.message).toEqual({
+      type: 'string',
+      minLength: 1,
+    });
+    expect(inquiryCreateBodySchema.body.additionalProperties).toBe(false);
+  });
+
+  it('carries no buyer identity and no server-owned row column', () => {
+    // The buyer is the account the `X-Demo-Account` header resolves to, and the row's
+    // own columns are the server's, so neither may be a body field: a client-supplied
+    // `buyer_account_id` would let a caller write an inquiry as another account.
+    for (const serverOwnedField of [
+      'buyer_account_id',
+      'account_id',
+      'id',
+      'created_at',
+      'status',
+    ]) {
+      expect(inquiryCreateBodySchema.body.properties).not.toHaveProperty(serverOwnedField);
     }
   });
 });
@@ -626,8 +736,8 @@ interface QueryBearingSchema {
 }
 
 describe('the folder contract: exactly one Fastify section key per schema object', () => {
-  it('carries one section key on each of the 25 request schemas and no response schema', () => {
-    // The 25 section objects of the six modules. The three fragments —
+  it('carries one section key on each of the 26 request schemas and no response schema', () => {
+    // The 26 section objects of the six modules. The three fragments —
     // `fixtureCaseSchema`, `fixtureCaseSetSchema` and `recordedOutputItemSchema` — are
     // deliberately absent: they are sub-schemas and carry no section key, which the
     // fixture-envelope group above asserts.
@@ -642,6 +752,7 @@ describe('the folder contract: exactly one Fastify section key per schema object
       appealIdParamsSchema,
       appealCreateBodySchema,
       appealRulingBodySchema,
+      inquiryCreateBodySchema,
       checkoutSimulationBodySchema,
       refundCreateBodySchema,
       transactionIdParamsSchema,
@@ -659,7 +770,7 @@ describe('the folder contract: exactly one Fastify section key per schema object
       standardProposalReviewBodySchema,
     ];
 
-    expect(requestSchemas).toHaveLength(25);
+    expect(requestSchemas).toHaveLength(26);
 
     for (const requestSchema of requestSchemas) {
       const keys = Object.keys(requestSchema);
@@ -677,6 +788,7 @@ describe('the folder contract: exactly one Fastify section key per schema object
       evaluationSubmissionBodySchema,
       appealCreateBodySchema,
       appealRulingBodySchema,
+      inquiryCreateBodySchema,
       checkoutSimulationBodySchema,
       refundCreateBodySchema,
       challengeCreateBodySchema,
@@ -693,7 +805,7 @@ describe('the folder contract: exactly one Fastify section key per schema object
       compareQuerySchema,
     ];
 
-    expect(bodyBearingSchemas).toHaveLength(14);
+    expect(bodyBearingSchemas).toHaveLength(15);
     expect(queryBearingSchemas).toHaveLength(2);
 
     for (const requestSchema of bodyBearingSchemas) {

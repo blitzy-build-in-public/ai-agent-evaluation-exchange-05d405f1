@@ -136,8 +136,11 @@ export const listingIdParamsSchema = {
  * These five fields are the whole listing a developer may write. Two columns a
  * reader might expect are deliberately absent:
  *
- * - **`slug`** is derived server-side at creation, so two listings cannot
- *   collide on one and a client cannot choose a URL token it does not own.
+ * - **`slug`** is derived server-side at creation, so a client cannot choose a
+ *   URL token it does not own. It is deliberately not unique across listings
+ *   (`packages/shared/migrations/0002_listings_and_versions.sql`): no route
+ *   documents a conflict for a repeated slug, so nothing may read the token as
+ *   an identifier.
  * - **`status`** is absent for the same reason: a new listing is `active`, so a
  *   client cannot place itself in a flagged or already-hidden state. Moderation
  *   is the operator's act, through `./moderation-schema.ts`.

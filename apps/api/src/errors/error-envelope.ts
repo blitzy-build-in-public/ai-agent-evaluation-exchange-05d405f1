@@ -113,22 +113,41 @@ export class ApiError extends Error {
  *
  * `instanceof` and nothing else: a domain refusal carries a `code` but no `status`, so a
  * structural check would mistake one for an `ApiError` and pass a value to a caller that
- * then reads a status which is not there.
+ * then reads a status which is not there. The walk of the value's prototype chain itself is
+ * guarded, because the value is arbitrary: `instanceof` reads that chain, and a proxy whose
+ * `getPrototypeOf` trap raises — a revoked proxy does — would otherwise throw here and cost
+ * a client the envelope. A chain that cannot be read answers `false`: nothing is repaired
+ * and nothing permissive is substituted, so the value falls through to the `500
+ * internal_error` answer {@link toApiError} gives what it cannot map.
  */
 export function isApiError(value: unknown): value is ApiError {
-  return value instanceof ApiError;
+  try {
+    return value instanceof ApiError;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * The only message a client ever receives for a `500`: one fixed sentence that names no
+ * The sentence a client receives for a server fault: the substitution at a status of `500`
+ * or above, and the answer of the unmapped-code fallback. One fixed sentence that names no
  * path, no identifier, no stack and no hint of the cause. The cause itself is logged by
  * the error handler.
  */
 const GENERIC_MESSAGE = 'The request could not be completed. The failure has been recorded.';
 
 /**
+ * The sentence a client receives for a client error: the substitution at a status below
+ * `500`. It describes the request as it was sent and claims nothing about the failure
+ * beyond that, because {@link GENERIC_MESSAGE} says the failure was recorded — a
+ * server-side claim that misdescribes a `4xx`.
+ */
+const CLIENT_ERROR_MESSAGE = 'The request could not be completed as sent.';
+
+/**
  * The longest message that may be sent to a client. A longer one is a report or a stack
- * rather than a sentence, so it is replaced by {@link GENERIC_MESSAGE}.
+ * rather than a sentence, so it is replaced by the sentence {@link safeMessageOf} selects
+ * for the status the failure is answered with.
  */
 const MAX_SAFE_MESSAGE_LENGTH = 200;
 
@@ -182,13 +201,23 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
  * Reads a candidate string property from a thrown value of any type.
  *
  * Only an object that is neither `null` nor a function can carry one, so every other
- * value — a primitive, a function, `null` — yields `undefined` instead of a TypeError.
+ * value — a primitive, a function, `null` — yields `undefined` instead of a TypeError. The
+ * read itself is guarded because the value is arbitrary: an accessor or a proxy trap that
+ * raises must yield no property rather than propagate out of the mapper and cost a client
+ * the envelope. Nothing is repaired and nothing permissive is substituted — a property that
+ * cannot be read yields `undefined`, the same answer a value carrying no such property
+ * yields.
  */
 function readStringProperty(value: unknown, key: string): string | undefined {
   if (typeof value !== 'object' || value === null) {
     return undefined;
   }
-  const candidate = (value as Record<string, unknown>)[key];
+  let candidate: unknown;
+  try {
+    candidate = (value as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
   return typeof candidate === 'string' ? candidate : undefined;
 }
 
@@ -263,14 +292,19 @@ function isSafeMessage(message: string): boolean {
 }
 
 /**
- * The message a client receives for a thrown value: the caller's own sentence when it
- * passes the safety gate, and {@link GENERIC_MESSAGE} when it is absent, blank, too long
- * or carries a stack, a driver report, a query or a path. A message that passes the gate
- * is sent unchanged.
+ * The message a client receives for a thrown value at the status it is answered with: the
+ * caller's own sentence when it passes the safety gate, and the sentence substituted for
+ * that status when it is absent, blank, too long or carries a stack, a driver report, a
+ * query or a path — {@link CLIENT_ERROR_MESSAGE} below `500` and {@link GENERIC_MESSAGE} at
+ * `500` and above, so an answered client error is never described as a failure recorded
+ * server-side. A message that passes the gate is sent unchanged.
  */
-function safeMessageOf(error: unknown): string {
+function safeMessageOf(error: unknown, status: number): string {
   const message = readStringProperty(error, 'message');
-  return message !== undefined && isSafeMessage(message) ? message : GENERIC_MESSAGE;
+  if (message !== undefined && isSafeMessage(message)) {
+    return message;
+  }
+  return status >= 500 ? GENERIC_MESSAGE : CLIENT_ERROR_MESSAGE;
 }
 
 /**
@@ -288,7 +322,10 @@ function safeMessageOf(error: unknown): string {
  *    `incomplete_submission` and `not_offered` are answered as `422 incomplete_submission`
  *    and `422 not_offered`, not as a generic `unprocessable`, which is what
  *    `STATUS_DEFAULT_CODE` yields when only a numeric status is known. The message comes
- *    from the gate in {@link safeMessageOf}.
+ *    from the gate in {@link safeMessageOf}, which substitutes the sentence for this
+ *    status when the thrown message cannot be sent, so the status a client is answered with
+ *    and the sentence it reads always agree and a mapped client error never claims the
+ *    failure was recorded.
  * 4. Anything else becomes `500 internal_error` with {@link GENERIC_MESSAGE} — a code
  *    that is absent, empty, unreadable, or simply not in the vocabulary. That last case
  *    is deliberate and is what makes a composition-time defect safe: `seam_validation`,
@@ -306,7 +343,7 @@ export function toApiError(error: unknown): ApiError {
   if (code !== undefined) {
     const status = knownStatusOf(code);
     if (status !== undefined) {
-      return new ApiError(status, code as ApiErrorCode, safeMessageOf(error));
+      return new ApiError(status, code as ApiErrorCode, safeMessageOf(error, status));
     }
   }
 

@@ -170,10 +170,12 @@ describe("validateListingCategory", () => {
   });
 
   /**
-   * The four categories `apps/api/src/seed/seed-data.ts` seeds, validated here as whole categories so
-   * a seeded slug that cannot satisfy this guard fails in the unit suite rather than at start-up.
-   * The pattern is the seam's contract: a seed slug that stops matching is a plan conflict to raise,
-   * never a reason to widen the pattern.
+   * Whole categories that satisfy the seam's contract: a slug matching its pattern, a non-empty
+   * name and a non-empty description. The four slugs below are examples of that shape rather than
+   * an assertion about `apps/api/src/seed/seed-data.ts` — this package may not import that
+   * workspace, so the values the seed actually writes are checked by the seed's own test, and a
+   * seed slug that stops matching this pattern is a defect to fix there, never a reason to widen
+   * the pattern here.
    */
   it.each([
     {
@@ -196,7 +198,7 @@ describe("validateListingCategory", () => {
       name: "Logistics tools",
       description: "Agents that plan, track and reconcile shipments.",
     },
-  ])("accepts the seeded category $slug", (category) => {
+  ])("accepts a well-formed category: $slug", (category) => {
     const validated = validateListingCategory(category);
 
     expect(validated).toBe(category);

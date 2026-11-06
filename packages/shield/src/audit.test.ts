@@ -9,11 +9,13 @@ import type { AuditEvent, InMemoryAuditLog } from "./audit";
  * The audit log's contract, and the append-only promise it makes.
  *
  * `evaluate` records one event per decision, and this suite fixes what those sinks owe a reader:
- * the five fields are the whole record and survive a round trip through either sink; the events come
- * back in insertion order; the log only ever appends, holding no way to change or remove an event and
- * storing each one frozen; reading it hands out a fresh array, so a caller that mutates what it was
- * given cannot change the history; the in-memory history is private to its log; and the file sink
- * writes one newline-delimited JSON line per event in append mode, rewriting no line it has written.
+ * the five fields are the whole record and survive a round trip through either sink; a value that is
+ * not a complete record of them is refused by both sinks with this module's own message, leaving
+ * neither a line nor a stored event behind; the events come back in insertion order; the log only
+ * ever appends, holding no way to change or remove an event and storing each one frozen; reading it
+ * hands out a fresh array, so a caller that mutates what it was given cannot change the history; the
+ * in-memory history is private to its log; and the file sink writes one newline-delimited JSON line
+ * per event in append mode, rewriting no line it has written.
  *
  * Every event here is built from fixed timestamp literals, because Shield reads no clock and the
  * suite proves behaviour that repeats identically in every run.
@@ -69,6 +71,11 @@ let scratch: string | undefined;
  * `node:path`: this package's only non-relative import is `node:fs`, and this suite leaves that set
  * unchanged. `mkdtempSync` gives each run its own directory, so a second run of the suite cannot
  * read the first run's files.
+ *
+ * The `.tmp-shield-audit-*` name it is given is covered by the root `.gitignore`'s "Test output"
+ * block, so a run that is interrupted before its cleanup leaves nothing for a later `git add -A` to
+ * pick up. That rule and this name are one contract, and either one alone leaves the working tree
+ * dirty.
  */
 function scratchDirectory(): string {
   if (scratch === undefined) {
@@ -112,6 +119,71 @@ function eventsWrittenTo(filePath: string): unknown[] {
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JSON.parse(line) as unknown);
+}
+
+/**
+ * Hands a value of any shape to one of these sinks, as an untyped JavaScript caller can.
+ *
+ * `string` and {@link AuditEvent} are compile-time promises only, and the values below are the ones
+ * a JavaScript caller reaches the sinks with; every such call in this suite goes through here, so
+ * the cast is written once rather than at each call.
+ */
+function asUntyped<T>(value: unknown): T {
+  return value as T;
+}
+
+/**
+ * Values neither sink may record, in the ways a candidate fails to be a record of the five facts:
+ * not a record at all, nothing of the five, one fact of the five absent, a fact of another kind, an
+ * outcome outside the closed vocabulary, and a fact that cannot be read.
+ *
+ * Every row also states the refusal it expects, which names the field at issue and carries neither
+ * the row's value nor anything internal to this module. Both sinks are driven with the whole table,
+ * because the one-method contract has one definition of what a record is.
+ */
+const NOT_RECORDS: [string, unknown, string][] = [
+  ["a value that is not an object", "an audit event", "audit event: expected an object"],
+  ["a revoked proxy", revokedProxy(), "audit event: expected an object"],
+  ["an event with no facts at all", {}, "audit event: timestamp is not a string"],
+  [
+    "an event missing its policy version",
+    { timestamp: FIRST_AT, callId: "call-1", decision: "allow", ruleId: "read-only-tools" },
+    "audit event: policyVersion is not a string",
+  ],
+  [
+    "an event whose rule id is a number",
+    { ...ALLOWED_CALL, ruleId: 7 },
+    "audit event: ruleId is neither a string nor null",
+  ],
+  [
+    "an event whose decision is outside the vocabulary",
+    { ...ALLOWED_CALL, decision: "permit" },
+    "audit event: decision is not a recorded outcome",
+  ],
+  [
+    "an event whose timestamp cannot be read",
+    eventWithThrowingMember("timestamp"),
+    "audit event: timestamp is not a string",
+  ],
+];
+
+/** An event the five facts are declared on, one of which raises when it is read. */
+function eventWithThrowingMember(member: string): unknown {
+  const event: Record<string, unknown> = { ...ALLOWED_CALL };
+  Object.defineProperty(event, member, {
+    enumerable: true,
+    get(): never {
+      throw new Error(`${member} cannot be read`);
+    },
+  });
+  return event;
+}
+
+/** A proxy the caller has revoked, whose every read raises. */
+function revokedProxy(): unknown {
+  const { proxy, revoke } = Proxy.revocable({ ...ALLOWED_CALL }, {});
+  revoke();
+  return proxy;
 }
 
 describe("the in-memory audit log", () => {
@@ -206,6 +278,33 @@ describe("the in-memory audit log", () => {
       expect(first.list()).toEqual([ALLOWED_CALL]);
       expect(second.list()).toEqual([HELD_CALL]);
     });
+
+    it.each(NOT_RECORDS)("refuses %s, and its history stays empty", (_label, value, message) => {
+      const log = createInMemoryAuditLog();
+      const refused = (): void => log.append(asUntyped<AuditEvent>(value));
+
+      expect(refused).toThrowError(TypeError);
+      expect(refused).toThrowError(new TypeError(message));
+
+      expect(log.size()).toBe(0);
+      expect(log.list()).toEqual([]);
+    });
+
+    it("records exactly the five facts of an event that carries a sixth member", () => {
+      const log = createInMemoryAuditLog();
+
+      log.append(asUntyped<AuditEvent>({ ...ALLOWED_CALL, approvedBy: "demo-operator-1" }));
+
+      const recorded = firstRecorded(log);
+      expect(recorded).toEqual(ALLOWED_CALL);
+      expect(Object.keys(recorded).sort()).toEqual([
+        "callId",
+        "decision",
+        "policyVersion",
+        "ruleId",
+        "timestamp",
+      ]);
+    });
   });
 });
 
@@ -264,9 +363,57 @@ describe("the file audit sink", () => {
       expect(appendedLine).toBe(after.slice(before.length, after.length - 1));
       expect(after.length - before.length).toBe(appendedLine.length + 1);
     });
+
+    it.each(NOT_RECORDS)(
+      "refuses %s, creating neither the file nor its directory",
+      (_label, value, message) => {
+        const filePath = scratchFile("refused/audit.ndjson");
+        const parent = `${scratchDirectory()}/refused`;
+        const sink = createFileAuditSink(filePath);
+        const refused = (): void => sink.append(asUntyped<AuditEvent>(value));
+
+        expect(refused).toThrowError(TypeError);
+        expect(refused).toThrowError(new TypeError(message));
+
+        // The event is checked before the write path is entered, so nothing came into existence.
+        expect(existsSync(filePath)).toBe(false);
+        expect(existsSync(parent)).toBe(false);
+      },
+    );
+
+    it("writes exactly the five facts of an event that carries a sixth member", () => {
+      const filePath = scratchFile("sixth-member.ndjson");
+      const sink = createFileAuditSink(filePath);
+
+      sink.append(asUntyped<AuditEvent>({ ...ALLOWED_CALL, approvedBy: "demo-operator-1" }));
+
+      const [written] = eventsWrittenTo(filePath);
+      expect(written).toEqual(ALLOWED_CALL);
+      expect(Object.keys(written as Record<string, unknown>).sort()).toEqual([
+        "callId",
+        "decision",
+        "policyVersion",
+        "ruleId",
+        "timestamp",
+      ]);
+    });
   });
 
   describe("the path a sink writes to", () => {
+    it.each<[string, unknown]>([
+      ["null", null],
+      ["a number", 7],
+      ["an empty string", ""],
+    ])("refuses %s as its path, naming the parameter and nothing internal", (_label, value) => {
+      const refused = (): unknown => createFileAuditSink(asUntyped<string>(value));
+
+      expect(refused).toThrowError(TypeError);
+      expect(refused).toThrowError(new TypeError("audit: filePath must be a non-empty string"));
+
+      // Nothing was created for the value it was handed, so the refusal precedes the write path.
+      expect(existsSync(asUntyped<string>(value))).toBe(false);
+    });
+
     it("creates the parent directory of a path whose directory does not exist yet", () => {
       const filePath = scratchFile("nested/deeper/audit.ndjson");
       const parent = `${scratchDirectory()}/nested/deeper`;

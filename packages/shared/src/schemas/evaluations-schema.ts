@@ -61,23 +61,34 @@ import { APPEAL_RULINGS } from '../types/appeal';
  * and change only by publishing a new standard version through the SGI proposal
  * and review process.
  *
- * One reader beyond the schemas here depends on this exact number:
- * `apps/api/src/routes/evaluations.ts` uses it for its completeness check, which
- * is what makes a submission carrying no recorded output for one of the fixture
- * set's cases a **`422` before any report is written**, rather than a case
- * silently scored as a failure.
+ * What this constant is used for, and what it may never decide. It is a **shape
+ * bound**: it fixes `minItems`/`maxItems` of {@link fixtureCaseSetSchema}, the
+ * `maxItems` of the submission body's `recorded_outputs`, and the two counts the
+ * folder's own `./schemas.test.ts` asserts over the delivered pack. The
+ * completeness check on `POST /evaluations` reads **no** constant: it compares the
+ * submission's `recorded_outputs` against the case ids of the fixture set the
+ * evaluation loaded, so a submission carrying no recorded output for one of that
+ * set's cases is the contract's **`422` before any report is written**. That is
+ * also the only sound comparison, because the loaded set is the versioned one: a
+ * standard version published with a different case count is checked against
+ * itself, where a number compiled into this build would check it against this
+ * build's number.
  */
 export const FIXTURE_CASE_COUNT = 20;
 
 /**
  * How many of those 20 cases are `critical` in `SGI-SO-1.0.0`: **5**.
  *
- * The shape counterpart of {@link FIXTURE_CASE_COUNT}, and the count
- * {@link fixtureCaseSetSchema} states with `minContains`/`maxContains`. It is a
- * fact about the delivered fixture set and never a rule: the rule that makes one
- * failing `critical` case fail a candidate outright is versioned data on the
- * stored standard version, and the count itself is asserted as data by
- * `packages/sgi-fixtures/src/load-fixtures.test.ts`. See
+ * The shape counterpart of {@link FIXTURE_CASE_COUNT}, and a fact about the
+ * delivered fixture set — never a rule: the rule that makes one failing
+ * `critical` case fail a candidate outright is versioned data on the stored
+ * standard version. This count is one the case-set fragment cannot state, because
+ * the dialect the product's validator implements carries no keyword for it (see
+ * {@link fixtureCaseSetSchema}), so it is **asserted as data**: by the
+ * fixture-count group in `./schemas.test.ts`, which reads the delivered pack, and
+ * by the pack's own loader test,
+ * `packages/sgi-fixtures/src/load-fixtures.test.ts`, which asserts its case count,
+ * its critical count and the uniqueness of its ids. See
  * {@link FIXTURE_CASE_COUNT} for why no route may derive an outcome from it.
  */
 export const FIXTURE_CRITICAL_CASE_COUNT = 5;
@@ -131,7 +142,8 @@ export const fixtureCaseSchema = {
 } as const;
 
 /**
- * A whole fixture set: **exactly 20 cases, exactly 5 of them `critical`**.
+ * A whole fixture set: **exactly 20 cases**, of which the delivered pack marks
+ * **5 `critical`**.
  *
  * A **fragment**, not a Fastify section: it is the array schema for the case set
  * the fixture pack publishes, and it is attached to no route, so no Fastify
@@ -151,27 +163,32 @@ export const fixtureCaseSchema = {
  * cases — two of them `critical` — against its own version. A case object of any
  * pack is what {@link fixtureCaseSchema} describes; the counts are the version's.
  *
- * `items` types every case, `minItems`/`maxItems` fix the count at
- * {@link FIXTURE_CASE_COUNT}, and a `contains` sub-schema matching a case whose
- * `severity` is `critical` with `minContains` and `maxContains` both set to
- * {@link FIXTURE_CRITICAL_CASE_COUNT} is how "exactly five critical cases" is
- * expressed in JSON Schema. `minContains` and `maxContains` are JSON Schema
- * 2019-09+ keywords, and Ajv 8 implements them in its 2019-09/2020-12 dialect,
- * where this fragment compiles and all three counts are enforced: the delivered
- * array of 20 cases with 5 critical validates, and the same array with 4 or 6
- * critical cases, or with 19 cases, is rejected.
+ * `items` types every case and `minItems`/`maxItems` fix the count at
+ * {@link FIXTURE_CASE_COUNT}, so a 19-case or a 21-case array is rejected.
+ * `contains` requires at least one case whose `severity` is `critical`, and its
+ * sub-schema names `type: 'object'` so that requirement holds on its own terms
+ * rather than leaning on `items` — so a set with no critical case at all is
+ * rejected.
  *
- * Where the keywords are *not* enforced decides where the real guard sits, so it
- * is stated rather than implied. The JSON Schema validator Fastify 4 bundles is
- * Ajv 8 in draft-07 mode, for which `minContains` is an unknown keyword: an Ajv
- * compiled with that validator's defaults throws on it, and one with `strict`
- * off ignores it. That is precisely why this fragment is attached to no Fastify
- * route, and why the delivered fixture set is checked by its own test,
- * `packages/sgi-fixtures/src/load-fixtures.test.ts`, which asserts the same two
- * counts as data. The shape is guarded from both sides — this schema states it
- * and the test proves the data obeys it — and neither may be replaced by a
- * hand-written count in a consumer, which would move the rule out of the schema
- * and into whichever code happened to check it.
+ * **"Exactly five of them are critical" is not stated here, because this dialect
+ * cannot express it.** A count would be written with `minContains` and
+ * `maxContains`, keywords of the 2019-09 vocabulary, and the dialect the
+ * product's validator implements is draft-07, which does not carry them: a
+ * fragment using them is an unknown-keyword failure wherever the product compiles
+ * it, and would enforce nothing at all wherever a validator were configured to
+ * ignore unknown keywords instead. A rule written in a dialect the product's own
+ * validator refuses is worse than no rule, so this fragment states only what it
+ * can enforce.
+ *
+ * The exact critical count is therefore **asserted as data**, by the two readers
+ * that both read the delivered pack: the fixture-count group in
+ * `./schemas.test.ts`, and the pack's own loader test,
+ * `packages/sgi-fixtures/src/load-fixtures.test.ts`, which asserts its case count,
+ * its critical count and the uniqueness of its ids. The shape is guarded from both
+ * sides — this schema states what it can and the tests prove the data obeys it —
+ * and neither count may be replaced by a hand-written count in a consumer, which
+ * would move the rule out of the schema and into whichever code happened to check
+ * it.
  *
  * Neither count is a pass threshold: see {@link FIXTURE_CASE_COUNT}.
  */
@@ -180,9 +197,11 @@ export const fixtureCaseSetSchema = {
   minItems: FIXTURE_CASE_COUNT,
   maxItems: FIXTURE_CASE_COUNT,
   items: fixtureCaseSchema,
-  contains: { properties: { severity: { const: 'critical' } }, required: ['severity'] },
-  minContains: FIXTURE_CRITICAL_CASE_COUNT,
-  maxContains: FIXTURE_CRITICAL_CASE_COUNT,
+  contains: {
+    type: 'object',
+    properties: { severity: { const: 'critical' } },
+    required: ['severity'],
+  },
 } as const;
 
 /**
@@ -243,8 +262,9 @@ export const recordedOutputItemSchema = {
  * and whether it names an unknown or duplicated `case_id`, are decided by the
  * route's completeness check against the fixture set it loaded — the schema
  * cannot know a case set's ids. A missing case is the contract's **`422` before
- * any report is written**, and the number that check reads is
- * {@link FIXTURE_CASE_COUNT}, exported above for exactly that purpose.
+ * any report is written**, and the ids that check compares against are the loaded
+ * fixture set's own — so a standard version published with a different case count
+ * is checked against itself, not against a number compiled into this build.
  *
  * `uniqueItems: true` is a deep-equality check on whole `{ case_id, output }`
  * items, so it rejects a byte-identical duplicate and **not** the same `case_id`

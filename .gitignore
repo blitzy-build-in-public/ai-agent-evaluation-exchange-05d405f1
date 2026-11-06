@@ -13,6 +13,7 @@ test-results/
 playwright-report/
 blob-report/
 coverage/
+.tmp-shield-audit-*
 
 # Local environment files
 .env

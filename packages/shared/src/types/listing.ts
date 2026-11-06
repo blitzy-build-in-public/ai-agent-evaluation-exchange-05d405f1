@@ -152,17 +152,23 @@ export interface Category {
  * history they were written with.
  *
  * `slug` and `status` are server-owned rather than client input: a slug is derived when
- * the listing is created so two listings cannot collide on one, and a new listing is
- * `active`. {@link ListingCreateBody} therefore declares neither field. A `hidden` listing
- * leaves search and compare while staying visible to the operator with its history, and a
- * `flagged` listing stays readable with its status stated.
+ * the listing is created rather than chosen by a client, and a new listing is `active`.
+ * {@link ListingCreateBody} therefore declares neither field.
+ *
+ * The slug is deliberately **not** unique across listings, as
+ * `packages/shared/migrations/0002_listings_and_versions.sql` states at the column: no route
+ * documents a conflict for a repeated slug and a listing is addressed by its id, so two listings
+ * may carry the same token and nothing may read it as an identifier.
+ *
+ * A `hidden` listing leaves search and compare while staying visible to the operator with its
+ * history, and a `flagged` listing stays readable with its status stated.
  */
 export interface Listing {
   /** Listing identifier, unique across the exchange. */
   id: string;
   /** The developer account that owns the listing, referencing `accounts.id`. */
   developer_account_id: string;
-  /** Stable URL-safe token derived server-side at creation, unique per listing. */
+  /** Stable URL-safe token derived server-side at creation; not unique across listings. */
   slug: string;
   /** Listing title, as the developer wrote it. */
   title: string;
@@ -201,6 +207,13 @@ export interface Listing {
  * A seeded result and a developer submission are therefore never conflated, and neither
  * value of the flag is a client input: it is written where the version is written.
  *
+ * This member is a boolean while the column behind it is the INTEGER 1 or 0, because a boolean is
+ * the type the flag is reasoned about in and the type the plan declares for it. The conversion
+ * belongs at the write site and cannot be implicit: better-sqlite3 refuses a JavaScript boolean
+ * with "SQLite3 can only bind numbers, strings, bigints, buffers, and null", so a writer binds
+ * `is_fixture_candidate ? 1 : 0`, and the version-creation path omits the column so the row takes
+ * the DEFAULT 0 that every API-published version carries.
+ *
  * The row is append-only by route design — no route updates or deletes a version — so an
  * evaluation always names the version that was measured, and the version list a listing
  * renders is the history of what its developer published.
@@ -214,7 +227,11 @@ export interface ListingVersion {
   version_string: string;
   /** Release notes the developer recorded for this version. */
   notes: string;
-  /** Whether this seeded version is one of the three candidate fixture references. */
+  /**
+   * Whether this seeded version is one of the three candidate fixture references. Read as a
+   * boolean; stored and written as the INTEGER 1 or 0 (`flag ? 1 : 0`), because better-sqlite3
+   * refuses a JavaScript boolean binding.
+   */
   is_fixture_candidate: boolean;
   /** Insert instant as an ISO-8601 UTC string. */
   created_at: string;
@@ -256,8 +273,9 @@ export interface ListingClaim {
  * The `POST /listings` body, written by a **developer** holding the demo account header.
  *
  * `slug` and `status` are deliberately absent. A slug is derived server-side when the
- * listing is created, so two listings cannot collide on one and a client cannot choose a
- * URL token it does not own; a new listing is `active`, so a client cannot place itself in
+ * listing is created, so a client cannot choose a URL token it does not own — and the token is
+ * not unique across listings (`packages/shared/migrations/0002_listings_and_versions.sql`), so no
+ * reader may treat it as one; a new listing is `active`, so a client cannot place itself in
  * a moderated or already-hidden state. The developer's identity comes from the resolved
  * demo session and never from a body field: a missing or unresolvable `X-Demo-Account`
  * header is `401`, and a resolvable account whose role is not `developer` is `403`.
@@ -316,7 +334,7 @@ export interface ListingVersionCreateBody {
 export interface ListingSummary {
   /** Listing identifier. */
   id: string;
-  /** Stable URL-safe token, the identifier a listing URL carries. */
+  /** The listing's stable URL-safe token derived server-side at creation; not unique across listings. */
   slug: string;
   /** Listing title. */
   title: string;

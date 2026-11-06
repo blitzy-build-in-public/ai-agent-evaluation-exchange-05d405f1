@@ -1,6 +1,7 @@
 /**
- * JSON Schema request contracts for the simulated-commerce routes: the buyer's
- * checkout simulation (`POST /checkout-simulations`) and the operator's refund
+ * JSON Schema request contracts for the buyer and operator write routes: the
+ * buyer's inquiry (`POST /inquiries`), the buyer's checkout simulation
+ * (`POST /checkout-simulations`) and the operator's refund
  * (`POST /transactions/{id}/refunds`).
  *
  * Every export below is a plain JSON Schema object carrying exactly one Fastify
@@ -10,32 +11,74 @@
  * with its parameters — a route spreads the pair it needs itself,
  * `{ ...transactionIdParamsSchema, ...refundCreateBodySchema }`.
  *
- * The two bodies carry no amount the client may choose on the checkout side and
- * no currency anywhere: every monetary field in this product is an integer count
- * of minor units of the synthetic currency `DEMO`, there is no real currency
- * code and no currency symbol, and the amount of a simulated purchase is
- * computed from the selected offer model and the listing version rather than
- * submitted. `currency_label` is a column these schemas never address — it is
- * fixed to the one synthetic label by the `CHECK` constraint in
+ * The two money bodies carry no amount the client may choose on the checkout
+ * side and no currency anywhere: every monetary field in this product is an
+ * integer count of minor units of the synthetic currency `DEMO`, there is no
+ * real currency code and no currency symbol, and the amount of a simulated
+ * purchase is computed from the selected offer model and the listing version
+ * rather than submitted. `currency_label` is a column these schemas never
+ * address — it is fixed to the one synthetic label by the `CHECK` constraint in
  * `packages/shared/migrations/0008_commerce_ledgers_and_refunds.sql`.
  *
  * Request side only: no response schema appears here. The plan fixes JSON-schema
  * *request* validation, and a successful response shape is prose in the contract
- * table rather than a route option — so `CheckoutSimulationBody` and
- * `RefundCreateBody` in `../types/commerce.ts` describe the accepted bodies, and
- * this module validates them.
+ * table rather than a route option — so `InquiryCreateBody` in
+ * `../types/inquiry.ts` and `CheckoutSimulationBody` and `RefundCreateBody` in
+ * `../types/commerce.ts` describe the accepted bodies, and this module validates
+ * them.
  *
  * Data only. Nothing here decides whether a listing offers an offer model,
  * whether an amount fits a transaction's net remaining, or how an allocation
  * rounds: those are `packages/commerce-sim`'s, and a shared schema that reached
  * into a listing's offer set would put domain logic in the one package that must
- * stay data-only. Both rows are non-public, so each route also attaches the
+ * stay data-only. All three rows are non-public, so each route also attaches the
  * demo-session header contract from `./auth-header-schema.ts`: a request with no
  * resolvable `X-Demo-Account` header is answered `401`, and a resolvable account
  * whose role does not match the row is answered `403`.
  */
 
 import { OFFER_MODELS } from '../types/commerce';
+
+/**
+ * Body contract for `POST /inquiries` (buyer).
+ *
+ * The buyer's message on one listing, and nothing else: the two required
+ * non-empty strings are the whole request.
+ *
+ * The buyer's identity is resolved server-side from the `X-Demo-Account` demo
+ * session and is deliberately not a field here, so a caller cannot write an
+ * inquiry as another account. Fastify 4 validates a body with
+ * `removeAdditional: true` among its validator's defaults, so with
+ * `additionalProperties: false` a client that sends its own `buyer_account_id`,
+ * `id`, `created_at` or `status` alongside an otherwise valid body has the field
+ * **removed before the handler runs** rather than answered with a `400`. That is
+ * the intended behaviour: the buyer is the resolved demo account, and the row's
+ * other columns belong to the server.
+ *
+ * The body holds nothing else, and the row it produces holds nothing else: an
+ * inquiry is not a channel, so no contact detail, no payment detail and no
+ * financial information of any kind is collected, no field below can hold one,
+ * and none may be added. The row is the single insert into `inquiries` in
+ * `packages/shared/migrations/0003_inquiries.sql`, written once by this route and
+ * read back unchanged.
+ *
+ * Statuses this row produces or hands on: `400` for a missing or empty
+ * `listing_id` or `message`; `404` from the route for a `listing_id` that names
+ * no listing; `401` for a missing or unresolvable demo header; `403` for a
+ * resolvable account whose role is not `buyer`; and success is `201`, the write
+ * appending an `audit_events` row of resource type `inquiry`.
+ */
+export const inquiryCreateBodySchema = {
+  body: {
+    type: 'object',
+    required: ['listing_id', 'message'],
+    properties: {
+      listing_id: { type: 'string', minLength: 1 },
+      message: { type: 'string', minLength: 1 },
+    },
+    additionalProperties: false,
+  },
+} as const;
 
 /**
  * Body contract for `POST /checkout-simulations` (buyer).
