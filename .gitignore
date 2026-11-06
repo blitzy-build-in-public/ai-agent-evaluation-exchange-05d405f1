@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Local database
+.adem/
+
+# Test output
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# Local environment files
+.env
+.env.*
+
+# Platform artefacts in this checkout
+blitzy/screenshots/
+blitzy/screen_recordings/
+
+# Editor and OS noise
+.DS_Store
+*.log

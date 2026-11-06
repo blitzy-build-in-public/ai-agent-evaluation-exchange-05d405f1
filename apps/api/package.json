@@ -1,0 +1,22 @@
+{
+  "name": "@adem/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "seed": "tsx src/seed/run-seed.ts"
+  },
+  "dependencies": {
+    "@adem/commerce-sim": "0.1.0",
+    "@adem/shared": "0.1.0",
+    "@adem/sgi-core": "0.1.0",
+    "@fastify/rate-limit": "9.1.0",
+    "@fastify/static": "7.0.4",
+    "better-sqlite3": "9.6.0",
+    "fastify": "4.28.1"
+  }
+}

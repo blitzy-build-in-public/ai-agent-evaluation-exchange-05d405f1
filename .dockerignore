@@ -1,0 +1,14 @@
+.git
+node_modules
+**/node_modules
+dist
+**/dist
+**/*.tsbuildinfo
+.adem
+e2e
+.github
+test-results
+playwright-report
+blob-report
+coverage
+blitzy
