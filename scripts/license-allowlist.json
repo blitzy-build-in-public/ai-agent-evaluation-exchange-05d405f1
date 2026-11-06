@@ -1,0 +1,10 @@
+{
+  "allowed": ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT"],
+  "developmentOnlyExceptions": [
+    {
+      "license": "MPL-2.0",
+      "reason": "Permitted by the request for development-only dependencies; a package carrying it MUST NOT appear in a runtime graph."
+    }
+  ],
+  "source": "Request, Success criteria 11: MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and 0BSD, with MPL-2.0 allowed for development-only dependencies."
+}

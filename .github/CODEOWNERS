@@ -1,0 +1,15 @@
+# CODEOWNERS for the ADEM repository.
+#
+# MAINTAINER-PLACEHOLDER is a single generic placeholder token, not a real owner,
+# and it MUST be replaced by the project owner with a real GitHub user or team
+# before this repository is published. Until that replacement is made, this file
+# is intentionally not a valid owner list: GitHub cannot resolve the token, so the
+# paths below have no effective owner and no review is requested automatically.
+
+packages/sgi-core/ MAINTAINER-PLACEHOLDER
+packages/sgi-fixtures/ MAINTAINER-PLACEHOLDER
+packages/shield/ MAINTAINER-PLACEHOLDER
+packages/commerce-sim/ MAINTAINER-PLACEHOLDER
+docs/governance/ MAINTAINER-PLACEHOLDER
+scripts/scan-exclusions.ts MAINTAINER-PLACEHOLDER
+.github/ MAINTAINER-PLACEHOLDER
