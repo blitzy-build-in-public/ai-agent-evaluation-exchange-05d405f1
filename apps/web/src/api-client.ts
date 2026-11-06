@@ -1,0 +1,1418 @@
+/**
+ * The web workspace's only caller of `/api/v1`: the single HTTP boundary between the
+ * public UI and the API.
+ *
+ * Everything a page needs from the service passes through this module, so no page holds a
+ * URL, a header, a fetch call or a knowledge of the wire envelope. Four decisions follow
+ * from that and are stated here once.
+ *
+ * **Base URL.** The path `/api/v1` on the page's own origin, and nothing else. The built
+ * UI is served by Fastify alongside the API, and in development Vite proxies `/api` to the
+ * local API, so the same relative path works in both. No environment variable, no
+ * build-time injected value and no absolute origin is read: the product needs no
+ * configuration to run.
+ *
+ * **The demo account.** Every write — and the four operator-only reads — carries the
+ * `X-Demo-Account` header, whose value is the selected synthetic account. It is a role
+ * selector for a demonstration and never authentication of an identity: it is trivially
+ * impersonable by design, which is why the server checks the role on every non-public
+ * route and why the label "demo only, no production authentication" is visible wherever
+ * the switcher appears. A write attempted with no account selected throws
+ * {@link ApiClientError} here, before any request is sent, so the failure reads as an
+ * explanation rather than as a bare `401` from the server.
+ *
+ * **One error shape.** Every non-2xx response is parsed as the API's single envelope
+ * `{ error: { code, message } }` and raised as {@link ApiClientError}, carrying the status,
+ * the code, a sentence and — on a throttled write — the whole seconds `Retry-After`
+ * reported. A body that is not that envelope still raises a typed error with the real
+ * status and a generic sentence, and no failure ever surfaces a stack trace, a raw body or
+ * a URL.
+ *
+ * **Normalisation.** The shape of a payload is settled here, not in a page: a single
+ * response is the entity it created or read, possibly wrapped under one key; a list read
+ * is a bare array or an `{ items: [...] }` envelope; and the listing payloads' nullable
+ * report fields are `null` rather than absent. A page therefore reads a typed value and
+ * never an unpublished field name.
+ *
+ * This module holds no business rule. It derives no label, no outcome, no count, no amount
+ * and no retest link: an evaluation submission carries the candidate version, the standard
+ * version and one recorded output per case, and every provenance field — including the
+ * label and the prior report a retest points at — arrives from the server. It also
+ * validates no server vocabulary it does not have to construct: the API validates every
+ * request at its edge and this module sends only what the contract fixes.
+ *
+ * The one persistence in the workspace is the selected demo account, in a documented
+ * `sessionStorage` key behind {@link getSelectedDemoAccountId} and
+ * {@link setSelectedDemoAccountId}. Beyond that key there is no cookie, no browser-local
+ * storage, no tracking script and no analytics.
+ */
+
+import {
+  COMPARE_ID_SEPARATOR,
+  COMPARE_MAX_IDS,
+  COMPARE_MIN_IDS,
+  DEMO_ACCOUNT_HEADER,
+  LISTING_PAGE_SIZE,
+  LISTING_STATUSES,
+} from "@adem/shared";
+import type {
+  Appeal,
+  AppealCreateBody,
+  AuditEvent,
+  Category,
+  Challenge,
+  ChallengeCreateBody,
+  ChallengeResponse,
+  ChallengeResponseBody,
+  CheckoutSimulationBody,
+  CompareEntry,
+  CompareResult,
+  EvaluationReportDetail,
+  EvaluationSubmission,
+  FounderAllocationLedgerReadResult,
+  GovernanceEvent,
+  Inquiry,
+  InquiryCreateBody,
+  LedgerEntry,
+  LedgerName,
+  LedgerReadResult,
+  Listing,
+  ListingClaim,
+  ListingCreateBody,
+  ListingDetail,
+  ListingSearchQuery,
+  ListingSearchResult,
+  ListingStatus,
+  ListingSummary,
+  ListingVersion,
+  ListingVersionCreateBody,
+  ModerationAction,
+  OfferModel,
+  PricingModel,
+  RefundCreateBody,
+  ReportCaseResult,
+  ReportLabel,
+  ReportOutcome,
+  SponsoredSlotListItem,
+  SponsoredSlotListResult,
+  Standard,
+  StandardProposal,
+  StandardProposalCreateBody,
+  StandardProposalReviewBody,
+  StandardVersion,
+  Thread,
+  ThreadCreateBody,
+  ThreadPost,
+  ThreadPostBody,
+  Transaction,
+} from "@adem/shared";
+
+/**
+ * The versioned prefix every route in this module is reached under. It is the API's own
+ * version boundary, relative to the page's origin, and it is the whole of this module's
+ * base-URL resolution.
+ */
+const API_BASE_PATH = "/api/v1";
+
+/**
+ * The `sessionStorage` key holding the selected demo account id, and the only persistence
+ * in the workspace. It stores one string — the `accounts.id` a write sends in
+ * {@link DEMO_ACCOUNT_HEADER} — and it holds nothing else: no cookie, no profile, no
+ * preference and no identifier of a person.
+ */
+export const DEMO_ACCOUNT_STORAGE_KEY = "adem.demo-account-id";
+
+/**
+ * The code {@link ApiClientError} carries when no HTTP response was received at all: the
+ * request never reached the service, or the connection failed before a reply. It is this
+ * module's own code, because the API's closed error vocabulary describes responses and
+ * this failure has none, and it exists so a page can tell "the service could not be
+ * reached" from "the service refused this request".
+ */
+export const TRANSPORT_ERROR_CODE = "network_error";
+
+/**
+ * The code carried when a response arrived but could not be read as the shape its contract
+ * fixes — a success body that is not the entity, a list body carrying no array. It reuses
+ * the API's own spelling for a server-side fault because that is what such a response is,
+ * while the status stays the one the response actually had.
+ */
+const UNREADABLE_RESPONSE_CODE = "internal_error";
+
+/** The sentence a write with no demo account selected is refused with. */
+const MISSING_DEMO_ACCOUNT_MESSAGE = `Select a demo account before writing: a write carries the ${DEMO_ACCOUNT_HEADER} header naming a synthetic demo account, which separates roles for the demonstration and is not authentication of any identity.`;
+
+/** The sentence a request that received no HTTP response at all is raised with. */
+const TRANSPORT_ERROR_MESSAGE = "The service could not be reached, so no request was sent.";
+
+/** The sentence a response whose body is not the shape its contract fixes is raised with. */
+const UNREADABLE_RESPONSE_MESSAGE = "The service answered with a response this client could not read.";
+
+/** The sentence used for a client-error response that arrived without the error envelope. */
+const CLIENT_ERROR_MESSAGE = "The request could not be completed as sent.";
+
+/** The sentence used for a server-fault response that arrived without the error envelope. */
+const SERVER_ERROR_MESSAGE = "The request could not be completed.";
+
+/** The sentence used for a throttled write that arrived without the error envelope. */
+const RATE_LIMIT_MESSAGE =
+  "This client has sent the maximum number of writes allowed in a minute. Wait, then try again.";
+
+/**
+ * The code the API answers each status with, restated because the API workspace cannot be
+ * reached from this one. It is consulted only when a failure arrived **without** the
+ * error envelope — a body that was not JSON, or JSON that was not the envelope — so a
+ * conforming failure always yields the code the server chose.
+ */
+const STATUS_FALLBACK_CODES: Readonly<Partial<Record<number, string>>> = Object.freeze({
+  400: "validation_error",
+  401: "unauthorized",
+  403: "forbidden",
+  404: "not_found",
+  409: "conflict",
+  422: "unprocessable",
+  429: "rate_limited",
+  500: "internal_error",
+});
+
+/**
+ * The path segment of each ledger's operator read. The ledger vocabulary spells two of its
+ * members with an underscore while the route spells them with a hyphen, and mapping the
+ * two explicitly is what keeps a URL from being built by rewriting a vocabulary value.
+ */
+const LEDGER_PATH_SEGMENTS: Readonly<Record<LedgerName, string>> = Object.freeze({
+  marketplace: "marketplace",
+  gate_fees: "gate-fees",
+  founder_allocation: "founder-allocation",
+});
+
+/**
+ * The one failure this module raises: the status the request was answered with, the stable
+ * code the API's envelope carries, a sentence a page can render as it stands, and — on a
+ * throttled write — how many whole seconds to wait.
+ *
+ * A page renders `message` and branches on `code` or `status` where it must; it never
+ * inspects a response, a body or a URL, because none of those reaches it. `status` is `0`
+ * only for {@link TRANSPORT_ERROR_CODE}, where no response was received at all, and
+ * `retryAfterSeconds` is non-null only when the response carried a numeric `Retry-After`,
+ * which the write rate limit does.
+ *
+ * The class carries the four facts the contract fixes and nothing else: no request, no
+ * response, no headers and no cause, so a failure cannot leak a URL, a header value or an
+ * unread body into a rendered explanation.
+ */
+export class ApiClientError extends Error {
+  /** The HTTP status of the response, or `0` when no response was received. */
+  readonly status: number;
+
+  /** The stable error code: the envelope's `code`, or one of this module's own. */
+  readonly code: string;
+
+  /** Whole seconds to wait before retrying, or `null` when the response stated none. */
+  readonly retryAfterSeconds: number | null;
+
+  constructor(status: number, code: string, message: string, retryAfterSeconds: number | null = null) {
+    super(message);
+    this.name = "ApiClientError";
+    this.status = status;
+    this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/**
+ * The selected demo account id, held in memory so a page reads it synchronously, and read
+ * from `sessionStorage` on first use so the selection survives a reload within the tab.
+ * `null` means the key is absent, empty or unreadable — a state that refuses a write here
+ * rather than sending one the server would answer `401`.
+ */
+let selectedDemoAccountId: string | null | undefined;
+
+/** The selected account id, or `null` when none is stored. */
+function readStoredDemoAccountId(): string | null {
+  try {
+    const stored = sessionStorage.getItem(DEMO_ACCOUNT_STORAGE_KEY);
+    if (stored === null) {
+      return null;
+    }
+    const trimmed = stored.trim();
+    return trimmed === "" ? null : trimmed;
+  } catch {
+    // Storage can be unavailable or refused (a blocked or partitioned context). The
+    // selection is then simply not persisted: reading yields `null` and writing still
+    // applies in memory for the life of the page.
+    return null;
+  }
+}
+
+/**
+ * The `accounts.id` of the selected demo account, or `null` when none is selected.
+ *
+ * Read from memory, and from the documented `sessionStorage` key on first use. An absent,
+ * empty or unreadable stored value yields `null` rather than throwing, so a page can render
+ * the switcher's unselected state on any browser.
+ */
+export function getSelectedDemoAccountId(): string | null {
+  if (selectedDemoAccountId === undefined) {
+    selectedDemoAccountId = readStoredDemoAccountId();
+  }
+  return selectedDemoAccountId;
+}
+
+/**
+ * Selects the demo account every later write is made as, or clears the selection.
+ *
+ * The value is the `accounts.id` of one of the six synthetic seed accounts; a blank or
+ * empty string clears the selection exactly as `null` does. The selection is applied in
+ * memory at once and persisted to the documented `sessionStorage` key; when storage is
+ * unavailable the in-memory selection still applies and the call is not an error, because
+ * refusing to switch accounts would be a worse failure than not remembering the choice.
+ */
+export function setSelectedDemoAccountId(id: string | null): void {
+  const trimmed = typeof id === "string" ? id.trim() : "";
+  const next = trimmed === "" ? null : trimmed;
+  selectedDemoAccountId = next;
+  try {
+    if (next === null) {
+      sessionStorage.removeItem(DEMO_ACCOUNT_STORAGE_KEY);
+    } else {
+      sessionStorage.setItem(DEMO_ACCOUNT_STORAGE_KEY, next);
+    }
+  } catch {
+    // See `readStoredDemoAccountId`: an unavailable or refused store leaves the in-memory
+    // selection as the effective one.
+  }
+}
+
+/**
+ * The selected account id, or a typed refusal when none is selected.
+ *
+ * This is what makes a write without an account read as an explanation: the request is
+ * never sent, and the raised error carries the `401` and the `unauthorized` code the route
+ * itself would have answered it with.
+ */
+function requireDemoAccountId(): string {
+  const accountId = getSelectedDemoAccountId();
+  if (accountId === null) {
+    throw new ApiClientError(401, "unauthorized", MISSING_DEMO_ACCOUNT_MESSAGE);
+  }
+  return accountId;
+}
+
+/**
+ * What a call in this module works with before normalisation: the response's status and
+ * its parsed body, or `null` when the body was empty or was not JSON.
+ */
+interface ApiResponse {
+  /** The HTTP status the service answered with. */
+  readonly status: number;
+  /** The parsed JSON body, or `null` when there was no body to parse. */
+  readonly payload: unknown;
+}
+
+/** The method of a contract row. Every row this module calls is one of the two. */
+type HttpMethod = "GET" | "POST";
+
+/**
+ * The parts of a request that vary: a read's query, a write's body, and whether the row is
+ * non-public and therefore carries the demo account header.
+ *
+ * Each key is omitted rather than passed as `undefined`, so `exactOptionalPropertyTypes`
+ * makes every call site state which of the three applies.
+ */
+interface SendOptions {
+  /** The serialised query of a read; omitted by every write. */
+  readonly query?: URLSearchParams;
+  /** The request body of a write; omitted by every read. */
+  readonly body?: unknown;
+  /** Whether the route requires the demo account header: every write, and four reads. */
+  readonly demoAccount?: boolean;
+}
+
+/**
+ * Sends one request and resolves with its status and parsed body.
+ *
+ * The request is built here and nowhere else: the versioned base path, the `accept` header,
+ * the JSON content type on a write, and the demo account header — whose value comes from
+ * {@link requireDemoAccountId}, so a request that needs an account is refused here before
+ * anything is sent rather than answered by the server.
+ *
+ * Two failures are raised as {@link ApiClientError} and neither escapes as anything else: a
+ * request that received no response at all, carrying {@link TRANSPORT_ERROR_CODE} and
+ * status `0`, and a non-2xx response, carrying its own status, its envelope's code and
+ * sentence, and the `Retry-After` seconds it stated. A 2xx resolves, whatever its body.
+ */
+async function send(method: HttpMethod, path: string, options: SendOptions = {}): Promise<ApiResponse> {
+  const query = options.query === undefined ? "" : `?${options.query.toString()}`;
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (options.demoAccount === true) {
+    headers[DEMO_ACCOUNT_HEADER] = requireDemoAccountId();
+  }
+  if (options.body !== undefined) {
+    headers["content-type"] = "application/json";
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_PATH}${path}${query}`, {
+      method,
+      headers,
+      body: options.body === undefined ? null : JSON.stringify(options.body),
+    });
+  } catch {
+    throw new ApiClientError(0, TRANSPORT_ERROR_CODE, TRANSPORT_ERROR_MESSAGE);
+  }
+  const payload = await readBody(response);
+  if (!response.ok) {
+    throw errorForResponse(response, payload);
+  }
+  return { status: response.status, payload };
+}
+
+/**
+ * Reads a response body as JSON, yielding `null` when there is nothing to read.
+ *
+ * An empty body and a body that is not JSON both yield `null` rather than throwing: a
+ * failure that answered with `null` is then raised with the status it arrived with and a
+ * generic sentence, which is what the contract asks of a body that is not the envelope.
+ */
+async function readBody(response: Response): Promise<unknown> {
+  let body: string;
+  try {
+    body = await response.text();
+  } catch {
+    return null;
+  }
+  const trimmed = body.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** The API's single failure envelope, as this module reads it. */
+interface ErrorEnvelope {
+  /** The stable code the failure is identified by. */
+  readonly code: string;
+  /** The sentence a page renders as the explanation. */
+  readonly message: string;
+}
+
+/**
+ * Reads `{ error: { code, message } }` from a parsed body, or `null` when the body is not
+ * that envelope.
+ *
+ * Both members must be non-empty strings: an envelope carrying a blank sentence is treated
+ * as no envelope at all, so a page always receives something it can render and never an
+ * empty message.
+ */
+function envelopeOf(payload: unknown): ErrorEnvelope | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const error = payload["error"];
+  if (!isRecord(error)) {
+    return null;
+  }
+  const code = text(error["code"]);
+  const message = text(error["message"]);
+  if (code === "" || message === "") {
+    return null;
+  }
+  return { code, message };
+}
+
+/**
+ * The whole seconds a `Retry-After` header stated, or `null`.
+ *
+ * Parsed defensively, as the throttling contract requires: an absent header, a non-numeric
+ * value and an HTTP-date form all yield `null`, so a page renders its own retry message
+ * rather than an unreadable interval. The write rate limit answers in whole seconds.
+ */
+function parseRetryAfter(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : null;
+}
+
+/** The code to use for a failure that arrived without the envelope — see {@link STATUS_FALLBACK_CODES}. */
+function fallbackCodeFor(status: number): string {
+  return STATUS_FALLBACK_CODES[status] ?? "internal_error";
+}
+
+/** The sentence to use for a failure that arrived without the envelope. */
+function fallbackMessageFor(status: number): string {
+  if (status === 429) {
+    return RATE_LIMIT_MESSAGE;
+  }
+  return status >= 500 ? SERVER_ERROR_MESSAGE : CLIENT_ERROR_MESSAGE;
+}
+
+/**
+ * The typed error a non-2xx response is raised as.
+ *
+ * The envelope's own code and sentence are used wherever the body was that envelope, so a
+ * page renders the server's explanation — the sentence naming the fixture cases a `422`
+ * submission omitted included. A body that was not the envelope yields the status, the code
+ * the API answers that status with, and a generic sentence.
+ */
+function errorForResponse(response: Response, payload: unknown): ApiClientError {
+  const status = response.status;
+  const retryAfterSeconds = parseRetryAfter(response.headers.get("Retry-After"));
+  const envelope = envelopeOf(payload);
+  if (envelope !== null) {
+    return new ApiClientError(status, envelope.code, envelope.message, retryAfterSeconds);
+  }
+  return new ApiClientError(status, fallbackCodeFor(status), fallbackMessageFor(status), retryAfterSeconds);
+}
+
+/**
+ * The typed error a response that cannot be read as its contract's shape is raised with:
+ * the status it actually had, and a sentence that explains the client could not read it.
+ * Raised for a success body that is not the entity it should be and for a list body that
+ * carries no array, so a page shows an explanation rather than failing on an absent field.
+ */
+function unreadableResponse(status: number): ApiClientError {
+  return new ApiClientError(status, UNREADABLE_RESPONSE_CODE, UNREADABLE_RESPONSE_MESSAGE);
+}
+
+
+/**
+ * Whether a value is a JSON object rather than an array, `null` or a primitive. Every read
+ * below goes through it, so a payload of any other kind is handled rather than assumed.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A payload as a record, or `null` when it is not one. */
+function recordOrNull(payload: unknown): Record<string, unknown> | null {
+  return isRecord(payload) ? payload : null;
+}
+
+/** A payload as a record, refusing one that is not — a response with no body to read. */
+function requireRecord(response: ApiResponse): Record<string, unknown> {
+  const record = recordOrNull(response.payload);
+  if (record === null) {
+    throw unreadableResponse(response.status);
+  }
+  return record;
+}
+
+/**
+ * A single-entity response as the entity it created or read.
+ *
+ * Each key names the wrapper a response may put the entity under — `{ listing: { ... } }`
+ * beside a flat `{ ... }` — so the same client reads either form and no page knows which
+ * one the server chose.
+ */
+function entityFrom<T>(response: ApiResponse, keys: readonly string[]): T {
+  const record = requireRecord(response);
+  for (const key of keys) {
+    const nested = record[key];
+    if (isRecord(nested)) {
+      return nested as unknown as T;
+    }
+  }
+  return record as unknown as T;
+}
+
+/**
+ * A list read's rows: a bare array, or the array under one of the keys the read may use.
+ *
+ * The plan fixes the envelope of four list reads and leaves four unnamed, so this accepts
+ * either form and refuses a payload that carries no array at all — an answer with no rows
+ * is `items: []`, which is a state a page renders, while a body with no array is a
+ * response that cannot be read.
+ */
+function requireArray(response: ApiResponse, keys: readonly string[]): unknown[] {
+  if (Array.isArray(response.payload)) {
+    return response.payload;
+  }
+  const record = recordOrNull(response.payload);
+  if (record !== null) {
+    for (const key of keys) {
+      const value = record[key];
+      if (Array.isArray(value)) {
+        return value;
+      }
+    }
+  }
+  throw unreadableResponse(response.status);
+}
+
+/**
+ * A nested collection as an array, and the empty list when it is absent.
+ *
+ * Used for the collections an entity carries — a listing's versions and claims, a report's
+ * per-case evidence. An absent one is the empty state the page already renders for "nothing
+ * recorded yet", never a crash.
+ */
+function arrayOrEmpty(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * The rows of a collection that a standard, a challenge or a thread owns.
+ *
+ * A read may nest a standard's versions, a challenge's responses or a thread's posts inside
+ * the row they belong to, or send them beside the rows as a second array. The nested form
+ * is preferred; the sibling form is grouped by the owner column the sibling row itself
+ * carries, so a page reads the same value under either layout and never the raw shape.
+ */
+function ownedCollection(
+  nested: unknown,
+  siblings: readonly unknown[],
+  ownerField: string,
+  ownerId: string,
+): unknown[] {
+  if (Array.isArray(nested)) {
+    return nested;
+  }
+  if (ownerId === "") {
+    return [];
+  }
+  return siblings.filter((row: unknown): boolean => isRecord(row) && text(row[ownerField]) === ownerId);
+}
+
+/** A value as a string, and the empty string when it is not one. */
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * A value as a string, or `null` when it is absent or blank.
+ *
+ * This is what the listing payloads' report fields are read with: the contract states an
+ * explicit `null` for a version with no report, and this module makes that `null` total so a
+ * page renders the "No SGI report yet" state rather than an absent key.
+ */
+function nullableText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return value.trim() === "" ? null : value;
+}
+
+/** A value as a non-negative whole number, or `null` when it is not one. */
+function integerOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/** A count read from a payload, falling back to a value the request already fixes. */
+function countOr(value: unknown, fallback: number): number {
+  return integerOrNull(value) ?? fallback;
+}
+
+/** A count a response must state — the allocation rate the founder ledger is read with. */
+function requireCount(value: unknown, response: ApiResponse): number {
+  const count = integerOrNull(value);
+  if (count === null) {
+    throw unreadableResponse(response.status);
+  }
+  return count;
+}
+
+/**
+ * A listing status read from a moderation response.
+ *
+ * The closed vocabulary is checked rather than assumed, because this is one of the few
+ * places this module builds a value of its own out of an unshaped payload: an operator who
+ * was told a listing is hidden when it is not would be misled, so a status outside
+ * {@link LISTING_STATUSES} is a response that cannot be read.
+ */
+function listingStatusOf(value: unknown, response: ApiResponse): ListingStatus {
+  const status = text(value);
+  const match = LISTING_STATUSES.find((candidate: ListingStatus): boolean => candidate === status);
+  if (match === undefined) {
+    throw unreadableResponse(response.status);
+  }
+  return match;
+}
+
+/**
+ * Adds one filter to a search query, and nothing when the filter is absent or blank: a
+ * filter a page did not choose is dropped rather than sent empty, which would narrow the
+ * search to nothing.
+ */
+function appendFilter(params: URLSearchParams, name: string, value: string | undefined): void {
+  const filter = text(value).trim();
+  if (filter === "") {
+    return;
+  }
+  params.set(name, filter);
+}
+
+/** The page a search query states, and the first page when it states none. */
+function requestedPage(query: ListingSearchQuery): number {
+  const page = integerOrNull(query.page);
+  return page === null || page < 1 ? 1 : page;
+}
+
+/**
+ * The query of `GET /listings`: the five named filters, the resolved ordering and the
+ * 1-based page, and **no page size**.
+ *
+ * The size is the fixed {@link LISTING_PAGE_SIZE} of the contract and is not a client input,
+ * so no `limit`, `size` or `per_page` is ever sent: an accepted one would turn a fixed page
+ * into a convention a client could ask around.
+ */
+function listingSearchQuery(query: ListingSearchQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  appendFilter(params, "q", query.q);
+  appendFilter(params, "category", query.category);
+  appendFilter(params, "license", query.license);
+  appendFilter(params, "model", query.model);
+  appendFilter(params, "standard", query.standard);
+  appendFilter(params, "sort", query.sort);
+  params.set("page", String(requestedPage(query)));
+  return params;
+}
+
+/**
+ * The query of `GET /compare`: between {@link COMPARE_MIN_IDS} and {@link COMPARE_MAX_IDS}
+ * identifiers joined by {@link COMPARE_ID_SEPARATOR} into the one `ids` token the schema
+ * validates.
+ *
+ * The bound is refused here as well as at the route, so a selection that could not be laid
+ * out side by side never leaves the page; an identifier that is blank or carries the
+ * separator would change the token count the route reads, so it is refused for the same
+ * reason.
+ */
+function compareQuery(ids: readonly string[]): URLSearchParams {
+  const identifiers = ids.map((id: string): string => id.trim());
+  if (identifiers.length < COMPARE_MIN_IDS || identifiers.length > COMPARE_MAX_IDS) {
+    throw new ApiClientError(
+      400,
+      "validation_error",
+      `A comparison shows between ${COMPARE_MIN_IDS} and ${COMPARE_MAX_IDS} listings; ${identifiers.length} were selected.`,
+    );
+  }
+  for (const identifier of identifiers) {
+    if (identifier === "" || identifier.includes(COMPARE_ID_SEPARATOR)) {
+      throw new ApiClientError(
+        400,
+        "validation_error",
+        "A comparison can only name listing identifiers, and one selection was empty or carried the separator.",
+      );
+    }
+  }
+  const params = new URLSearchParams();
+  params.set("ids", identifiers.join(COMPARE_ID_SEPARATOR));
+  return params;
+}
+
+/** A category as a page renders it, with every member present. */
+function normalizeCategory(value: unknown): Category {
+  const record = recordOrNull(value) ?? {};
+  return {
+    id: text(record["id"]),
+    slug: text(record["slug"]),
+    name: text(record["name"]),
+  };
+}
+
+/**
+ * One search result as the listings page reads it: every text member a string, the category
+ * resolved, and the report provenance an explicit `null` when the listing's latest version
+ * has no report.
+ *
+ * This is where a page stops depending on the wire: whether the payload spelled a missing
+ * report field as `null` or omitted it, the value a card receives is the same
+ * {@link ListingSummary}.
+ */
+function normalizeListingSummary(value: unknown): ListingSummary {
+  const record = recordOrNull(value) ?? {};
+  return {
+    id: text(record["id"]),
+    slug: text(record["slug"]),
+    title: text(record["title"]),
+    summary: text(record["summary"]),
+    developer_handle: text(record["developer_handle"]),
+    category: normalizeCategory(record["category"]),
+    pricing_model: record["pricing_model"] as PricingModel,
+    license_code: text(record["license_code"]),
+    version_string: text(record["version_string"]),
+    outcome: nullableText(record["outcome"]) as ReportOutcome | null,
+    standard_version_id: nullableText(record["standard_version_id"]),
+    label: nullableText(record["label"]) as ReportLabel | null,
+    limitation: nullableText(record["limitation"]),
+  };
+}
+
+/**
+ * One listing's detail as the listing page reads it: the report provenance and the resolved
+ * category as above, and its version history, claims and offer models as arrays — the empty
+ * list when the response carried none, which is the state the page renders for a listing
+ * with nothing published yet.
+ */
+function normalizeListingDetail(response: ApiResponse): ListingDetail {
+  const record = requireRecord(response);
+  return {
+    ...(record as unknown as ListingDetail),
+    developer_handle: text(record["developer_handle"]),
+    category: normalizeCategory(record["category"]),
+    versions: arrayOrEmpty(record["versions"]) as ListingVersion[],
+    claims: arrayOrEmpty(record["claims"]) as ListingClaim[],
+    report_id: nullableText(record["report_id"]),
+    outcome: nullableText(record["outcome"]) as ReportOutcome | null,
+    standard_version_id: nullableText(record["standard_version_id"]),
+    label: nullableText(record["label"]) as ReportLabel | null,
+    offer_models: arrayOrEmpty(record["offer_models"]) as OfferModel[],
+  };
+}
+
+/**
+ * One column of a comparison: the same normalisation as a search result, with the claims and
+ * the collected limitations as arrays, so a side-by-side table renders a listing that states
+ * no limitation as one that states none rather than as one that failed to load.
+ */
+function normalizeCompareEntry(value: unknown): CompareEntry {
+  const record = recordOrNull(value) ?? {};
+  return {
+    listing_id: text(record["listing_id"]),
+    title: text(record["title"]),
+    claims: arrayOrEmpty(record["claims"]) as ListingClaim[],
+    report_id: nullableText(record["report_id"]),
+    outcome: nullableText(record["outcome"]) as ReportOutcome | null,
+    standard_version_id: nullableText(record["standard_version_id"]),
+    label: nullableText(record["label"]) as ReportLabel | null,
+    limitations: arrayOrEmpty(record["limitations"]).map(text),
+    license_code: text(record["license_code"]),
+    pricing_model: record["pricing_model"] as PricingModel,
+  };
+}
+
+/** The record a report is carried in, whether the response nests it or sends it flat. */
+function reportRecord(response: ApiResponse): Record<string, unknown> {
+  const record = requireRecord(response);
+  for (const key of ["evaluation_report", "report"]) {
+    const nested = record[key];
+    if (isRecord(nested)) {
+      return nested;
+    }
+  }
+  return record;
+}
+
+/**
+ * One report as the report page reads it: the stored report exactly as it arrived, with its
+ * per-case evidence an array — the empty list when the response carried none.
+ *
+ * Nothing here is derived. The outcome, the counts, the label, the rubric reference and the
+ * prior report a retest points at all arrive from the server, which is what keeps the report
+ * a record of what was measured rather than a computation of this client's.
+ */
+function normalizeReportDetail(response: ApiResponse): EvaluationReportDetail {
+  const record = reportRecord(response);
+  return {
+    ...(record as unknown as EvaluationReportDetail),
+    case_results: arrayOrEmpty(record["case_results"]) as ReportCaseResult[],
+  };
+}
+
+/**
+ * One row of the public challenges board: the challenge, with the responses it has collected
+ * as an array. An unanswered challenge carries the empty list, which is the state the board
+ * renders for a question no one has answered yet.
+ */
+export interface ChallengeListItem extends Challenge {
+  /** The responses the challenge has collected, in the order they were written. */
+  readonly responses: readonly ChallengeResponse[];
+}
+
+/**
+ * One row of the public discussion board: the thread, with its posts as an array. A thread
+ * with no replies carries the empty list rather than an absent key.
+ */
+export interface ThreadListItem extends Thread {
+  /** The posts the thread has collected, in the order they were written. */
+  readonly posts: readonly ThreadPost[];
+}
+
+/**
+ * One row of the standards catalogue: the standard, with the versions published under it and
+ * the proposals made against it as arrays.
+ *
+ * The thresholds a version carries are what the standards page renders, and a proposal's
+ * status is what the review trail is read from, so both collections are present here even
+ * when empty — a standard with no proposal yet is an ordinary state.
+ */
+export interface StandardListItem extends Standard {
+  /** The versions published under this standard, newest first. */
+  readonly versions: readonly StandardVersion[];
+  /** The proposals made against this standard, in the order they were submitted. */
+  readonly proposals: readonly StandardProposal[];
+}
+
+/**
+ * The body of `POST /moderation/listings/{id}/actions`: one action from
+ * {@link MODERATION_ACTIONS} and the reason it is taken, which the contract requires and
+ * records as an appended governance event.
+ */
+export interface ListingModerationBody {
+  /** The action the operator applies: `flag`, `hide` or `restore`. */
+  readonly action: ModerationAction;
+  /** The operator's stated reason, recorded with the appended event. */
+  readonly reason: string;
+}
+
+/**
+ * What a moderation action answers with: the listing's new status and the governance event
+ * the route appended.
+ *
+ * The event is what makes the operator's decision auditable, and it is read from the
+ * response because the record of the decision is append-only: the listing's status is a
+ * column that moves, while the reason behind it is an event that never changes. `event` is
+ * `null` only when the response carried none.
+ */
+export interface ListingModerationResult {
+  /** The listing the action was applied to. */
+  readonly listing_id: string;
+  /** The listing's status after the action, one of {@link LISTING_STATUSES}. */
+  readonly status: ListingStatus;
+  /** The governance event the route appended, or `null` when the response carried none. */
+  readonly event: GovernanceEvent | null;
+}
+
+
+/**
+ * `GET /listings?q&category&license&model&standard&sort&page` (public).
+ *
+ * The five filters are optional and a blank one is not sent, `sort` and `page` are resolved
+ * before the request, and the page size is the contract's fixed {@link LISTING_PAGE_SIZE} —
+ * never a parameter, and the one thing this read checks on the way back: a page carrying
+ * more rows than the fixed size would silently break paging, so it is refused rather than
+ * rendered.
+ *
+ * An empty result is a result: `items: []` is returned as it arrived, because no listing
+ * matching a search is an ordinary state the listings page renders with the filters that
+ * produced it.
+ *
+ * Raises {@link ApiClientError} for `400` (a parameter the query schema rejects) and for a
+ * response that carries no rows to read.
+ */
+export async function listListings(query: ListingSearchQuery): Promise<ListingSearchResult> {
+  const response = await send("GET", "/listings", { query: listingSearchQuery(query) });
+  const items = requireArray(response, ["items"]).map(normalizeListingSummary);
+  if (items.length > LISTING_PAGE_SIZE) {
+    throw new ApiClientError(
+      response.status,
+      UNREADABLE_RESPONSE_CODE,
+      `A listing search answers with at most ${LISTING_PAGE_SIZE} results, and this response carried more.`,
+    );
+  }
+  const record = recordOrNull(response.payload);
+  return {
+    items,
+    total: record === null ? items.length : countOr(record["total"], items.length),
+    page: record === null ? requestedPage(query) : countOr(record["page"], requestedPage(query)),
+  };
+}
+
+/**
+ * `GET /listings/{id}` (public): one listing with its version history, its claims and
+ * limitations, the report its latest version carries and the offer models it makes.
+ *
+ * Raises {@link ApiClientError} for `404` — an unknown or removed listing, including a
+ * hidden one, which the listing page renders as its absent state — and for a response whose
+ * body cannot be read as a listing.
+ */
+export async function getListing(id: string): Promise<ListingDetail> {
+  const response = await send("GET", `/listings/${encodeURIComponent(id)}`);
+  return normalizeListingDetail(response);
+}
+
+/**
+ * `GET /compare?ids=a,b,c` (public): two to four listings side by side, each with its
+ * claims, the evidence measured against its latest version, the standard version and the
+ * label of that evidence, its stated limitations, its license and its pricing model.
+ *
+ * The columns follow the order the caller named them in. A selection outside
+ * {@link COMPARE_MIN_IDS}..{@link COMPARE_MAX_IDS} is refused here before anything is sent,
+ * with the `400` the route would have answered it with.
+ *
+ * Raises {@link ApiClientError} for `400` (a selection the schema rejects), `404` (an
+ * identifier naming no listing) and a response carrying no entries.
+ */
+export async function compareListings(ids: readonly string[]): Promise<CompareResult> {
+  const response = await send("GET", "/compare", { query: compareQuery(ids) });
+  return { entries: requireArray(response, ["entries"]).map(normalizeCompareEntry) };
+}
+
+/**
+ * `POST /listings` (developer): publishes a listing that is immediately `active`.
+ *
+ * The owning developer comes from the selected demo account, never from the body, and the
+ * slug and status are the server's. Raises {@link ApiClientError} for `401` when no demo
+ * account is selected or the selected one cannot be resolved, `403` when the resolved
+ * account is not a developer, and `400` for a body the schema rejects.
+ */
+export async function createListing(body: ListingCreateBody): Promise<Listing> {
+  const response = await send("POST", "/listings", { body, demoAccount: true });
+  return entityFrom<Listing>(response, ["listing"]);
+}
+
+/**
+ * `POST /listings/{id}/versions` (owning developer): publishes a version of a listing the
+ * selected developer account owns.
+ *
+ * A version is append-only: a correction is a new version, and an evaluation always names
+ * the version it measured. A `409` means this listing has already published this version
+ * string, which is a field-level explanation rather than a fault of the request as a whole.
+ *
+ * Raises {@link ApiClientError} for `400` (a version string the pattern rejects), `404` (an
+ * unknown listing), `409` (a duplicate version string), `401` and `403`.
+ */
+export async function createVersion(
+  listingId: string,
+  body: ListingVersionCreateBody,
+): Promise<ListingVersion> {
+  const response = await send("POST", `/listings/${encodeURIComponent(listingId)}/versions`, {
+    body,
+    demoAccount: true,
+  });
+  return entityFrom<ListingVersion>(response, ["listing_version", "version"]);
+}
+
+/**
+ * `POST /evaluations` (developer, owner of the candidate version): the deterministic,
+ * synchronous evaluation that writes a report.
+ *
+ * The body is the candidate version, the standard version and one recorded output per
+ * fixture case — nothing is executed, and the body carries **no retest field**: the link to
+ * a prior report is the server's to derive, and the label and the prior report both arrive
+ * in the response.
+ *
+ * Raises {@link ApiClientError} for `400` (a malformed submission), `404` (an unknown
+ * version or standard), `422` (a submission that records no output for a fixture case,
+ * whose sentence names the missing case identifiers) and `403` when the selected developer
+ * does not own the candidate version.
+ */
+export async function createEvaluation(body: EvaluationSubmission): Promise<EvaluationReportDetail> {
+  const response = await send("POST", "/evaluations", { body, demoAccount: true });
+  return normalizeReportDetail(response);
+}
+
+/**
+ * `GET /evaluations/{id}` (public): one report with its per-case evidence.
+ *
+ * This is the read the report page is served from, and the route the `/reports/:id` address
+ * maps to — the mapping lives here so no page builds an API URL. Reading a report needs no
+ * demo account: anyone may read any report and its evidence.
+ *
+ * Raises {@link ApiClientError} for `404` (an unknown report) and for a response that cannot
+ * be read as a report.
+ */
+export async function getReport(reportId: string): Promise<EvaluationReportDetail> {
+  const response = await send("GET", `/evaluations/${encodeURIComponent(reportId)}`);
+  return normalizeReportDetail(response);
+}
+
+/**
+ * `POST /evaluations/{id}/appeals` (developer): opens an appeal against a report with a
+ * stated reason.
+ *
+ * The report comes from the path and the ground for contesting it from the body. An appeal
+ * never changes the report it concerns: a ruling appends a governance event, and
+ * `GET /evaluations/{id}` returns the identical report afterwards.
+ *
+ * Raises {@link ApiClientError} for `404` (an unknown report), `401`, `403` — the selected
+ * account is not a developer, or does not own the report — and `400`.
+ */
+export async function openAppeal(reportId: string, body: AppealCreateBody): Promise<Appeal> {
+  const response = await send("POST", `/evaluations/${encodeURIComponent(reportId)}/appeals`, {
+    body,
+    demoAccount: true,
+  });
+  return entityFrom<Appeal>(response, ["appeal"]);
+}
+
+/**
+ * `POST /inquiries` (buyer): sends a buyer's inquiry about a listing.
+ *
+ * The buyer's identity comes from the selected demo account and the listing from the body.
+ * An inquiry carries a message on a listing and nothing else, so no contact detail, payment
+ * detail or financial information is collected or sent.
+ *
+ * Raises {@link ApiClientError} for `400` (a malformed body), `404` (an unknown listing),
+ * `401`, and `403` when the resolved account is not a buyer.
+ */
+export async function createInquiry(body: InquiryCreateBody): Promise<Inquiry> {
+  const response = await send("POST", "/inquiries", { body, demoAccount: true });
+  return entityFrom<Inquiry>(response, ["inquiry"]);
+}
+
+
+/**
+ * One row of a list read as the entity it is: the row itself when it is an object, and an
+ * empty value when it is not, so normalising a row never throws on a payload that is not
+ * shaped like the row it should be.
+ */
+function entityRow<T>(raw: unknown): T {
+  return (isRecord(raw) ? raw : {}) as unknown as T;
+}
+
+/**
+ * `GET /challenges` (public): the challenges board, each challenge with the responses it has
+ * collected.
+ *
+ * The responses are returned with their challenge under either layout the read may use —
+ * nested in the row, or beside the rows as a second collection grouped by the `challenge_id`
+ * each response carries — so the board never reads a raw shape. A challenge with no response
+ * yet carries the empty list.
+ *
+ * Raises {@link ApiClientError} for a response that carries no challenges to read.
+ */
+export async function listChallenges(): Promise<ChallengeListItem[]> {
+  const response = await send("GET", "/challenges");
+  const payload = recordOrNull(response.payload);
+  const siblings = payload === null ? [] : arrayOrEmpty(payload["responses"]);
+  return requireArray(response, ["items", "challenges"]).map((raw: unknown): ChallengeListItem => {
+    const record = recordOrNull(raw) ?? {};
+    return {
+      ...entityRow<Challenge>(raw),
+      responses: ownedCollection(
+        record["responses"],
+        siblings,
+        "challenge_id",
+        text(record["id"]),
+      ) as ChallengeResponse[],
+    };
+  });
+}
+
+/**
+ * `POST /challenges` (buyer): asks a question about a listing on the public board.
+ *
+ * The buyer's identity comes from the selected demo account and the listing from the body.
+ * Raises {@link ApiClientError} for `400` (a malformed body), `404` (an unknown listing),
+ * `401` and `403` when the resolved account is not a buyer.
+ */
+export async function createChallenge(body: ChallengeCreateBody): Promise<Challenge> {
+  const response = await send("POST", "/challenges", { body, demoAccount: true });
+  return entityFrom<Challenge>(response, ["challenge"]);
+}
+
+/**
+ * `POST /challenges/{id}/responses` (buyer or developer): answers a challenge.
+ *
+ * Either the buyer who asked the question or the listing's developer may respond, which is
+ * why this row is not role-checked beyond the demo account resolving. Answering moves the
+ * challenge from `open` to `responded`; the question itself is never rewritten.
+ *
+ * Raises {@link ApiClientError} for `400` (a malformed body), `404` (an unknown challenge)
+ * and `401`.
+ */
+export async function respondToChallenge(
+  challengeId: string,
+  body: ChallengeResponseBody,
+): Promise<ChallengeResponse> {
+  const response = await send("POST", `/challenges/${encodeURIComponent(challengeId)}/responses`, {
+    body,
+    demoAccount: true,
+  });
+  return entityFrom<ChallengeResponse>(response, ["challenge_response", "response"]);
+}
+
+/**
+ * `GET /threads` (public): the discussion board, each thread with the posts it has collected.
+ *
+ * The posts come back with their thread under either layout the read may use — nested in the
+ * row, or beside the rows as a second collection grouped by the `thread_id` each post
+ * carries. A thread with no reply yet carries the empty list, which is the state the board
+ * renders rather than an absent key.
+ *
+ * Raises {@link ApiClientError} for a response that carries no threads to read.
+ */
+export async function listThreads(): Promise<ThreadListItem[]> {
+  const response = await send("GET", "/threads");
+  const payload = recordOrNull(response.payload);
+  const siblings = payload === null ? [] : arrayOrEmpty(payload["posts"]);
+  return requireArray(response, ["items", "threads"]).map((raw: unknown): ThreadListItem => {
+    const record = recordOrNull(raw) ?? {};
+    return {
+      ...entityRow<Thread>(raw),
+      posts: ownedCollection(record["posts"], siblings, "thread_id", text(record["id"])) as ThreadPost[],
+    };
+  });
+}
+
+/**
+ * `POST /threads` (any resolvable demo account): starts a thread on the discussion board.
+ *
+ * The author comes from the selected demo account, so no role check applies beyond the
+ * account resolving. Raises {@link ApiClientError} for `400` (a malformed body) and `401`.
+ */
+export async function createThread(body: ThreadCreateBody): Promise<Thread> {
+  const response = await send("POST", "/threads", { body, demoAccount: true });
+  return entityFrom<Thread>(response, ["thread"]);
+}
+
+/**
+ * `POST /threads/{id}/posts` (any resolvable demo account): replies on a thread.
+ *
+ * A post is append-only: no route updates or deletes one. Raises {@link ApiClientError} for
+ * `400` (a malformed body), `404` (an unknown thread) and `401`.
+ */
+export async function createPost(threadId: string, body: ThreadPostBody): Promise<ThreadPost> {
+  const response = await send("POST", `/threads/${encodeURIComponent(threadId)}/posts`, {
+    body,
+    demoAccount: true,
+  });
+  return entityFrom<ThreadPost>(response, ["thread_post", "post"]);
+}
+
+
+
+/**
+ * `GET /standards` (public): the standards catalogue, each standard with the versions
+ * published under it and the proposals made against it.
+ *
+ * The versions and proposals come back with their standard under either layout the read may
+ * use — nested in the row, or beside the rows as second collections grouped by the
+ * `standard_id` each version and each proposal carries. Both collections are present and
+ * empty when there is nothing to show, so the standards page renders a version's provisional
+ * thresholds and a proposal's review status without reading the wire, and a standard with no
+ * proposal yet renders that as an ordinary state rather than an absent key.
+ *
+ * Raises {@link ApiClientError} for a response that carries no standards to read.
+ */
+export async function listStandards(): Promise<StandardListItem[]> {
+  const response = await send("GET", "/standards");
+  const payload = recordOrNull(response.payload);
+  const versions = payload === null ? [] : arrayOrEmpty(payload["versions"]);
+  const proposals = payload === null ? [] : arrayOrEmpty(payload["proposals"]);
+  return requireArray(response, ["items", "standards"]).map((raw: unknown): StandardListItem => {
+    const record = recordOrNull(raw) ?? {};
+    const standardId = text(record["id"]);
+    return {
+      ...entityRow<Standard>(raw),
+      versions: ownedCollection(record["versions"], versions, "standard_id", standardId) as StandardVersion[],
+      proposals: ownedCollection(
+        record["proposals"],
+        proposals,
+        "standard_id",
+        standardId,
+      ) as StandardProposal[],
+    };
+  });
+}
+
+/**
+ * `GET /standards/{id}/versions/{v}` (public): one published version of a standard, with the
+ * thresholds the evaluator read and the rubric reference a report cites.
+ *
+ * The identifier is the standard's row id or the contract label `SGI-SO-1.0.0`, both of
+ * which the standards page uses. Raises {@link ApiClientError} for `404` — `unknown_standard`
+ * for an identifier naming no standard, and `not_found` for a version it does not publish —
+ * and for a response that cannot be read as a version.
+ */
+export async function getStandardVersion(standardId: string, version: string): Promise<StandardVersion> {
+  const response = await send(
+    "GET",
+    `/standards/${encodeURIComponent(standardId)}/versions/${encodeURIComponent(version)}`,
+  );
+  return entityFrom<StandardVersion>(response, ["standard_version", "version"]);
+}
+
+/**
+ * `POST /standards/proposals` (contributor): submits a proposal to change a standard.
+ *
+ * The row is created `submitted`: `status` is not a client field, and the only route that
+ * moves it is the operator review below. Raises {@link ApiClientError} for `400` (a malformed
+ * body), `404` (an identifier naming no standard), `401`, and `403` when the resolved account
+ * is not a contributor.
+ */
+export async function submitProposal(body: StandardProposalCreateBody): Promise<StandardProposal> {
+  const response = await send("POST", "/standards/proposals", { body, demoAccount: true });
+  return entityFrom<StandardProposal>(response, ["standard_proposal", "proposal"]);
+}
+
+/**
+ * `POST /standards/proposals/{id}/review` (operator): rules a proposal `accepted` or
+ * `rejected` and appends a governance event.
+ *
+ * The review moves the proposal's status and never rewrites its title or rationale, so the
+ * reasoning a decision answered stays readable afterwards. Raises {@link ApiClientError} for
+ * `400` (a status outside the review vocabulary), `404` (an unknown proposal), `409`
+ * (`already_decided`, a proposal that already carries a terminal status) and `403` when the
+ * resolved account is not an operator.
+ */
+export async function reviewProposal(
+  proposalId: string,
+  body: StandardProposalReviewBody,
+): Promise<StandardProposal> {
+  const response = await send("POST", `/standards/proposals/${encodeURIComponent(proposalId)}/review`, {
+    body,
+    demoAccount: true,
+  });
+  return entityFrom<StandardProposal>(response, ["standard_proposal", "proposal"]);
+}
+
+/**
+ * `POST /checkout-simulations` (buyer): runs the simulated purchase of an offer model a
+ * listing makes.
+ *
+ * The amount is never a client input — it comes from the offer model the listing offers — and
+ * the transaction that comes back states `simulated: true`, carries the synthetic currency
+ * label and carries the disclosure label every simulated amount must render with. No real
+ * payment exists anywhere in this flow, so there is no provider, no card field and no
+ * currency symbol to show.
+ *
+ * Raises {@link ApiClientError} for `400` (a malformed body), `404` (an unknown listing or
+ * version), `422` (`not_offered`, an offer model this listing does not make), `401` and `403`
+ * when the resolved account is not a buyer.
+ */
+export async function createCheckoutSimulation(body: CheckoutSimulationBody): Promise<Transaction> {
+  const response = await send("POST", "/checkout-simulations", { body, demoAccount: true });
+  return entityFrom<Transaction>(response, ["transaction"]);
+}
+
+/**
+ * `POST /transactions/{id}/refunds` (operator): refunds a simulated transaction, in whole or
+ * in part.
+ *
+ * The answer is the reversal entries the refund appended, in the order they were written: a
+ * refund appends to the ledger and edits nothing, so the transaction, its allocation and
+ * every earlier entry stay exactly as they were and the net position is read from the
+ * entries rather than stored.
+ *
+ * Raises {@link ApiClientError} for `400` (`invalid_amount`, a negative or non-integer
+ * amount), `404` (`transaction_not_found`), `409` (`already_fully_refunded`), `422`
+ * (`exceeds_net_remaining`, an amount larger than the transaction's net remaining) and `403`
+ * when the resolved account is not an operator.
+ */
+export async function refundTransaction(
+  transactionId: string,
+  body: RefundCreateBody,
+): Promise<LedgerEntry[]> {
+  const response = await send("POST", `/transactions/${encodeURIComponent(transactionId)}/refunds`, {
+    body,
+    demoAccount: true,
+  });
+  return requireArray(response, ["entries", "items"]) as LedgerEntry[];
+}
+
+/**
+ * `GET /ledger/marketplace`, `GET /ledger/gate-fees` and `GET /ledger/founder-allocation`
+ * (operator): one of the three append-only ledgers, in insertion order.
+ *
+ * The three keep separate meaning, not merely separate rows: a gate-evaluation fee is
+ * recorded in the gate-fee ledger only and is never eligible for an allocation, and the
+ * founder allocation applies to the net amount of an eligible completed simulated
+ * marketplace transaction and to nothing else. The `ledger` returned is the ledger that was
+ * requested, and the entries are read from those the response carried — an unused ledger
+ * answers with the empty list, which is a state and not a failure.
+ *
+ * The founder-allocation read additionally states the configured rate its entries were
+ * computed from, and an amount cannot be presented without it: the read requires the rate
+ * rather than defaulting it, so a ledger view never shows an allocation beside a rate it did
+ * not actually use.
+ *
+ * These are the operator-only reads, which is why this is one of the four reads that carries
+ * the demo account header. Raises {@link ApiClientError} for `403` when the resolved account
+ * is not an operator and for a response whose ledger body cannot be read.
+ */
+export async function listLedger(
+  ledger: LedgerName,
+): Promise<LedgerReadResult | FounderAllocationLedgerReadResult> {
+  const response = await send("GET", `/ledger/${LEDGER_PATH_SEGMENTS[ledger]}`, { demoAccount: true });
+  const record = requireRecord(response);
+  const entries = arrayOrEmpty(record["entries"]) as LedgerEntry[];
+  if (ledger === "founder_allocation") {
+    return {
+      ledger,
+      entries,
+      rate_basis_points: requireCount(record["rate_basis_points"], response),
+    };
+  }
+  return { ledger, entries };
+}
+
+/**
+ * `POST /moderation/listings/{id}/actions` (operator): flags, hides or restores a listing,
+ * with a stated reason.
+ *
+ * The action moves the listing's status — `hide` removes it from browse while the operator
+ * still reads it with its history, `restore` returns it, and `flag` records a concern without
+ * changing whether it is visible — and appends a governance event carrying the reason. No
+ * action rewrites anything: not a report, not a standard version, not a ledger entry and not
+ * the listing's own past events, which is what keeps an operator's power additive and keeps a
+ * measurement out of its reach.
+ *
+ * Raises {@link ApiClientError} for `400` (a missing action or reason, or an action outside
+ * {@link MODERATION_ACTIONS}), `404` (an unknown listing), `401`, `403` when the resolved
+ * account is not an operator, and for a response that states no listing status.
+ */
+export async function moderateListing(
+  listingId: string,
+  body: ListingModerationBody,
+): Promise<ListingModerationResult> {
+  const response = await send(
+    "POST",
+    `/moderation/listings/${encodeURIComponent(listingId)}/actions`,
+    { body, demoAccount: true },
+  );
+  const record = requireRecord(response);
+  const listing = isRecord(record["listing"]) ? record["listing"] : record;
+  const resolvedId = text(listing["id"]);
+  const event = record["event"];
+  return {
+    listing_id: resolvedId === "" ? listingId : resolvedId,
+    status: listingStatusOf(listing["status"], response),
+    event: isRecord(event) ? (event as unknown as GovernanceEvent) : null,
+  };
+}
+
+/**
+ * `GET /sponsored-slots` (public): the limited sponsorship demonstration, as its own labelled
+ * collection.
+ *
+ * Each item carries `sponsored: true`, and the block it fills is rendered below a page's
+ * organic results and never interleaved with them. Nothing here measures a reader: no slot
+ * holds an identifier of a person seen or a count of views, and no sponsorship reaches a
+ * measurement, a badge or the organic order. An empty collection is a complete answer — the
+ * pages that render this block render nothing when it is empty — so a body carrying no items
+ * yields the empty list rather than an error, and a sponsorship read can never blank the page
+ * it appears on.
+ */
+export async function listSponsoredSlots(): Promise<SponsoredSlotListResult> {
+  const response = await send("GET", "/sponsored-slots");
+  const payload = response.payload;
+  const items = Array.isArray(payload) ? payload : arrayOrEmpty(recordOrNull(payload)?.["items"]);
+  return { items: items as SponsoredSlotListItem[] };
+}
+
+/**
+ * `GET /audit-events` (operator): the append-only feed of what was written — the actor, the
+ * action, the resource, the status and the reason, in the order the writes happened.
+ *
+ * This is the feed of what was *written*; the governance events behind a moderation action, a
+ * proposal review or an appeal ruling are the feed of what was *decided*. Neither substitutes
+ * for the other and neither is ever amended.
+ *
+ * This is one of the four operator-only reads, so it carries the demo account header. Raises
+ * {@link ApiClientError} for `403` when the resolved account is not an operator and for a
+ * response that carries no events to read.
+ */
+export async function listAuditEvents(): Promise<AuditEvent[]> {
+  const response = await send("GET", "/audit-events", { demoAccount: true });
+  return requireArray(response, ["items", "audit_events"]) as AuditEvent[];
+}
+
+/*
+ * `POST /appeals/{id}/ruling` (operator) is a row of the API contract table and is the one
+ * row this module deliberately does not call. It appears in neither the plan's list of this
+ * client's functions nor its page tables, so no surface here consumes an appeal ruling — the
+ * operator's ruling is exercised where the immutability guarantee is proved, in
+ * `apps/api/test/integration/immutability.test.ts`, which asserts that a ruling appends a
+ * governance event while `GET /evaluations/{id}` returns the appealed report unchanged. An
+ * appeal is opened through `openAppeal` above; a ruling is not this client's to send.
+ */
+
