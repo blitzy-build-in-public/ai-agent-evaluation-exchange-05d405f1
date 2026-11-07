@@ -1395,7 +1395,11 @@ input[type="radio"] {
   color: var(--color-danger-text);
 }
 
+/* The destructive variant's text is laid on the danger fill, so its hover rule restates that
+   fill: .button:hover's light surface would otherwise leave white text on a near-white
+   background, at roughly 1:1. The primary variant restates its fill above for the same reason. */
 .button--destructive:hover {
+  background-color: var(--color-danger-surface);
   border-color: var(--color-heading);
 }
 
