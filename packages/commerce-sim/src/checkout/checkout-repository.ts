@@ -6,7 +6,7 @@
  * A transaction accepts exactly one kind of write — a newly inserted row — so no statement in this
  * module carries an upsert clause, and this module never updates and never deletes. `INSERT OR
  * REPLACE` is refused here for a reason worth knowing rather than as a style preference: its replace
- * path removes the existing row, which bypasses the `DELETE` trigger that
+ * path removes the existing row, which bypasses the row-removal trigger that
  * `packages/shared/migrations/0010_append_only_triggers.sql` places on this table. `transactions` is
  * one of the nine append-only tables, the guarantee is that no route offers a mutation, and the
  * trigger stands behind that guarantee as defence in depth rather than as a security boundary.

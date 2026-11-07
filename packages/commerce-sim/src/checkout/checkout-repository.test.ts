@@ -146,6 +146,31 @@ function transactionInput(offerModel: OfferModel, amountMinorUnits: number): Tra
   };
 }
 
+/**
+ * Inserts one transaction row with a currency label of the caller's choosing, bypassing the writer
+ * under test. It is an INSERT — the only kind of write this table accepts — and it exists to probe
+ * the column's own guard rather than to offer a second write path.
+ */
+function insertWithCurrencyLabel(currencyLabel: string): void {
+  db.prepare(
+    `INSERT INTO transactions
+       (id, buyer_account_id, listing_id, listing_version_id, offer_model,
+        amount_minor_units, currency_label, simulated, disclosure_label, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    '1f4b7a09-2c58-4d63-9e07-3a8f6b1d4c52',
+    BUYER_ACCOUNT_ID,
+    LISTING_ID,
+    LISTING_VERSION_ID,
+    'purchase',
+    10000,
+    currencyLabel,
+    1,
+    COMMERCE_DISCLOSURE_LABEL,
+    FIXTURE_INSTANT,
+  );
+}
+
 /** Every stored row, as the table holds it. */
 function storedRows(): StoredTransactionRow[] {
   return db
@@ -249,6 +274,11 @@ describe('getTransaction', () => {
     expect(read).toEqual(written);
     expect(read?.simulated).toBe(true);
     expect(typeof read?.simulated).toBe('boolean');
+    // The column holds the integer, not the boolean: SQLite has no boolean type, so
+    // `simulated INTEGER NOT NULL DEFAULT 1 CHECK (simulated = 1)` comes back as `1` through a raw
+    // statement. That is exactly why `getTransaction` restores the `true` the row type and the
+    // checkout contract's payload declare — a raw row passed on would hand a caller `1` where the
+    // contract says `true`.
     expect(storedRow(written.id)?.simulated).toBe(1);
   });
 
@@ -262,9 +292,28 @@ describe('getTransaction', () => {
     expect(read?.offer_model).toBe(model);
     expect(read?.amount_minor_units).toBe(amount);
     expect(read?.amount_minor_units).toBeTypeOf('number');
+    // A whole count of minor units, never a fractional amount: the read path converts nothing, so
+    // this is the value the caller supplied arriving back as the integer it was.
+    expect(Number.isInteger(read?.amount_minor_units)).toBe(true);
   });
 
   it('returns null for an identifier no row carries', () => {
     expect(getTransaction(db, 'd84a1e60-5c3b-4f92-b716-0e2f8a4c93d1')).toBeNull();
+  });
+});
+
+describe('the stored table', () => {
+  it('refuses a currency label other than the one synthetic label', () => {
+    // The refusal is the column's own guard — `currency_label TEXT NOT NULL CHECK (currency_label =
+    // 'DEMO')` in packages/shared/migrations/0008_commerce_ledgers_and_refunds.sql — rather than a
+    // condition this package's code applies, so a real currency code cannot enter this table even
+    // through a statement that never reaches the writer under test.
+    expect(() => insertWithCurrencyLabel('USD')).toThrow(
+      /CHECK constraint failed: currency_label = 'DEMO'/,
+    );
+
+    // The refused row is absent: the constraint rejects the statement rather than storing it and
+    // reporting afterwards.
+    expect(storedRows()).toHaveLength(0);
   });
 });
