@@ -1,5 +1,6 @@
 /**
- * Unit tests for the appeal-opening writer.
+ * Unit tests for the appeal-opening writer: `openAppeal`, with the two refusals it raises,
+ * `ReportNotFoundError` and `InvalidAppealError`, all from `./open-appeal`.
  *
  * Every case runs against a real SQLite database built from the ordered migrations in
  * `packages/shared/migrations/`, because what this module promises is a statement
@@ -10,6 +11,13 @@
  * The fixture is what a report needs and no more — an account, a category, a listing and
  * one version of it, a standard and one version of that, and the report itself — so an
  * appeal is opened here exactly as a write route opens one.
+ *
+ * What it evidences: the `appeals` table contract of the plan's data model (an appeal is
+ * inserted `open` and the operator's later ruling is the only thing that moves it), the
+ * immutability criterion's opening half (the appealed report is read and never written, and
+ * opening appends no governance event), and the deliberate absence of an ownership lookup in
+ * this path — the last of which is asserted structurally, by recording the SQL the module
+ * prepares, because the absence of a read is not something a behavioural case can show.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -35,8 +43,13 @@ const REPORT_ID = "report-seed-alpha-first-run";
 /** An id no `evaluation_reports` row carries. */
 const UNKNOWN_REPORT_ID = "report-that-was-never-written";
 
-/** A stated ground with surrounding whitespace, stored exactly as submitted. */
-const REASON = "  The two failing cases read inputs this version does not accept; the ground is unclear.  ";
+/**
+ * A stated ground carrying surrounding whitespace and an internal newline, stored exactly as
+ * submitted: the padding and the line break are part of the developer's own statement, so a
+ * reader of the appeal sees what was written rather than a normalised rendering of it.
+ */
+const REASON =
+  "  The two failing cases read inputs this version does not accept;\n  the ground is unclear.  ";
 
 /** The stored shape of one `appeals` row. */
 interface StoredAppealRow {
@@ -191,6 +204,49 @@ function triggerCount(table: string): number {
   return rows.length;
 }
 
+/**
+ * The tables the opening path must not read, each because it belongs to another owner or answers
+ * another question: a listing and its versions are the API layer's, an account is the demo
+ * session's, a category is browse metadata, and the sponsored slots and the audit feed are
+ * commercial and write-log data no evaluation path may consult. A prepared statement naming any of
+ * them would mean this module had begun resolving who owns the appealed report.
+ */
+const TABLES_THE_OPENING_PATH_MUST_NOT_READ = [
+  "listings",
+  "listing_versions",
+  "accounts",
+  "categories",
+  "sponsored_slots",
+  "audit_events",
+] as const;
+
+/**
+ * Every SQL source string `openAppeal` prepared, in the order it prepared them.
+ *
+ * Filled by {@link installPrepareRecorder}, and the only way to assert the absence of a read: a
+ * behavioural case shows what a call wrote, never which tables it touched on the way.
+ */
+let preparedStatements: string[] = [];
+
+/**
+ * Records the SQL source of every statement prepared through `db` from this point on.
+ *
+ * `prepare` is captured from the instance and replaced with an own property that delegates, rather
+ * than spied on through the prototype: better-sqlite3 declares `prepare` on `Database.prototype`,
+ * where a spy does not reliably attach. Install this after the migrations and the fixture — in a
+ * test body, not in `beforeEach` — so the record holds what the module under test prepared and
+ * nothing else.
+ */
+function installPrepareRecorder(): void {
+  const original = db.prepare.bind(db) as unknown as (source: string) => unknown;
+
+  preparedStatements = [];
+  (db as unknown as { prepare: (source: string) => unknown }).prepare = (source: string) => {
+    preparedStatements.push(source);
+    return original(source);
+  };
+}
+
 beforeEach(() => {
   db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
@@ -253,6 +309,8 @@ describe("openAppeal", () => {
   });
 
   it("stores the developer's reason verbatim, untrimmed", () => {
+    expect(REASON).toContain("\n");
+
     openAppeal(db, { reportId: REPORT_ID, developerAccountId: OWNER_DEVELOPER_ID, reason: REASON });
 
     expect(firstAppealRow().reason).toBe(REASON);
@@ -334,6 +392,19 @@ describe("openAppeal", () => {
     expect(readAppealRows()).toHaveLength(0);
   });
 
+  it("accepts the shortest padded reason, which the blank set does not contain", () => {
+    const PADDED = " x ";
+
+    const appeal = openAppeal(db, {
+      reportId: REPORT_ID,
+      developerAccountId: OWNER_DEVELOPER_ID,
+      reason: PADDED,
+    });
+
+    expect(appeal.reason).toBe(PADDED);
+    expect(firstAppealRow().reason).toBe(PADDED);
+  });
+
   it("refuses an unknown report id and writes nothing", () => {
     let failure: unknown;
 
@@ -365,5 +436,49 @@ describe("the appeals table openAppeal writes", () => {
 
   it("carries no append-only trigger, which is what keeps a ruling's update legal", () => {
     expect(triggerCount("appeals")).toBe(0);
+  });
+});
+
+describe("the statements openAppeal prepares", () => {
+  it("reads the appealed report, inserts the appeal row, and prepares nothing else", () => {
+    installPrepareRecorder();
+
+    openAppeal(db, { reportId: REPORT_ID, developerAccountId: OWNER_DEVELOPER_ID, reason: REASON });
+
+    const reportReads = preparedStatements.filter((source) => /\bevaluation_reports\b/.test(source));
+    const appealWrites = preparedStatements.filter((source) => /\bINSERT\s+INTO\s+appeals\b/i.test(source));
+
+    expect(reportReads).toHaveLength(1);
+    expect(appealWrites).toHaveLength(1);
+    expect(preparedStatements).toHaveLength(2);
+  });
+
+  it("prepares no statement that reads a table belonging to another owner", () => {
+    installPrepareRecorder();
+
+    openAppeal(db, { reportId: REPORT_ID, developerAccountId: OWNER_DEVELOPER_ID, reason: REASON });
+
+    // The executable form of the decision `open-appeal.ts` states: resolving whether the named
+    // developer owns the appealed report would mean reading the API layer's listings and versions
+    // and the demo session's accounts here, and the contract already supplies that answer as the
+    // write route's 403. A statement naming one of these tables fails this case, which is what
+    // stops the forbidden cross-table read from being added later as a helpful-looking check.
+    const forbiddenReads = TABLES_THE_OPENING_PATH_MUST_NOT_READ.filter((table) =>
+      preparedStatements.some((source) => new RegExp(`\\b${table}\\b`).test(source)),
+    );
+
+    expect(forbiddenReads).toEqual([]);
+  });
+
+  it("prepares no statement at all for a blank reason", () => {
+    installPrepareRecorder();
+
+    expect(() =>
+      openAppeal(db, { reportId: REPORT_ID, developerAccountId: OWNER_DEVELOPER_ID, reason: "   " }),
+    ).toThrow(InvalidAppealError);
+
+    // The reason check runs before any read, so a malformed request never reaches the database —
+    // not even to find out whether the report it names exists.
+    expect(preparedStatements).toEqual([]);
   });
 });
