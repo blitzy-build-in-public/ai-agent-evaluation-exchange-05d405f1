@@ -1,13 +1,13 @@
 {
   "files": [],
   "references": [
-    { "path": "apps/api" },
-    { "path": "apps/web" },
-    { "path": "packages/shared" },
-    { "path": "packages/sgi-core" },
-    { "path": "packages/sgi-fixtures" },
-    { "path": "packages/shield" },
-    { "path": "packages/commerce-sim" },
-    { "path": "examples/extension-fixture-pack" }
+    { "path": "./packages/shared" },
+    { "path": "./packages/sgi-fixtures" },
+    { "path": "./packages/shield" },
+    { "path": "./packages/sgi-core" },
+    { "path": "./packages/commerce-sim" },
+    { "path": "./apps/api" },
+    { "path": "./apps/web" },
+    { "path": "./examples/extension-fixture-pack" }
   ]
 }
