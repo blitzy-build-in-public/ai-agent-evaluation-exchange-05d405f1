@@ -11,8 +11,26 @@ import { buildReversalEntries } from './reversal-entries';
 
 const DEFAULT_CONFIG = resolveCommerceConfig();
 
-const TRANSACTION_ID = 'transaction-0001';
+/**
+ * The fixture identifiers, shaped as the v4 UUID strings every stored row's identifier is. They are
+ * fictional and fixed: nothing here derives an identifier, and a fixed one is what lets a case
+ * compare the entry it built with the transaction and the refund it was built from.
+ */
+const TRANSACTION_ID = '3b1f6c24-9d7a-4e15-8c02-6a4d9f0e5b73';
+const REFUND_ID = 'd84a1e60-5c3b-4f92-b716-0e2f8a4c93d1';
+const BUYER_ACCOUNT_ID = 'b2c7d1e9-4f60-4a83-9e57-1c8b3d0f6a24';
+const OPERATOR_ACCOUNT_ID = '9f0e4a13-7b58-4c26-a93d-5e1f7c2b8d06';
+const LISTING_ID = 'c5e9a27b-1d34-4f80-b65c-2a7e9d1f4b38';
+const LISTING_VERSION_ID = '7a3d8f51-6c20-4b97-8e14-d9f2a5c30b6e';
+
 const FIXTURE_INSTANT = '2024-01-01T00:00:00.000Z';
+
+/**
+ * One half, written as a power of two: the fraction the refusal cases pass without this file carrying
+ * a fractional literal, and an exactly representable value, so the amount and the rate those cases
+ * build are precisely the non-whole numbers the allocation must refuse.
+ */
+const ONE_HALF = 2 ** -1;
 
 /**
  * The nine fields a `ledger_entries` insert shape carries, alphabetically. Asserting the key set of
@@ -41,10 +59,10 @@ const TRANSACTION_AMOUNT_MINOR_UNITS = 10000;
 
 function refundOf(amountMinorUnits: number): Refund {
   return {
-    id: 'refund-0001',
+    id: REFUND_ID,
     transaction_id: TRANSACTION_ID,
     amount_minor_units: amountMinorUnits,
-    operator_account_id: 'account-operator-1',
+    operator_account_id: OPERATOR_ACCOUNT_ID,
     created_at: FIXTURE_INSTANT,
   };
 }
@@ -52,9 +70,9 @@ function refundOf(amountMinorUnits: number): Refund {
 function transactionOf(amountMinorUnits: number): Transaction {
   return {
     id: TRANSACTION_ID,
-    buyer_account_id: 'account-buyer-1',
-    listing_id: 'listing-0001',
-    listing_version_id: 'listing-version-0001',
+    buyer_account_id: BUYER_ACCOUNT_ID,
+    listing_id: LISTING_ID,
+    listing_version_id: LISTING_VERSION_ID,
     offer_model: 'purchase',
     amount_minor_units: amountMinorUnits,
     currency_label: SYNTHETIC_CURRENCY_LABEL,
@@ -160,9 +178,13 @@ describe('buildReversalEntries', () => {
       expect(fullReversal.amount_minor_units).toBe(TRANSACTION_AMOUNT_MINOR_UNITS);
     });
 
-    it('references no report, because a reversal corrects a transaction', () => {
+    it('references the transaction it corrects and no report at all', () => {
       const [marketplace, founder] = buildFor(4000, TRANSACTION_AMOUNT_MINOR_UNITS);
 
+      // A reversal corrects a transaction, so both entries name it; neither names an evaluation
+      // report, because nothing on this path measures anything.
+      expect(marketplace.transaction_id).toBe(TRANSACTION_ID);
+      expect(founder.transaction_id).toBe(TRANSACTION_ID);
       expect(marketplace.report_id).toBeNull();
       expect(founder.report_id).toBeNull();
     });
@@ -172,16 +194,29 @@ describe('buildReversalEntries', () => {
     it('states the configured rate on the entry it computed the amount from', () => {
       const [, founder] = buildFor(4000, TRANSACTION_AMOUNT_MINOR_UNITS);
 
-      expect(founder.description).toContain('25 basis points');
+      // The appended row is the durable record of the rate its amount was computed from, so the rate
+      // is asserted as the decimal string of the configured value beside the unit it is expressed in
+      // rather than as a written-out sentence: the wording belongs to the module under test.
+      expect(founder.description).toContain(String(DEFAULT_CONFIG.founderAllocationRateBasisPoints));
+      expect(founder.description).toContain('basis points');
       expect(founder.description).toContain(TRANSACTION_ID);
     });
 
-    it('carries the rate of the configuration it was handed', () => {
-      const slowerRate = resolveCommerceConfig({ founderAllocationRateBasisPoints: 200 });
-      const [, founder] = buildFor(TRANSACTION_AMOUNT_MINOR_UNITS, TRANSACTION_AMOUNT_MINOR_UNITS, slowerRate);
+    it('changes only the founder entry when the configured rate changes', () => {
+      // The rate reaches the founder-allocation reversal alone: the marketplace reversal carries the
+      // refunded amount through untouched, so the two ledgers cannot disagree about what the refund
+      // states however the allocation is configured.
+      const changedRate = resolveCommerceConfig({ founderAllocationRateBasisPoints: 100 });
+      const [marketplace, founder] = buildFor(
+        TRANSACTION_AMOUNT_MINOR_UNITS,
+        TRANSACTION_AMOUNT_MINOR_UNITS,
+        changedRate,
+      );
 
-      expect(founder.description).toContain('200 basis points');
-      expect(founder.amount_minor_units).toBe(200);
+      expect(founder.amount_minor_units).toBe(100);
+      expect(founder.description).toContain(String(changedRate.founderAllocationRateBasisPoints));
+      expect(founder.description).toContain('basis points');
+      expect(marketplace.amount_minor_units).toBe(TRANSACTION_AMOUNT_MINOR_UNITS);
     });
 
     it('carries the currency and disclosure labels of the configuration it was handed', () => {
@@ -227,6 +262,37 @@ describe('buildReversalEntries', () => {
 
         expect(Number.isInteger(marketplace.amount_minor_units)).toBe(true);
         expect(Number.isInteger(founder.amount_minor_units)).toBe(true);
+      }
+    });
+
+    it('takes its founder amount from the single rounding point at the configured rate', () => {
+      // Both amounts are compared with what they must be derived from rather than with a second
+      // implementation of the arithmetic: a builder applying a rate of its own — the default
+      // hardcoded, the rate doubled, the rate of a different configuration — fails here however well
+      // the anchored cases above pass.
+      const cases: readonly {
+        readonly refundedAmountMinorUnits: number;
+        readonly rateBasisPoints: number;
+      }[] = [
+        { refundedAmountMinorUnits: 1, rateBasisPoints: 1 },
+        { refundedAmountMinorUnits: 4000, rateBasisPoints: 25 },
+        { refundedAmountMinorUnits: 10000, rateBasisPoints: 100 },
+        { refundedAmountMinorUnits: 999999, rateBasisPoints: 2500 },
+        { refundedAmountMinorUnits: 4000, rateBasisPoints: 0 },
+      ];
+
+      for (const { refundedAmountMinorUnits, rateBasisPoints } of cases) {
+        const config = resolveCommerceConfig({ founderAllocationRateBasisPoints: rateBasisPoints });
+        const [marketplace, founder] = buildFor(
+          refundedAmountMinorUnits,
+          TRANSACTION_AMOUNT_MINOR_UNITS,
+          config,
+        );
+
+        expect(founder.amount_minor_units).toBe(
+          allocate(refundedAmountMinorUnits, config.founderAllocationRateBasisPoints),
+        );
+        expect(marketplace.amount_minor_units).toBe(refundedAmountMinorUnits);
       }
     });
 
@@ -288,6 +354,21 @@ describe('buildReversalEntries', () => {
       expect(requireBoth(first)[1]).not.toBe(requireBoth(second)[1]);
     });
 
+    it('returns entries that are no member of the input it was handed', () => {
+      const input = {
+        refund: refundOf(4000),
+        transaction: transactionOf(TRANSACTION_AMOUNT_MINOR_UNITS),
+        config: DEFAULT_CONFIG,
+      };
+      const inputMembers: readonly unknown[] = [input, input.refund, input.transaction, input.config];
+
+      // The entries are built, not borrowed: a builder returning a slice of what it was handed would
+      // let a later write into a returned entry reach the stored refund or transaction it came from.
+      for (const entry of buildReversalEntries(input)) {
+        expect(inputMembers).not.toContain(entry);
+      }
+    });
+
     it('answers a later caller from a fresh array after the earlier result was changed', () => {
       const input = {
         refund: refundOf(4000),
@@ -313,19 +394,29 @@ describe('buildReversalEntries', () => {
     });
 
     it('propagates the RangeError for a fractional refunded amount', () => {
-      expect(() => buildFor(10.5, TRANSACTION_AMOUNT_MINOR_UNITS)).toThrow(RangeError);
+      // The fraction is written as a power of two rather than as a fractional literal, so this file
+      // holds no fractional amount for a reader to copy; a half is exactly representable, so what the
+      // call passes is precisely the non-whole amount the allocation refuses.
+      expect(() => buildFor(ONE_HALF, TRANSACTION_AMOUNT_MINOR_UNITS)).toThrow(RangeError);
+      expect(() => buildFor(ONE_HALF, TRANSACTION_AMOUNT_MINOR_UNITS)).toThrow('amountMinorUnits');
     });
 
     it('propagates the RangeError for a configured rate that is not a whole number', () => {
+      // A rate a half above a whole number, as an untyped caller can build one: the configuration
+      // this object stands for is never resolved here, so the rate reaches the allocation, which is
+      // what refuses it.
       const malformedRate: CommerceConfig = {
         currencyLabel: SYNTHETIC_CURRENCY_LABEL,
         gateFeeMinorUnits: DEFAULT_CONFIG.gateFeeMinorUnits,
-        founderAllocationRateBasisPoints: 2.5,
+        founderAllocationRateBasisPoints:
+          DEFAULT_CONFIG.founderAllocationRateBasisPoints + ONE_HALF,
         disclosureLabel: DEFAULT_CONFIG.disclosureLabel,
       };
 
       expect(() => buildFor(4000, TRANSACTION_AMOUNT_MINOR_UNITS, malformedRate)).toThrow(RangeError);
-      expect(() => buildFor(4000, TRANSACTION_AMOUNT_MINOR_UNITS, malformedRate)).toThrow('rateBasisPoints');
+      expect(() => buildFor(4000, TRANSACTION_AMOUNT_MINOR_UNITS, malformedRate)).toThrow(
+        'rateBasisPoints',
+      );
     });
 
     it('refuses nothing when the amount is whole and the rate is whole', () => {
