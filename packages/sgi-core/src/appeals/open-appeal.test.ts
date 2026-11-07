@@ -302,7 +302,12 @@ describe("openAppeal", () => {
 
     expect(rows).toHaveLength(2);
     expect(first.id).not.toBe(second.id);
-    expect(rows.map((row) => row.id)).toEqual([first.id, second.id].sort());
+    // The read comes back in `created_at, id` order, and `created_at` is an instant the
+    // writer stamps with millisecond resolution: two appeals opened inside the same
+    // millisecond arrive in id order, and two opened a millisecond apart arrive in the
+    // order they were opened. Both sides are sorted so the case asserts which two ids
+    // were stored without depending on which of those two orders the clock produced.
+    expect(rows.map((row) => row.id).sort()).toEqual([first.id, second.id].sort());
     expect(rows).toContainEqual(firstRowBefore);
   });
 

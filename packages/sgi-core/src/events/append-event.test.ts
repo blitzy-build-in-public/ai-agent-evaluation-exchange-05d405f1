@@ -214,7 +214,11 @@ describe("appendEvent", () => {
     const rows = readRows();
 
     expect(rows).toHaveLength(2);
-    expect(rows.map((row) => row.id)).toEqual([first.id, second.id].sort());
+    // The read's own row order is not asserted: `created_at` is a millisecond-resolution
+    // instant the writer stamps, so two appends that straddle a millisecond come back in
+    // the order they were written rather than in id order. Sorting both sides asserts
+    // which two ids were stored, whichever of those two orders the clock produced.
+    expect(rows.map((row) => row.id).sort()).toEqual([first.id, second.id].sort());
     expect(rows[0]?.payload_json).toBe(rows[1]?.payload_json);
     expect(first.id).not.toBe(second.id);
   });
