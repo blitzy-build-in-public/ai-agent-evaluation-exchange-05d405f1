@@ -74,6 +74,45 @@ const validAmountCases: readonly { readonly label: string; readonly amountMinorU
 ];
 
 /**
+ * The offer set the purity cases are asked against: three of the four models, one of them carrying a
+ * malformed amount. A single shared set is deliberate, because all three paths a selection can walk
+ * end on the same list: a model the set makes, a model it does not make, and the malformed entry
+ * itself. The malformed entry sits between two well-formed ones, so a comparison that passed by
+ * reading only the first or the last entry could not hide a reordering.
+ */
+const mixedOfferSet: readonly ListingOffer[] = [
+  rent,
+  { model: 'purchase', amountMinorUnits: -1 },
+  license,
+];
+
+/**
+ * Those three requests, each with the result it must produce: the selection the set makes, and the
+ * two refusals. `subscription` is the model the set deliberately does not make.
+ */
+const nonMutatingRequests: readonly {
+  readonly label: string;
+  readonly requested: OfferModel;
+  readonly expected: OfferSelection;
+}[] = [
+  {
+    label: 'a request the set can fill',
+    requested: 'license',
+    expected: { ok: true, offer: license },
+  },
+  {
+    label: 'a request for a model the set does not make',
+    requested: 'subscription',
+    expected: { ok: false, reason: 'not_offered' },
+  },
+  {
+    label: 'a request whose matched amount is malformed',
+    requested: 'purchase',
+    expected: { ok: false, reason: 'invalid_amount' },
+  },
+];
+
+/**
  * Narrows a selection to its offer, failing the calling test when the selection was refused. A
  * refusal is reported by its own reason rather than as an undefined offer, so a test that expected a
  * selection and got a refusal says which refusal it got.
@@ -86,6 +125,27 @@ function selectedOffer(result: OfferSelection): ListingOffer {
   return result.offer;
 }
 
+/**
+ * Reads a selection the way a caller downstream reads it: a selection by the model and amount it
+ * carries, a refusal by the reason it gives. The `switch` over `result.ok` and then, in the refusal
+ * branch, over both refusal reasons is what keeps this helper compiling only while the result is a
+ * discriminated union over exactly those two reasons — a third reason added to `OfferSelection`
+ * would have to be answered here, which is where a caller would otherwise meet it as an unhandled
+ * case at runtime.
+ */
+function describeSelection(result: OfferSelection): string {
+  if (result.ok) {
+    return `selected ${result.offer.model} at ${result.offer.amountMinorUnits} minor units`;
+  }
+
+  switch (result.reason) {
+    case 'not_offered':
+      return 'refused: the listing does not make that model';
+    case 'invalid_amount':
+      return 'refused: the matched amount is not a whole number of minor units';
+  }
+}
+
 describe('selectOffer', () => {
   describe('selection', () => {
     for (const offer of everyModel) {
@@ -93,17 +153,13 @@ describe('selectOffer', () => {
         const result = selectOffer(everyModel, offer.model);
 
         expect(result).toEqual({ ok: true, offer });
+        // Identity, not equality, and on every model rather than one: the caller prices the selection
+        // from the entry it gets back, so a copy or a re-shaped literal would make the amount the
+        // caller reads something other than the amount the listing made while still comparing equal.
+        expect(selectedOffer(result)).toBe(offer);
+        expect(selectedOffer(result).amountMinorUnits).toBe(offer.amountMinorUnits);
       });
     }
-
-    it('returns the entry it was given rather than a copy of it', () => {
-      // Identity, not equality: the caller prices the selection from the returned entry, and a copy
-      // would make the amount the caller reads something other than the amount the listing made.
-      const result = selectOffer(everyModel, 'purchase');
-
-      expect(result).toEqual({ ok: true, offer: purchase });
-      expect(selectedOffer(result)).toBe(purchase);
-    });
 
     it('selects the first entry when a listing states one model twice', () => {
       // The choice between duplicates is first-wins rather than a sum or a largest-of: the offers
@@ -128,16 +184,32 @@ describe('selectOffer', () => {
       });
     }
 
-    it('accepts a frozen offer set and an offer set declared as a constant', () => {
-      const frozen = Object.freeze([rent, purchase]);
+    it('resolves every model from a frozen offer set', () => {
+      // The `readonly ListingOffer[]` parameter is proven rather than declared: a signature that
+      // demanded a mutable array would not compile here, and a frozen list turns a sort or a splice
+      // inside the function into an error rather than a silent reordering of the listing's offers.
+      const frozen = Object.freeze([...everyModel]);
 
-      expect(selectOffer(frozen, 'rent')).toEqual({ ok: true, offer: rent });
+      for (const offer of frozen) {
+        expect(selectOffer(frozen, offer.model)).toEqual({ ok: true, offer });
+      }
 
-      const declaredConstant = [{ model: 'license', amountMinorUnits: 9_600 }] as const;
+      expect(frozen).toEqual([rent, purchase, license, subscription]);
+    });
+
+    it('accepts an offer set declared as a constant', () => {
+      const declaredConstant = [
+        { model: 'license', amountMinorUnits: 9_600 },
+        { model: 'rent', amountMinorUnits: 1_200 },
+      ] as const;
 
       expect(selectOffer(declaredConstant, 'license')).toEqual({
         ok: true,
         offer: { model: 'license', amountMinorUnits: 9_600 },
+      });
+      expect(selectOffer(declaredConstant, 'rent')).toEqual({
+        ok: true,
+        offer: { model: 'rent', amountMinorUnits: 1_200 },
       });
     });
   });
@@ -186,17 +258,43 @@ describe('selectOffer', () => {
       expect(Object.keys(selected).sort()).toEqual(['offer', 'ok']);
       expect(Object.keys(refused).sort()).toEqual(['ok', 'reason']);
     });
+
+    it('answers a caller that branches on the result through its discriminant', () => {
+      // The shape a caller downstream — the checkout route, `create-checkout-simulation.ts` —
+      // branches on, read here through a helper that handles every refusal reason the type declares:
+      // a third reason, or a result that stopped being discriminated on `ok`, would stop compiling in
+      // `describeSelection` rather than reach a caller as an unhandled case.
+      expect(describeSelection(selectOffer(everyModel, 'purchase'))).toBe(
+        'selected purchase at 48000 minor units',
+      );
+      expect(describeSelection(selectOffer([], 'rent'))).toBe(
+        'refused: the listing does not make that model',
+      );
+      expect(describeSelection(selectOffer([{ model: 'rent', amountMinorUnits: 1.5 }], 'rent'))).toBe(
+        'refused: the matched amount is not a whole number of minor units',
+      );
+    });
   });
 
   describe('purity', () => {
-    it('leaves the offer set it was given untouched', () => {
-      const offers: readonly ListingOffer[] = [rent, purchase, license, subscription];
+    for (const { label, requested, expected } of nonMutatingRequests) {
+      it(`leaves the offer set untouched after ${label}`, () => {
+        // A list of its own per case, so a case is not weakened by a mutation an earlier one left
+        // behind, and the order it must still carry is anchored to a literal rather than read back
+        // from the same list: comparing a list with itself would hold for any reordering.
+        const offers: readonly ListingOffer[] = [...mixedOfferSet];
+        const snapshot = structuredClone(offers);
 
-      selectOffer(offers, 'license');
-      selectOffer(offers, 'subscription');
+        expect(selectOffer(offers, requested)).toEqual(expected);
 
-      expect(offers).toEqual([rent, purchase, license, subscription]);
-    });
+        // A deep snapshot taken before the call, compared after it, on every path: an implementation
+        // that sorted the set to find its entry, or removed the entry it refused, would answer the
+        // same result and still fail here, which equality against the return value alone could not see.
+        expect(offers).toEqual(snapshot);
+        expect(offers).toHaveLength(3);
+        expect(offers.map((offer) => offer.model)).toEqual(['rent', 'purchase', 'license']);
+      });
+    }
 
     it('answers the same selection twice for the same offers and model', () => {
       // The first call is anchored to a known selection, so this case can fail: without the anchor a
