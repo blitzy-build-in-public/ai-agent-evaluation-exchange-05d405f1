@@ -145,6 +145,7 @@ describe("validateFixturePack", () => {
     { override: { title: " " }, label: "whitespace-only" },
     { override: { title: null }, label: "null" },
     { override: { title: ["Example fixture pack"] }, label: "array-valued" },
+    { override: { title: undefined }, label: "absent" },
   ])("refuses a $label title", ({ override }) => {
     const error = catchSeamError({ ...validPack, ...override });
 
