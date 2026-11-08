@@ -46,10 +46,12 @@
  * byte for byte as it stands. The page therefore carries the developer's opening form and, for the
  * operator demo account alone, the surface that decides the appeals awaiting a ruling — the operator's
  * documented power, reachable in the product rather than only at the API. Which appeals await a ruling
- * is read from the operator's own audit feed, because the contract names no read that lists appeals: an
- * opening and a ruling are the two writes the feed records for one. The two surfaces are mounted per
- * role rather than hidden, so an account that cannot use one makes no request for it, and the feed read
- * fires for the operator and for no other account.
+ * is read from the operator's own audit feed page by page — its newest page and each page before it,
+ * in the order the writes happened — rather than from its newest page alone, because the contract names
+ * no read that lists appeals — an opening and a ruling are the two writes the feed records for one —
+ * and because an appeal whose opening is older than that newest page would otherwise never be offered.
+ * The two surfaces are mounted per role rather than hidden, so an account that cannot use one makes no
+ * request for it, and the feed read fires for the operator and for no other account.
  *
  * **The rubric reference is text, never a link.** The API serves the built application and no
  * documentation directory, so a link to the document the reference names would be answered with the
@@ -89,11 +91,11 @@ import {
   createEvaluation,
   getReport,
   getSelectedDemoAccountId,
-  listAuditEvents,
   openAppeal,
   ruleAppeal,
 } from "../api-client";
 import type { AppealRulingResult } from "../api-client";
+import { readAuditFeed } from "../audit-feed-read";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { SampleBadge } from "../components/sample-badge";
@@ -1115,15 +1117,18 @@ const RULING_SUMMARY =
   "Ruling an appeal is the operator's action: it records the decision, appends a governance event and " +
   "leaves the report the appeal concerns exactly as it stands. This surface is offered while the " +
   "operator demo account is selected, and the appeals below are read from that account's own audit " +
-  "feed.";
+  "feed page by page — the newest page first and each page before it, in the order the writes " +
+  "happened — rather than from its newest page alone: an appeal whose opening is older than that page " +
+  "would otherwise never be offered.";
 
 /** The appeal selection's label and the hint that says where the offered appeals come from. */
 const RULING_APPEAL_FIELD_LABEL = "Appeal to rule";
 const RULING_APPEAL_FIELD_HINT =
   "Each appeal below has been opened and not yet ruled, newest first, read from the operator's audit " +
-  "feed: the contract names no read that lists appeals, so an opening and a ruling are what that feed " +
-  "records for one. The appeal a ruling is sent for comes from this selection rather than from the " +
-  "ground.";
+  "feed page by page — the newest page first and each page before it, in the order the writes " +
+  "happened — because the contract names no read that lists appeals: an opening and a ruling are what " +
+  "that feed records for one. The appeal a ruling is sent for comes from this selection rather than " +
+  "from the ground.";
 
 /** The ruling group's legend and the sentence that says what a decision does. */
 const RULING_DECISION_LEGEND = "Ruling";
@@ -1291,13 +1296,16 @@ export interface PendingAppeal {
 }
 
 /**
- * The appeals awaiting a ruling, derived from the operator's audit feed, newest first.
+ * The appeals awaiting a ruling, derived from the operator's audit feed as the surface reads it — every
+ * page of it the walk reached — newest first.
  *
  * An appeal awaits a ruling when the feed holds an `appeal.opened` row for it and no `appeal.ruled`
  * row for the same resource: the two writes are the whole life of an appeal in the log, and a ruled
  * appeal is excluded by that second row rather than by a status this page would have to be told. The
  * feed arrives in the order the writes happened — oldest first — so the result is reversed to put the
- * newest opening first, which is the order an operator wants to work through.
+ * newest opening first, which is the order an operator wants to work through. A list derived from one
+ * page of that feed would stop offering an appeal as soon as a page's worth of writes had been
+ * recorded after it was opened, which is why the whole feed is read rather than its newest page.
  *
  * It is a pure function of the events it is handed: no request, no clock and no storage, so the list
  * is determined by the feed and by nothing else. An empty feed and a feed holding no open appeal both
@@ -1362,8 +1370,11 @@ function RulingGround(props: { readonly event: GovernanceEvent }): JSX.Element {
  * **The appeals are read from the operator's own audit feed.** The contract names no read that lists
  * appeals — an appeal is opened and ruled through two write rows and returned by neither — so the feed
  * of what was written is how an operator sees one to decide, and {@link appealsAwaitingRuling} derives
- * the list from it. It is one of the operator-only reads, which is why the section is mounted only for
- * the operator account: an account that cannot use this surface makes no request for it.
+ * the list from it. The feed is read page by page, from its newest page back and in the order the
+ * writes happened, rather than its newest page alone, because the feed is bounded and an appeal whose
+ * opening had fallen past that page would otherwise never be offered to the surface that rules it. It
+ * is one of the operator-only reads, which is why the section is mounted only for the operator
+ * account: an account that cannot use this surface makes no request for it.
  *
  * **A ruling is final and changes no measurement.** The write moves the appeal's own status and
  * appends a governance event; the report above is read from the service and reads the same before and
@@ -1406,7 +1417,7 @@ function AppealRulingSection(): JSX.Element {
     // list now on screen, which a plain sequence of requests would do.
     let cancelled = false;
     setState({ kind: "loading" });
-    void listAuditEvents().then(
+    void readAuditFeed().then(
       (events: AuditEvent[]): void => {
         if (!cancelled) {
           setState({ kind: "ready", events });

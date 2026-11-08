@@ -770,6 +770,26 @@ function compareQuery(ids: readonly string[]): URLSearchParams {
   return params;
 }
 
+/**
+ * The query of a bounded collection read — the three `GET /ledger/*` rows and
+ * `GET /audit-events`: the 1-based page, and **no page size**.
+ *
+ * The size is the contract's fixed `COLLECTION_PAGE_SIZE` and is never a client input, so
+ * no `limit`, `size` or `per_page` is ever sent: an accepted one would turn a fixed page
+ * into a convention a client could ask around, and the route's own query schema admits none
+ * of the three.
+ *
+ * A page that is not a whole number of one or more resolves to `1` rather than being sent:
+ * the route's query schema refuses `0`, `-1` and a fractional page with a `400`, and "the
+ * page before the first" is the first page — which is the same answer the schema's own
+ * `default: 1` gives a request that states no page at all.
+ */
+function collectionPageQuery(page: number): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set("page", String(Number.isSafeInteger(page) && page >= 1 ? page : 1));
+  return params;
+}
+
 /** A category as a page renders it, with every member present. */
 function normalizeCategory(value: unknown): Category {
   const record = recordOrNull(value) ?? {};
@@ -1646,31 +1666,45 @@ export async function refundTransaction(
  * rather than defaulting it, so a ledger view never shows an allocation beside a rate it did
  * not actually use.
  *
+ * **The call states the page it is reading, because the read is bounded.** A ledger holds
+ * every entry ever appended to it, so the read answers one page of `COLLECTION_PAGE_SIZE`
+ * entries: page 1 is the most recent page of the history, and each later page is the page
+ * before it, so a ledger view that can state a page can reach an older entry — and, through
+ * the transaction that entry names, an older transaction's refund control. Without the page
+ * every call read page 1, and the history behind it was unreachable from the product.
+ *
  * These are the operator-only reads, which is why this read requires the demo account
  * header. Raises {@link ApiClientError} for `403` when the resolved account is not an
  * operator and for a response whose ledger body cannot be read.
  */
 export async function listLedger(
   ledger: LedgerName,
+  page: number,
 ): Promise<LedgerReadResult | FounderAllocationLedgerReadResult> {
-  const response = await send("GET", `/ledger/${LEDGER_PATH_SEGMENTS[ledger]}`, { demoAccount: true });
+  const response = await send("GET", `/ledger/${LEDGER_PATH_SEGMENTS[ledger]}`, {
+    query: collectionPageQuery(page),
+    demoAccount: true,
+  });
   const record = requireRecord(response);
   const entries = arrayOrEmpty(record["entries"]) as LedgerEntry[];
   // The read is bounded — one page of the ledger, the most recent page first — so the page it
   // answered and the number of entries the ledger holds are part of what this call returns: a
   // ledger view that showed a page without them could not tell a short ledger from a clipped one.
+  // The page the response states is the one returned rather than the one that was asked for: a
+  // page beyond the last answers the empty list with the ledger's own total, and a view renders
+  // that state from the page the service names.
   const total = requireCount(record["total"], response);
-  const page = requireCount(record["page"], response);
+  const answeredPage = requireCount(record["page"], response);
   if (ledger === "founder_allocation") {
     return {
       ledger,
       entries,
       total,
-      page,
+      page: answeredPage,
       rate_basis_points: requireCount(record["rate_basis_points"], response),
     };
   }
-  return { ledger, entries, total, page };
+  return { ledger, entries, total, page: answeredPage };
 }
 
 /**
@@ -1728,19 +1762,63 @@ export async function listSponsoredSlots(): Promise<SponsoredSlotListResult> {
 }
 
 /**
- * `GET /audit-events` (operator): the append-only feed of what was written — the actor, the
- * action, the resource, the status and the reason, in the order the writes happened.
+ * What `GET /audit-events` answers with: one page of the append-only feed, the size of the
+ * whole feed and the page that was read.
+ *
+ * The three members travel together, which is why the read returns them as one result rather
+ * than as the bare array of events. `items` holds at most `COLLECTION_PAGE_SIZE` events, so a
+ * caller reading it without `total` and `page` cannot tell a short feed from a clipped page,
+ * and a caller that cannot state a page cannot reach the events before the newest page — which
+ * is how an appeal opened more than a page of writes ago would disappear from the operator's
+ * only surface for ruling it.
+ */
+export interface AuditFeedReadResult {
+  /**
+   * The events of the page this response carried, in the order they were written: at most
+   * `COLLECTION_PAGE_SIZE` of them, and the page numbered by
+   * {@link AuditFeedReadResult.page}.
+   */
+  readonly items: readonly AuditEvent[];
+  /** How many events the whole feed holds, so a caller can tell the page from the record. */
+  readonly total: number;
+  /**
+   * Which page of the feed this response carried, 1-based: `1` is the feed's most recent page
+   * and `2` the page before it, so a later page reaches further back into the record.
+   */
+  readonly page: number;
+}
+
+/**
+ * `GET /audit-events` (operator): one page of the append-only feed of what was written — the
+ * actor, the action, the resource, the status and the reason, in the order the writes happened.
  *
  * This is the feed of what was *written*; the governance events behind a moderation action, a
  * proposal review or an appeal ruling are the feed of what was *decided*. Neither substitutes
  * for the other and neither is ever amended.
  *
+ * **The call states the page it is reading and the feed's size comes back beside the events.**
+ * The feed grows with every write anywhere in the product, so the read answers one page of
+ * `COLLECTION_PAGE_SIZE` events: page 1 is the feed's most recent page, and each later page
+ * reaches one page further back, so a caller that can state a page can walk the record rather
+ * than holding only its newest page.
+ *
  * This is one of the four operator-only reads, so it carries the demo account header. Raises
  * {@link ApiClientError} for `403` when the resolved account is not an operator and for a
- * response that carries no events to read.
+ * response that carries no events, page or count to read.
  */
-export async function listAuditEvents(): Promise<AuditEvent[]> {
-  const response = await send("GET", "/audit-events", { demoAccount: true });
-  return requireArray(response, ["items", "audit_events"]) as AuditEvent[];
+export async function listAuditEvents(page: number): Promise<AuditFeedReadResult> {
+  const response = await send("GET", "/audit-events", {
+    query: collectionPageQuery(page),
+    demoAccount: true,
+  });
+  const record = requireRecord(response);
+  // The read is bounded — one page of the feed, the most recent page first — so the page it
+  // answered and the number of events the feed holds are returned beside the events themselves,
+  // exactly as the three ledger reads return theirs.
+  return {
+    items: requireArray(response, ["items", "audit_events"]) as AuditEvent[],
+    total: requireCount(record["total"], response),
+    page: requireCount(record["page"], response),
+  };
 }
 

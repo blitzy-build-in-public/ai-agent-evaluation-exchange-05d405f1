@@ -39,12 +39,16 @@
  *
  * The operator half reads the three append-only ledgers through `../components/ledger-table` and the
  * audit feed as a table in the order the events were written, one page of each at a time: all four of
- * those reads answer the most recent page of their collection and state its whole size. It re-sorts
- * nothing, re-computes no amount and reformats no entry: a ledger is read as history, and an appended
- * reversal stays after the entry it reverses. Every amount stays an integer count of minor units of
- * the synthetic currency `DEMO` with the disclosure label stored beside it, and the founder-allocation
- * ledger states that its contract structure is undecided and carries no personal identity, beneficiary
- * account or entitlement.
+ * those reads answer one page of their collection and state its whole size, and every one of them is
+ * asked for the page the surface is on rather than for its first page alone. Each surface states the
+ * collection's size, the page it is showing and the collection's last page, and a pager of real
+ * controls moves between those pages — so an entry behind the newest page, and the refund control of
+ * the transaction it names, stays reachable, and a pager that cannot move says so in its own disabled
+ * control instead of pretending. It re-sorts nothing, re-computes no amount and reformats no entry: a
+ * ledger is read as history, and an appended reversal stays after the entry it reverses. Every amount
+ * stays an integer count of minor units of the synthetic currency `DEMO` with the disclosure label
+ * stored beside it, and the founder-allocation ledger states that its contract structure is undecided
+ * and carries no personal identity, beneficiary account or entitlement.
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -62,7 +66,7 @@ import {
   listStandards,
   openAppeal,
 } from "../api-client";
-import type { ChallengeListItem, StandardListItem } from "../api-client";
+import type { AuditFeedReadResult, ChallengeListItem, StandardListItem } from "../api-client";
 import { readCatalogueListings } from "../catalogue-read";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
@@ -664,8 +668,10 @@ const OPERATOR_LEDGERS_HEADING = "The three ledgers";
  */
 const OPERATOR_LEDGERS_EXPLANATION =
   `The marketplace ledger, the gate-fee ledger and the founder-allocation ledger, each read one page ` +
-  `at a time — the page it answers is the ledger's most recent entries, in the order they were ` +
-  `appended. An amount is a whole number of minor units of the synthetic ` +
+  `at a time: the first page is the ledger's most recent entries, in the order they were appended, and ` +
+  `the pager moves from a page to the page before it, so an older entry — and the refund control of the ` +
+  `transaction it names — stays reachable rather than falling off the end of what the surface offers. ` +
+  `An amount is a whole number of minor units of the synthetic ` +
   `currency ${SYNTHETIC_CURRENCY_LABEL}, and every entry carries its own disclosure label: this is a ` +
   `nonfunctional demonstration in which no real payment, settlement or payout exists, and no amount ` +
   `here is a payment of any kind. The founder-participation contract structure is ` +
@@ -689,18 +695,88 @@ function describeLedgerLoading(ledger: LedgerName): string {
   return `Reading ${LEDGER_HEADINGS[ledger]}…`;
 }
 
+/** The page every operator collection read starts from: each one's most recent page is its first. */
+const FIRST_COLLECTION_PAGE = 1;
+
+/** The two controls of a collection's pager, named once because the sentence above it quotes one. */
+const PREVIOUS_PAGE_LABEL = "Previous page";
+const NEXT_PAGE_LABEL = "Next page";
+
+/** The accessible name of the audit feed's pager: what it pages rather than how it works. */
+const AUDIT_PAGER_LABEL = "Audit feed pages";
+
 /**
- * How many entries the ledger holds, said above the page of them the read answered.
- *
- * The count is the read's own `total` rather than the length of the page, because the read answers one
- * page of the ledger: a page shorter than the ledger is its most recent page, and a page that holds
- * every entry is the ledger itself. Neither is inferred here from the size of the list.
+ * One operator collection as the sentence above its pager names it: what the collection is called and
+ * the two forms its rows are counted in.
  */
-function describeLedgerTotal(total: number, listed: number): string {
-  const held = `This ledger holds ${total} ${total === 1 ? "entry" : "entries"}`;
-  return listed < total
-    ? `${held}; its ${listed} most recent ${listed === 1 ? "is" : "are"} listed here.`
-    : `${held}.`;
+interface CollectionSubject {
+  /** What the sentence calls the collection: "This ledger", "The audit feed". */
+  readonly name: string;
+  /** One row of it: "entry", "event". */
+  readonly one: string;
+  /** More than one row of it: "entries", "events". */
+  readonly many: string;
+}
+
+/** The ledger panels' subject; each panel's own heading names the ledger it reads above it. */
+const LEDGER_SUBJECT: CollectionSubject = Object.freeze({
+  name: "This ledger",
+  one: "entry",
+  many: "entries",
+});
+
+/** The audit feed's subject. */
+const AUDIT_SUBJECT: CollectionSubject = Object.freeze({
+  name: "The audit feed",
+  one: "event",
+  many: "events",
+});
+
+/**
+ * How much the collection holds, which page of it is shown, how many pages it has and how many rows
+ * that page carries.
+ *
+ * The size is the read's own `total` rather than the length of the page, because every one of these
+ * four reads answers a single page of a collection that grows with use: a page shorter than the
+ * collection is a page of it, and a page that holds every row is the collection itself. Only the count
+ * of rows this page carries is read from the list, and the last page is derived from the same total the
+ * pager moves within.
+ */
+function describeCollectionPage(
+  subject: CollectionSubject,
+  total: number,
+  page: number,
+  lastPage: number,
+  shown: number,
+): string {
+  const held = `${subject.name} holds ${total} ${total === 1 ? subject.one : subject.many}`;
+  return `${held}; page ${page} of ${lastPage} is shown here, holding ${shown} of them.`;
+}
+
+/**
+ * The sentence a page past the collection's last one is explained with.
+ *
+ * A page beyond the end is not an empty collection and is never rendered as one: the collection holds
+ * rows and says how many, how many pages it has, and which control returns the reader to them. The
+ * pager is rendered beside this sentence, so the control it names is one the reader can reach.
+ */
+function describePastLastPage(
+  subject: CollectionSubject,
+  total: number,
+  page: number,
+  lastPage: number,
+): string {
+  const held = `${subject.name} holds ${total} ${total === 1 ? subject.one : subject.many}`;
+  const pages = lastPage === 1 ? "one page" : `${lastPage} pages`;
+  return (
+    `${held} and has ${pages}; page ${page} is past the end of it and carries nothing. Use ` +
+    `"${PREVIOUS_PAGE_LABEL}" to step back to the ${subject.many} it holds.`
+  );
+}
+
+/** The last page a collection of this size has, or page 1 when there is nothing to page through. */
+function lastCollectionPage(total: number): number {
+  return total <= 0 ? FIRST_COLLECTION_PAGE : Math.ceil(total / COLLECTION_PAGE_SIZE);
 }
 
 /**
@@ -720,10 +796,12 @@ const AUDIT_HEADING = "The audit feed";
 const AUDIT_EXPLANATION =
   "The append-only feed of what was written — the actor, the action, the resource, its status and " +
   "the reason — in the order the writes happened. The feed is read one page at a time, its most " +
-  "recent page first, so the rows below are that page of events and not the whole record. It is " +
-  "distinct from the governance events that record decisions: a moderation action, a proposal " +
-  "review and an appeal ruling append a governance event, and every write appends an audit event. " +
-  "Neither feed is ever amended, and nothing here is sorted, filtered or re-keyed.";
+  "recent page first, and the pager moves from the page shown to the page before it: the rows below " +
+  "are one page of the feed rather than the whole record, the feed's size and how many pages it has " +
+  "are stated above them, and nothing is unreachable merely because it is older than the page on " +
+  "screen. It is distinct from the governance events that record decisions: a moderation action, a " +
+  "proposal review and an appeal ruling append a governance event, and every write appends an audit " +
+  "event. Neither feed is ever amended, and nothing here is sorted, filtered or re-keyed.";
 
 /** The state an audit feed with nothing in it renders, and the caption the table carries. */
 const AUDIT_EMPTY_HEADING = "Nothing in the audit feed yet";
@@ -735,8 +813,8 @@ const AUDIT_EMPTY_EXPLANATION =
 const AUDIT_LOADING_SENTENCE = "Reading the audit feed…";
 
 const AUDIT_TABLE_CAPTION =
-  "Audit events, in the order the writes happened: the feed's most recent page, because the read " +
-  "answers one page of it at a time. Each row is a write that was recorded, and no row is amended " +
+  "Audit events, in the order the writes happened: the page of the feed the pager names, because the " +
+  "read answers one page of it at a time. Each row is a write that was recorded, and no row is amended " +
   "afterwards.";
 
 /**
@@ -2834,9 +2912,11 @@ const AUDIT_HEADING_ID = "developer-audit-heading";
  *
  * Every read here is operator-only, which is why this half is mounted only for the operator account
  * and why the surface is not rendered for any other role at all: a read that would be refused is not
- * made. Each ledger is its own panel with its own read and its own reload token, so a refusal of one
- * is explained and retried without touching the others, and a refund re-reads every ledger and the
- * audit feed because the entries it appended belong to both.
+ * made. Each ledger is its own panel with its own read, its own page and its own reload token, so a
+ * refusal of one is explained and retried without touching the others, and a refund re-reads every
+ * ledger and the audit feed because the entries it appended belong to both — each panel reading again
+ * the page it is on, so the appended entries appear where the reader is standing rather than sending
+ * them back to the newest page.
  */
 function OperatorSurfaces(): JSX.Element {
   const [ledgerToken, setLedgerToken] = useState<number>(0);
@@ -2891,16 +2971,78 @@ function OperatorSurfaces(): JSX.Element {
 }
 
 /**
- * One ledger: its read, and the view that renders whatever it answered with.
+ * The paging controls of one bounded collection read.
  *
- * The ledger's own size is stated above the view, from the read's `total`, because the read answers
- * one page of the ledger rather than the whole history and a page on its own cannot tell a short
- * ledger from a clipped one.
+ * The two controls are real buttons rather than links, because the page they move is this page's own
+ * state and not an address: no URL expresses "the page before this one" in this product, so a link
+ * would promise a destination the address cannot carry. A control that cannot move is rendered
+ * `disabled` — the stylesheet states a disabled control's fill, text and cursor — and the page shown
+ * and the number of pages are stated as visible text beside the controls, so where the reader stands
+ * is read rather than inferred from which control is available.
  *
- * A ledger with no entries is an ordinary state and is rendered as an explanation rather than as a
- * table with unexplained header rows, and a failed read is rendered as the explanation the error
- * notice carries with a retry control. A refusal for want of the operator role adds what the notice
- * cannot know — that these are the operator-only reads — so it never surfaces as a status code.
+ * The row is rendered only when there is more than one page or the reader is past the last one, which
+ * is the rule the listings page applies to its own pager: a collection that fits on one page has
+ * nowhere to move, and a pager of two disabled controls would say nothing.
+ */
+function CollectionPager(props: {
+  readonly label: string;
+  readonly page: number;
+  readonly lastPage: number;
+  readonly onPageChange: (page: number) => void;
+}): JSX.Element | null {
+  const page = props.page;
+  const lastPage = props.lastPage;
+  if (lastPage <= 1 && page <= lastPage) {
+    return null;
+  }
+
+  // The step back is bounded by the last page, as the listings page's own Previous is: from beyond the
+  // end, the page that holds rows is the one to return to rather than the empty page in between.
+  const previousPage = Math.max(FIRST_COLLECTION_PAGE, Math.min(lastPage, page - 1));
+
+  return (
+    <nav className="field__group" aria-label={props.label}>
+      <button
+        type="button"
+        className="button button--secondary"
+        disabled={page <= FIRST_COLLECTION_PAGE}
+        onClick={(): void => {
+          props.onPageChange(previousPage);
+        }}
+      >
+        {PREVIOUS_PAGE_LABEL}
+      </button>
+      <p>{`Page ${page} of ${lastPage}`}</p>
+      <button
+        type="button"
+        className="button button--secondary"
+        disabled={page >= lastPage}
+        onClick={(): void => {
+          props.onPageChange(Math.min(lastPage, page + 1));
+        }}
+      >
+        {NEXT_PAGE_LABEL}
+      </button>
+    </nav>
+  );
+}
+
+/**
+ * One ledger: its read, the page of it being shown, and the view that renders that page.
+ *
+ * The panel holds the page it is reading rather than reading a page off an address, because a page of
+ * an operator's ledger is not an address in this product: the pager moves this panel's own state, and
+ * the read asks for the page it holds, so a ledger's history behind its newest page is reachable from
+ * the surface rather than only from the API.
+ *
+ * The ledger's own size, the page shown and the last page are stated above the view from the read's
+ * `total`, because the read answers one page of the ledger rather than the whole history and a page on
+ * its own cannot tell a short ledger from a clipped one. A ledger that genuinely holds nothing is
+ * rendered as the empty explanation — the state every other empty collection uses — while a page past
+ * the ledger's last one is explained in its own words with the pager still beside it, never as an empty
+ * ledger. A failed read is rendered as the explanation the error notice carries with a retry control,
+ * and a refusal for want of the operator role adds what the notice cannot know — that these are the
+ * operator-only reads — so it never surfaces as a status code.
  */
 function LedgerPanel(props: {
   readonly ledger: LedgerName;
@@ -2909,9 +3051,10 @@ function LedgerPanel(props: {
   readonly onRefunded: () => void;
 }): JSX.Element {
   const ledger = props.ledger;
+  const [page, setPage] = useState<number>(FIRST_COLLECTION_PAGE);
   const read = useCallback(
-    (): Promise<LedgerReadResult | FounderAllocationLedgerReadResult> => listLedger(ledger),
-    [ledger],
+    (): Promise<LedgerReadResult | FounderAllocationLedgerReadResult> => listLedger(ledger, page),
+    [ledger, page],
   );
   const state = useServiceRead(read, props.reloadToken);
 
@@ -2929,11 +3072,19 @@ function LedgerPanel(props: {
     return <p className="ledger-table__note">{describeLedgerLoading(ledger)}</p>;
   }
 
-  if (state.value.entries.length === 0) {
+  // The page the read answered is the page rendered rather than the one that was asked for: until a
+  // newer answer arrives the panel keeps showing the page it holds, and a page the ledger no longer has
+  // is answered with the empty list and the ledger's own total, which is the state explained below.
+  const answered = state.value;
+  const shown = answered.entries.length;
+  const lastPage = lastCollectionPage(answered.total);
+
+  if (answered.total === 0) {
     // The empty state is rendered here rather than by the ledger view's own note, so that a ledger
     // with nothing in it is explained by the same component every other empty state uses; the
     // founder-allocation ledger's contract structure is stated in the section's own copy above, so it
-    // is readable even where this view is replaced.
+    // is readable even where this view is replaced. A ledger holding nothing has one page, so no pager
+    // is rendered: there is nowhere to move.
     return (
       <EmptyState
         heading={LEDGER_HEADINGS[ledger]}
@@ -2943,34 +3094,58 @@ function LedgerPanel(props: {
     );
   }
 
+  if (shown === 0) {
+    return (
+      <>
+        <div className="status-region" role="status" aria-live="polite">
+          <p>{describePastLastPage(LEDGER_SUBJECT, answered.total, answered.page, lastPage)}</p>
+        </div>
+        <CollectionPager
+          label={`${LEDGER_HEADINGS[ledger]} pages`}
+          page={answered.page}
+          lastPage={lastPage}
+          onPageChange={setPage}
+        />
+      </>
+    );
+  }
+
   // The result is handed to the ledger view exactly as it was read: nothing here re-sorts,
   // re-computes, aggregates or reformats an entry, and the refund control the view owns appends
-  // through the service rather than editing anything this page holds. The ledger's own size is
-  // stated beside the view, because the read answers one page of the ledger and that page is what
-  // the view renders.
+  // through the service rather than editing anything this page holds.
   return (
     <>
-      <p className="ledger-table__note">
-        {describeLedgerTotal(state.value.total, state.value.entries.length)}
-      </p>
-      <LedgerTable ledger={ledger} result={state.value} onRefunded={props.onRefunded} />
+      <div className="status-region" role="status" aria-live="polite">
+        <p>{describeCollectionPage(LEDGER_SUBJECT, answered.total, answered.page, lastPage, shown)}</p>
+      </div>
+      <CollectionPager
+        label={`${LEDGER_HEADINGS[ledger]} pages`}
+        page={answered.page}
+        lastPage={lastPage}
+        onPageChange={setPage}
+      />
+      <LedgerTable ledger={ledger} result={answered} onRefunded={props.onRefunded} />
     </>
   );
 }
 
 /**
- * The audit feed: one read, and the table that renders whatever it answered with.
+ * The audit feed: one read, the page of it being shown, and the table that renders that page.
  *
- * The feed is what was *written*, and the page the read answers is in the order the events were
- * written — an append-only feed whose order is its meaning. Nothing here sorts, filters or re-keys
- * it: the rows rendered are the rows the read answered, and the page's own bound is stated in the
- * section's explanation and in the table's caption.
+ * The feed is what was *written*, and a page of it is in the order the events were written — an
+ * append-only feed whose order is its meaning. Nothing here sorts, filters or re-keys it: the rows
+ * rendered are the rows the read answered. The panel holds the page it reads and the pager moves that
+ * state, so the events behind the feed's newest page are reachable from this surface; the feed's size,
+ * the page shown and the last page are stated above the table so a page of the record is never read as
+ * the whole of it. A feed holding nothing at all renders the empty explanation, and a page past the
+ * feed's last one renders an explained state with the pager beside it rather than that empty copy.
  */
 function AuditFeed(props: {
   readonly reloadToken: number;
   readonly onRetry: () => void;
 }): JSX.Element {
-  const read = useCallback((): Promise<AuditEvent[]> => listAuditEvents(), []);
+  const [page, setPage] = useState<number>(FIRST_COLLECTION_PAGE);
+  const read = useCallback((): Promise<AuditFeedReadResult> => listAuditEvents(page), [page]);
   const state = useServiceRead(read, props.reloadToken);
 
   if (state.kind === "failed") {
@@ -2987,13 +3162,46 @@ function AuditFeed(props: {
     return <p>{AUDIT_LOADING_SENTENCE}</p>;
   }
 
-  if (state.value.length === 0) {
+  const answered = state.value;
+  const shown = answered.items.length;
+  const lastPage = lastCollectionPage(answered.total);
+
+  if (answered.total === 0) {
     return (
       <EmptyState heading={AUDIT_EMPTY_HEADING} explanation={AUDIT_EMPTY_EXPLANATION} headingLevel={3} />
     );
   }
 
-  return <AuditTable events={state.value} />;
+  if (shown === 0) {
+    return (
+      <>
+        <div className="status-region" role="status" aria-live="polite">
+          <p>{describePastLastPage(AUDIT_SUBJECT, answered.total, answered.page, lastPage)}</p>
+        </div>
+        <CollectionPager
+          label={AUDIT_PAGER_LABEL}
+          page={answered.page}
+          lastPage={lastPage}
+          onPageChange={setPage}
+        />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="status-region" role="status" aria-live="polite">
+        <p>{describeCollectionPage(AUDIT_SUBJECT, answered.total, answered.page, lastPage, shown)}</p>
+      </div>
+      <CollectionPager
+        label={AUDIT_PAGER_LABEL}
+        page={answered.page}
+        lastPage={lastPage}
+        onPageChange={setPage}
+      />
+      <AuditTable events={answered.items} />
+    </>
+  );
 }
 
 /**
