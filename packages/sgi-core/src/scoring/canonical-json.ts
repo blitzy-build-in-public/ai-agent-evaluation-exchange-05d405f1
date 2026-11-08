@@ -59,8 +59,8 @@ export class UnrenderableValueError extends Error {
  * explicit stack on the heap, so one more level costs memory rather than one more JavaScript call
  * frame, and a recording nested twenty thousand levels deep renders and scores.
  *
- * It refuses exactly four things, with an {@link UnrenderableValueError} carrying the
- * machine-readable code `unrenderable_value`, rather than letting a raw engine error out:
+ * It refuses exactly four things, each with an {@link UnrenderableValueError} carrying the
+ * machine-readable code `unrenderable_value`:
  *
  * - A value that **refers to itself**, directly or through a container it holds. JSON carries a
  *   tree, and a graph that holds itself has no text.
@@ -74,10 +74,9 @@ export class UnrenderableValueError extends Error {
  * - A value that is **not JSON data at all** — `undefined`, a function, a symbol, a bigint — whose
  *   type the message names.
  *
- * The "never throws, whatever the value" an earlier version of this comment promised was
- * unkeepable: a revoked `Proxy` cannot be read and a cyclic value has no JSON text, so the only open
- * question was whether that failure arrived as a typed, coded refusal a caller can map or as a raw
- * engine error. It arrives as the former.
+ * The refusal is typed and coded rather than thrown as a raw engine error: a revoked `Proxy` cannot
+ * be read and a cyclic value has no JSON text, so a caller maps `unrenderable_value` instead of
+ * reading whichever name the engine's own error happened to have.
  *
  * - `null` renders as `null`; a boolean as `true` or `false`.
  * - A **string** renders exactly as its value reads, byte for byte: non-ASCII

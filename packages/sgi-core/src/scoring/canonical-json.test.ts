@@ -189,8 +189,8 @@ describe("canonicalize", () => {
     /**
      * The depth the documents below are nested to.
      *
-     * Far past the depth a recursive walk reaches before it exhausts the call stack — the depth that
-     * used to make this function raise `RangeError` — and well inside what `JSON.parse` accepts.
+     * Far past the depth a recursive walk reaches before it exhausts the call stack — the constraint
+     * these documents probe — and well inside what `JSON.parse` accepts.
      */
     const DEPTH = 20000;
 
@@ -275,8 +275,8 @@ describe("canonicalize", () => {
         expect((thrown as UnrenderableValueError).code).toBe("unrenderable_value");
         expect((thrown as UnrenderableValueError).name).toBe("UnrenderableValueError");
 
-        // Neither of the two engine errors these inputs used to raise: a caller gets a name it maps,
-        // not one it has to recognise.
+        // Neither of the two engine errors such an input can produce: a caller gets a typed refusal
+        // whose name it maps, not a raw engine error it has to recognise.
         expect(thrown).not.toBeInstanceOf(RangeError);
         expect(thrown).not.toBeInstanceOf(TypeError);
       },
