@@ -893,7 +893,7 @@ export const SEED_STANDARD: Standard = Object.freeze({
   code: "SGI-SO-1.0.0",
   title: "Structured Output Conformance",
   summary:
-    "Compares the recorded outputs of a declarative candidate submission against a fixed twenty-case fixture set and reports a reproducible PASS or FAIL. The evidence is limited to structured output on the fixture set only, and no outcome certifies an implementation.",
+    "Compares the recorded structured outputs of a declarative candidate submission against twenty fixed fixture cases and reports a reproducible PASS or FAIL. The evidence is limited to structured output on the fixture set only: nothing submitted is executed, and no outcome asserts safety, security, certification or general capability.",
 });
 
 /**
