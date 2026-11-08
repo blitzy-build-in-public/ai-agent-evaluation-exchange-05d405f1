@@ -12,12 +12,13 @@
 # Three properties of the runtime decide the shape below.
 #
 # 1. The development dependencies are needed at run time. `npm start` is `tsx apps/api/src/index.ts`,
-#    the build is `tsc --build`, and every workspace package exports TypeScript source
-#    (`"./src/index.ts"`) and is consumed as source. The install is therefore a full `npm ci` from the
-#    committed lockfile: never `npm ci --omit=dev`, never `NODE_ENV=production` ahead of it, and no
-#    stage that leaves the development dependencies behind. NODE_ENV is deliberately not set at all -
-#    the product reads it nowhere, and leaving it unset keeps a container run identical to the
-#    documented `npm start` run.
+#    the build is `tsc --build`, and every workspace package exports TypeScript source (its own entry,
+#    `"./src/index.ts"` for the seven server, library and example workspaces, `"./src/main.tsx"` for
+#    apps/web) and is consumed as source. The install is therefore a full `npm ci` from the committed
+#    lockfile: never `npm ci --omit=dev`, never `NODE_ENV=production` ahead of it, and no
+#    stage that leaves the development dependencies behind. NODE_ENV is deliberately not set at all:
+#    the product reads it nowhere, the documented `npm start` run leaves it unset too, and a container
+#    run and that run therefore differ only in the launcher that names the same entry (see the CMD).
 # 2. The schema is created by the server, not by this file. apps/api/src/db/migrate.ts applies
 #    packages/shared/migrations/*.sql in filename order from a directory it resolves from its own URL,
 #    so no database is baked in: a fresh volume migrates on first start and is a no-op on the second.
@@ -86,6 +87,9 @@ RUN mkdir -p /app/.adem && chown node:node /app/.adem
 # the port published below, and a deployment that publishes another one sets the variable itself.
 ENV ADEM_DB_PATH=/app/.adem/adem.sqlite
 
+# npm's update check off too, so `docker compose exec app npm run seed` stays off the registry.
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
+
 EXPOSE 3000
 
 # Readiness through Node's own global fetch, so no curl or wget has to be installed. The API's listing
@@ -96,4 +100,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["nod
 
 USER node
 
-CMD ["npm", "start"]
+# The server is its own PID 1 here, with npm not in front of it. `npm start` runs the same entry as a
+# child process, and a SIGTERM - what `docker stop` sends - reaches npm rather than the server: npm
+# ends on the signal without passing it on, and the graceful SIGINT/SIGTERM shutdown that
+# apps/api/src/index.ts installs would never run. Started this way the server receives the signal,
+# closes the instance and the connection it opened, and the process ends with the code it earned; and
+# with no npm process in the image at run time nothing here reaches the registry. The arguments are
+# the entry the root `start` script names, launched through the loader tsx itself uses - `--import
+# tsx`. A CMD and not an ENTRYPOINT, so `docker run <image> <command>` still replaces this command.
+CMD ["node", "--import", "tsx", "apps/api/src/index.ts"]
