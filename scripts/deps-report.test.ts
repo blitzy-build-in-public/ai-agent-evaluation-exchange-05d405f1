@@ -19,9 +19,12 @@
  * - a marker that names no usable licence (`UNLICENSED`, `UNKNOWN`, `SEE LICENSE IN …`) can never pass;
  * - the rendered document carries no timestamp, host name or absolute path, so regenerating the
  *   committed file produces no spurious diff;
- * - the graph split is driven over a synthetic installed tree, so the runtime/development
- *   classification — the mechanism that scopes the development-only exception — is exercised rather
- *   than assumed;
+ * - the graph split is driven over a synthetic lockfile-resolved repository, so the
+ *   runtime/development classification — the mechanism that scopes the development-only exception —
+ *   is exercised rather than assumed;
+ * - a platform-conditional optional binary the lockfile resolves but this host did not install is
+ *   listed all the same, with the licence the lockfile records for it, so the document is the same
+ *   artefact wherever it is regenerated;
  * - nothing outside the path the run was handed is written.
  *
  * The allowlist cases read the delivered `scripts/license-allowlist.json` rather than a copy, so a
@@ -35,6 +38,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import type { ModuleInfos } from "license-checker-rseidelsohn";
+
 import {
   DECLARED_PACKAGE_PURPOSES,
   checkLicenses,
@@ -43,7 +48,7 @@ import {
   loadAllowlist,
   main,
   normalizeLicense,
-  readInstalledTree,
+  readResolvedTree,
   renderDependencyReport,
   runDepsReport,
 } from "./deps-report";
@@ -509,24 +514,25 @@ describe("the allowlist decision", () => {
   });
 });
 
-/** One manifest of a synthetic installed tree: where it sits under the root, and what it declares. */
+/** One manifest of a synthetic repository: where it sits under the root, and what it declares. */
 interface SyntheticManifest {
-  /** Path of the manifest's directory, relative to the tree's root (`.` for the root itself). */
+  /** Path of the manifest's directory, relative to the repository root (`.` for the root itself). */
   readonly at: string;
   /** The manifest's contents. */
   readonly manifest: Readonly<Record<string, unknown>>;
 }
 
 /**
- * The manifests of the synthetic installed tree the classification cases read.
+ * The manifests of the synthetic repository the classification cases read.
  *
- * The tree carries one package of each kind the split has to get right — declared by the root, by a
- * workspace manifest, reached transitively along a runtime edge, reached along a `devDependencies`
- * edge, and the workspace itself — because those are the edges the runtime/development classification
- * is derived from. Only the runtime transitive package's licence differs between the two trees this
- * suite builds, so it is the one value a case replaces.
+ * The repository carries one project of each kind the split has to get right — a package declared by
+ * the root manifest, one declared by a workspace manifest, one reached transitively along a runtime
+ * edge, one reached along a `devDependencies` edge, and the workspace member itself — because those
+ * are the edges the runtime/development classification is derived from. The packages themselves are
+ * not installed: what the repository resolves, and each package's version, licence and edges, is in
+ * the synthetic lockfile beside these manifests.
  */
-function syntheticTreeManifests(runtimeTransitiveLicence: string): readonly SyntheticManifest[] {
+function syntheticManifests(): readonly SyntheticManifest[] {
   return [
     {
       at: ".",
@@ -550,72 +556,204 @@ function syntheticTreeManifests(runtimeTransitiveLicence: string): readonly Synt
         dependencies: { "pkg-runtime-through-workspace": "1.0.0" },
       },
     },
-    {
-      at: join("node_modules", "pkg-runtime-direct"),
-      manifest: {
-        name: "pkg-runtime-direct",
-        version: "1.0.0",
-        license: "MIT",
-        dependencies: { "pkg-runtime-transitive": "1.0.0" },
-      },
-    },
-    {
-      at: join("node_modules", "pkg-runtime-transitive"),
-      manifest: { name: "pkg-runtime-transitive", version: "1.0.0", license: runtimeTransitiveLicence },
-    },
-    {
-      at: join("node_modules", "pkg-runtime-through-workspace"),
-      manifest: { name: "pkg-runtime-through-workspace", version: "1.0.0", license: "BSD-3-Clause" },
-    },
-    {
-      at: join("node_modules", "pkg-development-direct"),
-      manifest: {
-        name: "pkg-development-direct",
-        version: "1.0.0",
-        license: DEVELOPMENT_ONLY_EXCEPTION,
-        dependencies: { "pkg-development-transitive": "1.0.0" },
-      },
-    },
-    {
-      at: join("node_modules", "pkg-development-transitive"),
-      manifest: { name: "pkg-development-transitive", version: "1.0.0", license: "MIT" },
-    },
   ];
 }
 
 /**
- * Writes the synthetic installed tree under `directory` and returns its root.
+ * The synthetic lockfile's `packages` map: every package the repository resolves, by its own path.
  *
- * The tree is built here rather than read from the checkout, so these cases stay install-independent
- * and cannot be satisfied by whatever happens to be installed beside them.
+ * npm writes one record per resolved path, and a workspace member is recorded twice — once at its own
+ * directory and once as the `link` record it places under `node_modules` — which is what the reader
+ * has to read as one entry rather than two. Only the runtime transitive package's licence differs
+ * between the two repositories this suite builds, so it is the one value a case replaces.
  */
-function buildInstalledTree(directory: string, runtimeTransitiveLicence: string): string {
-  const root = join(directory, "synthetic-tree");
-  for (const { at, manifest } of syntheticTreeManifests(runtimeTransitiveLicence)) {
+function syntheticLockfilePackages(runtimeTransitiveLicence: string): Readonly<Record<string, unknown>> {
+  return {
+    "": {
+      name: "synthetic-root",
+      version: "1.0.0",
+      license: "MIT",
+      workspaces: ["packages/*"],
+      dependencies: { "pkg-runtime-direct": "1.0.0" },
+      devDependencies: { "pkg-development-direct": "1.0.0" },
+    },
+    [join("packages", "example")]: {
+      name: "@synthetic/example",
+      version: "0.1.0",
+      license: "Apache-2.0",
+      dependencies: { "pkg-runtime-through-workspace": "1.0.0" },
+    },
+    [join("node_modules", "@synthetic", "example")]: {
+      resolved: join("packages", "example"),
+      link: true,
+    },
+    [join("node_modules", "pkg-runtime-direct")]: {
+      version: "1.0.0",
+      license: "MIT",
+      dependencies: { "pkg-runtime-transitive": "1.0.0" },
+    },
+    [join("node_modules", "pkg-runtime-transitive")]: {
+      version: "1.0.0",
+      license: runtimeTransitiveLicence,
+    },
+    [join("node_modules", "pkg-runtime-through-workspace")]: {
+      version: "1.0.0",
+      license: "BSD-3-Clause",
+    },
+    [join("node_modules", "pkg-development-direct")]: {
+      version: "1.0.0",
+      license: DEVELOPMENT_ONLY_EXCEPTION,
+      dependencies: { "pkg-development-transitive": "1.0.0" },
+    },
+    [join("node_modules", "pkg-development-transitive")]: { version: "1.0.0", license: "MIT" },
+  };
+}
+
+/**
+ * Writes the synthetic repository under `directory` and returns its root.
+ *
+ * The repository is built here rather than read from the checkout, so these cases stay
+ * install-independent and cannot be satisfied by whatever happens to be installed beside them. Nothing
+ * is written into a `node_modules` directory: the entry set comes from the lockfile, and a checkout
+ * with no installed tree is a state the command supports and generates the document from.
+ */
+function buildSyntheticRepository(directory: string, runtimeTransitiveLicence: string): string {
+  const root = join(directory, "synthetic-repository");
+  for (const { at, manifest } of syntheticManifests()) {
     const manifestDirectory = join(root, at);
     mkdirSync(manifestDirectory, { recursive: true });
     writeFileSync(join(manifestDirectory, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   }
+  writeFileSync(join(root, "package-lock.json"), `${JSON.stringify(syntheticLockfile(runtimeTransitiveLicence), null, 2)}\n`, "utf8");
+  return root;
+}
+
+/** Wraps the synthetic lockfile's `packages` map in the lockfile that carries it. */
+function syntheticLockfile(runtimeTransitiveLicence: string): Readonly<Record<string, unknown>> {
+  return {
+    name: "synthetic-root",
+    version: "1.0.0",
+    lockfileVersion: 3,
+    requires: true,
+    packages: syntheticLockfilePackages(runtimeTransitiveLicence),
+  };
+}
+
+/** One platform-conditional optional binary: what the lockfile records, and what its copy declares. */
+interface SyntheticPlatformBinary {
+  /** Package name as published. */
+  readonly name: string;
+  /** The platform the package names, which is what npm matches before it installs the package at all. */
+  readonly libc: string;
+  /** The licence the committed lockfile records for it. */
+  readonly lockfileLicence: string;
+  /** The licence its installed copy declares. */
+  readonly installedLicence: string;
+}
+
+/**
+ * The two platform-conditional binaries the fixture resolves, one per platform.
+ *
+ * `installedLicence` differs from `lockfileLicence` on the first, so a case can tell which source a
+ * row was reported from rather than assuming the two agree.
+ */
+function syntheticPlatformBinaries(): readonly SyntheticPlatformBinary[] {
+  return [
+    { name: "pkg-native-glibc", libc: "glibc", lockfileLicence: "Apache-2.0", installedLicence: "MIT" },
+    { name: "pkg-native-musl", libc: "musl", lockfileLicence: "MIT", installedLicence: "MIT" },
+  ];
+}
+
+/**
+ * Writes a repository whose lockfile resolves both binaries and whose tree holds `installed` of them.
+ *
+ * npm decides at install time, by the platform each package names, whether it places the package at
+ * all, so the two repositories this builds are the two states the same committed lockfile produces:
+ * the delivered checkout, which holds one copy, and a checkout on the other platform, which holds
+ * both.
+ */
+function buildSyntheticPlatformRepository(
+  directory: string,
+  name: string,
+  installed: readonly string[],
+): string {
+  const root = join(directory, name);
+  const binaries = syntheticPlatformBinaries();
+  const declared = Object.fromEntries(binaries.map((binary) => [binary.name, "1.0.0"]));
+  mkdirSync(root, { recursive: true });
+  writeFileSync(
+    join(root, "package.json"),
+    `${JSON.stringify(
+      { name: "synthetic-platform-root", version: "1.0.0", private: true, license: "MIT", optionalDependencies: declared },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  const packages: Record<string, unknown> = {
+    "": { name: "synthetic-platform-root", version: "1.0.0", license: "MIT", optionalDependencies: declared },
+  };
+  for (const binary of binaries) {
+    packages[join("node_modules", binary.name)] = {
+      version: "1.0.0",
+      license: binary.lockfileLicence,
+      optional: true,
+      os: ["linux"],
+      cpu: ["x64"],
+      libc: [binary.libc],
+    };
+    if (!installed.includes(binary.name)) continue;
+    const installedDirectory = join(root, "node_modules", binary.name);
+    mkdirSync(installedDirectory, { recursive: true });
+    writeFileSync(
+      join(installedDirectory, "package.json"),
+      `${JSON.stringify({ name: binary.name, version: "1.0.0", license: binary.installedLicence }, null, 2)}\n`,
+      "utf8",
+    );
+  }
+
+  writeFileSync(
+    join(root, "package-lock.json"),
+    `${JSON.stringify(
+      { name: "synthetic-platform-root", version: "1.0.0", lockfileVersion: 3, requires: true, packages },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   return root;
 }
 
 /**
- * The tree reader, driven over a tree this suite builds itself.
+ * The graph reader, driven over a repository this suite builds itself.
  *
- * `readInstalledTree`'s runtime/development split is the mechanism that scopes the development-only
+ * `readResolvedTree`'s runtime/development split is the mechanism that scopes the development-only
  * exception, and no `entries`-supplying case can reach it: every case that checks the exception hands
- * the graph in. Read from the installed tree instead, a regression that classified every package
+ * the graph in. Read from the resolved graph instead, a regression that classified every package
  * `development` would keep all of them green while the exception silently covered a runtime
  * dependency, which is why the classification is asserted here edge by edge.
  */
-describe("readInstalledTree", () => {
-  it("classifies a synthetic installed tree by graph, directness and origin", async () => {
+describe("readResolvedTree", () => {
+  /** Renders the document over one repository's entries, exactly as the command does. */
+  function render(entries: readonly DependencyEntry[]): string {
+    return renderDependencyReport({
+      entries,
+      allowlist: deliveredAllowlist(),
+      generatedBy: GENERATED_BY,
+      sources: REPORT_SOURCES,
+    });
+  }
+
+  it("classifies a synthetic lockfile-resolved repository by graph, directness and origin", async () => {
     await withTemporaryDirectory(async (directory) => {
-      const entries = await readInstalledTree(buildInstalledTree(directory, "MIT"));
+      const entries = await readResolvedTree(buildSyntheticRepository(directory, "MIT"));
       const allowlist = deliveredAllowlist();
 
       // A workspace manifest's runtime dependency joins the closure, a devDependencies edge does not
-      // follow, and only what a manifest of this repository declares is direct.
+      // follow, and only what a manifest of this repository declares is direct. The workspace member is
+      // read from its own manifest rather than from the `link` record npm writes for it, so it is
+      // listed once, as `workspace`.
       expect(entries).toEqual([
         dependency("@synthetic/example", {
           version: "0.1.0",
@@ -637,25 +775,20 @@ describe("readInstalledTree", () => {
       expect(entries.map((entry) => entry.name)).not.toContain("synthetic-root");
       expect(checkLicenses(entries, allowlist)).toEqual([]);
 
-      const document = renderDependencyReport({
-        entries,
-        allowlist,
-        generatedBy: GENERATED_BY,
-        sources: REPORT_SOURCES,
-      });
-      // The tree's one development-only licence is the one entry the exception covers.
+      const document = render(entries);
+      // The repository's one development-only licence is the one entry the exception covers.
       expect(acceptedEntries(document)).toEqual([
         `- pkg-development-direct@1.0.0 — \`${DEVELOPMENT_ONLY_EXCEPTION}\` (development graph)`,
       ]);
     });
   });
 
-  it("exits 1 when that tree's development-only licence is in its runtime graph", async () => {
+  it("exits 1 when that repository's development-only licence is in its runtime graph", async () => {
     await withTemporaryDirectory(async (directory) => {
-      const root = buildInstalledTree(directory, DEVELOPMENT_ONLY_EXCEPTION);
+      const root = buildSyntheticRepository(directory, DEVELOPMENT_ONLY_EXCEPTION);
       const reportPath = join(directory, "runtime-exception-report.md");
-      // No `entries`: the command reads the tree itself, which is the path a classification regression
-      // changes — with every package read as development, this run would exit 0.
+      // No `entries`: the command reads the resolved graph itself, which is the path a classification
+      // regression changes — with every package read as development, this run would exit 0.
       const { result } = await runCommand({ root, allowlist: deliveredAllowlist(), reportPath });
 
       expect(result.wroteReport).toBe(true);
@@ -670,11 +803,68 @@ describe("readInstalledTree", () => {
       expect(violation.reason).toMatch(/development-only/);
       expect(violation.reason).toMatch(/runtime graph/);
 
-      // The same licence on the development edge of the same tree is not a violation.
+      // The same licence on the development edge of the same repository is not a violation.
       expect(result.violations.map((violation) => violation.name)).not.toContain("pkg-development-direct");
       expect(acceptedEntries(readFileSync(reportPath, "utf8"))).toEqual([
         `- pkg-development-direct@1.0.0 — \`${DEVELOPMENT_ONLY_EXCEPTION}\` (development graph)`,
       ]);
+    });
+  });
+
+  it("lists a platform-conditional optional binary whether or not this host installed it, and renders one document either way", async () => {
+    await withTemporaryDirectory(async (directory) => {
+      const binaries = syntheticPlatformBinaries();
+      const glibc = firstOf(
+        binaries.filter((binary) => binary.name === "pkg-native-glibc"),
+        "the glibc binary",
+      );
+      const musl = firstOf(
+        binaries.filter((binary) => binary.name === "pkg-native-musl"),
+        "the musl binary",
+      );
+
+      // The delivered checkout's own state: one lockfile resolves both binaries, and npm placed only
+      // the copy whose platform this host is — which is why the committed document lists a binary that
+      // is not on this machine, and why the entry set cannot come from the installed tree.
+      const thisHost = buildSyntheticPlatformRepository(directory, "platform-this-host", [glibc.name]);
+      // A checkout on the other platform: the same lockfile, both copies installed.
+      const otherHost = buildSyntheticPlatformRepository(directory, "platform-other-host", [
+        glibc.name,
+        musl.name,
+      ]);
+      expect(existsSync(join(thisHost, "node_modules", musl.name))).toBe(false);
+
+      const thisHostEntries = await readResolvedTree(thisHost);
+      const otherHostEntries = await readResolvedTree(otherHost);
+
+      // Both binaries are listed either way, in the runtime graph their optional edges put them in.
+      for (const entries of [thisHostEntries, otherHostEntries]) {
+        expect(entries.map((entry) => `${entry.name}@${entry.version}`)).toEqual([
+          `${glibc.name}@1.0.0`,
+          `${musl.name}@1.0.0`,
+        ]);
+        expect(entries.map((entry) => entry.graph)).toEqual(["runtime", "runtime"]);
+        expect(checkLicenses(entries, deliveredAllowlist())).toEqual([]);
+      }
+
+      // The binary this host did not install carries the licence the lockfile records for it.
+      const notInstalled = firstOf(
+        thisHostEntries.filter((entry) => entry.name === musl.name),
+        "the entry of the binary this host did not install",
+      );
+      expect(notInstalled.licenses).toEqual(normalizeLicense(musl.lockfileLicence));
+
+      // The installed copy is the stronger evidence, so that is what the row reports, rather than the
+      // lockfile's own record of the package's licence.
+      const installedHere = firstOf(
+        thisHostEntries.filter((entry) => entry.name === glibc.name),
+        "the entry of the binary this host installed",
+      );
+      expect(installedHere.licenses).toEqual(normalizeLicense(glibc.installedLicence));
+      expect(installedHere.licenses).not.toEqual(normalizeLicense(glibc.lockfileLicence));
+
+      // The finding's own case: present or absent, the document is one artefact byte for byte.
+      expect(render(otherHostEntries)).toBe(render(thisHostEntries));
     });
   });
 });
@@ -1208,7 +1398,7 @@ describe("the declared-package inventory", () => {
 
   it("lists every declared package with its declared version, a licence and a recorded purpose, and renders no section when none are supplied", async () => {
     const allowlist = deliveredAllowlist();
-    const entries = await readInstalledTree(REPO_ROOT);
+    const entries = await readResolvedTree(REPO_ROOT);
     const declared = collectDeclaredPackages(REPO_ROOT, entries);
     const document = renderDependencyReport({
       entries,
@@ -1277,6 +1467,90 @@ describe("the declared-package inventory", () => {
   });
 });
 
+/**
+ * The delivered tree's own licence record, held to the set the committed lockfile resolves.
+ *
+ * The entry set is host-independent by construction; the licence is the one field that still prefers
+ * what this checkout installed, so a package this host did not install reports the lockfile's record
+ * while a package it did install reports the installed copy's own. This case fixes that the two
+ * sources agree on the delivered tree: if a row ever differed, the committed document would carry one
+ * licence where a contributor's regenerated one carried another — the drift the entry set was taken
+ * out of the installed tree to prevent in the first place.
+ */
+describe("the delivered tree's licence sources", () => {
+  /**
+   * Reads the licence every installed copy reports, straight from license-checker.
+   *
+   * Read here rather than through the module under test, so what this case compares is two independent
+   * sources — the installed copies and the committed lockfile — and not the module with itself.
+   */
+  async function installedLicences(): Promise<ReadonlyMap<string, readonly string[]>> {
+    const licenseChecker = await import("license-checker-rseidelsohn");
+    const reported = await new Promise<ModuleInfos>((resolveReport, rejectReport) => {
+      licenseChecker.init({ start: REPO_ROOT, json: true }, (error, result) => {
+        if (error) {
+          rejectReport(error);
+          return;
+        }
+        resolveReport(result ?? {});
+      });
+    });
+
+    const licenses = new Map<string, readonly string[]>();
+    for (const key of Object.keys(reported).sort()) {
+      const info = reported[key];
+      const separator = key.lastIndexOf("@");
+      const name =
+        typeof info?.name === "string" && info.name.length > 0
+          ? info.name
+          : separator > 0
+            ? key.slice(0, separator)
+            : key;
+      const version =
+        typeof info?.version === "string" && info.version.length > 0
+          ? info.version
+          : separator > 0
+            ? key.slice(separator + 1)
+            : "";
+      const pair = `${name}@${version}`;
+      if (licenses.has(pair)) continue;
+      licenses.set(pair, normalizeLicense(info?.licenses));
+    }
+    return licenses;
+  }
+
+  it.skipIf(!existsSync(join(REPO_ROOT, "node_modules")))(
+    "reports the same licence operands from the installed copies and from the lockfile-resolved set",
+    async () => {
+      const installed = await installedLicences();
+      const resolved = new Map(
+        (await readResolvedTree(REPO_ROOT))
+          .filter((entry) => !entry.inRepo)
+          .map((entry) => [`${entry.name}@${entry.version}`, entry]),
+      );
+
+      const differing: string[] = [];
+      let compared = 0;
+      for (const [pair, licenses] of installed) {
+        const entry = resolved.get(pair);
+        // A pair the inventory does not list — the project itself, or a workspace member — is not an
+        // entry here: an in-repo workspace lists the licence of its own manifest.
+        if (entry === undefined) continue;
+        compared += 1;
+        if (entry.licenses.join(", ") !== licenses.join(", ")) {
+          differing.push(
+            `${pair}: the installed copy reports "${licenses.join(", ")}", the inventory entry holds "${entry.licenses.join(", ")}"`,
+          );
+        }
+      }
+
+      expect(differing).toEqual([]);
+      // A floor on the sample, so the comparison cannot pass by comparing almost nothing.
+      expect(compared).toBeGreaterThan(250);
+    },
+  );
+});
+
 describe("isolation from the repository", () => {
   it("leaves the committed dependency report byte-identical", async () => {
     const reportPath = scratchPath("isolation-report.md");
@@ -1316,25 +1590,30 @@ describe("isolation from the repository", () => {
     expect(existsSync(caseDirectory)).toBe(false);
   });
 
-  it("answers with the install instruction, and writes nothing, when there is no installed tree", async () => {
-    const emptyRoot = scratchPath("no-installed-tree");
+  it("answers with the lockfile instruction, and writes nothing, when the committed lockfile is missing", async () => {
+    const emptyRoot = scratchPath("no-lockfile");
     mkdirSync(emptyRoot, { recursive: true });
 
-    // No entries, no allowlist beside that root and no report path: the missing tree is answered first.
+    // No entries, no lockfile, no allowlist beside that root and no report path: the missing lockfile
+    // is answered first, because it is what the entry set is read from.
     const { result, printed } = await runCommand({ root: emptyRoot });
 
     expect(result.exitCode).toBe(1);
     expect(result.wroteReport).toBe(false);
     expect(result.entries).toEqual([]);
-    expect(firstOf(result.notes, "the install note")).toMatch(/npm ci/);
+    const note = firstOf(result.notes, "the lockfile note");
+    expect(note).toMatch(/package-lock\.json/);
+    expect(note).toMatch(/npm ci/);
     expect(printed).toContain("npm ci");
+    expect(existsSync(join(emptyRoot, "package-lock.json"))).toBe(false);
     expect(existsSync(join(emptyRoot, "docs"))).toBe(false);
   });
 
-  it("runs against a tree with no installed dependencies at all when the entries are supplied", async () => {
+  it("runs with neither an installed tree nor a lockfile when the entries are supplied", async () => {
     const detachedRoot = scratchPath("detached-root");
     mkdirSync(detachedRoot, { recursive: true });
     expect(existsSync(join(detachedRoot, "node_modules"))).toBe(false);
+    expect(existsSync(join(detachedRoot, "package-lock.json"))).toBe(false);
 
     const { result } = await runCommand({
       root: detachedRoot,

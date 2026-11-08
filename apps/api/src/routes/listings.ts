@@ -1541,9 +1541,11 @@ export function registerListingsRoutes(app: FastifyInstance, context: ListingsRo
       const actor = requireRole(resolveDemoAccount(database, demoAccountHeader(request)), "developer");
 
       // The listing question `requireRole` leaves open: an identifier no row carries is `404`, and a
-      // listing that exists but belongs to another developer is `403`. A hidden listing is not
-      // withheld from its own developer here — moderation hides a listing from browse, and the
-      // owner's ability to publish a version to it is not the operator's to withdraw through it.
+      // listing that exists but belongs to another developer is `403` — with a sentence of its own,
+      // because the factory's default would tell a caller whose role is right that its role is wrong.
+      // A hidden listing is not withheld from its own developer here — moderation hides a listing
+      // from browse, and the owner's ability to publish a version to it is not the operator's to
+      // withdraw through it.
       const listing = database
         .prepare<[string], ListingOwnerRow>(SELECT_LISTING_OWNER)
         .get(request.params.id);
@@ -1553,7 +1555,9 @@ export function registerListingsRoutes(app: FastifyInstance, context: ListingsRo
       }
 
       if (listing.developer_account_id !== actor.id) {
-        throw ApiError.forbidden();
+        throw ApiError.forbidden(
+          "This listing was published by another developer, so this demo account may not publish a version to it.",
+        );
       }
 
       const append = database.transaction((): ListingVersion => {

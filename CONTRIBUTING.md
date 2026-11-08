@@ -200,9 +200,10 @@ entry. Adding one is a change of five parts:
    the way the inventory entry does. A package the record does not hold is not an error — the report
    renders `purpose: not recorded`, which is exactly the line a reviewer will ask about.
 5. **A regenerated report.** Run `npm run deps:report`: it rewrites `docs/DEPENDENCIES.md` from the
-   installed tree, lists every direct and transitive dependency with its version and licence, and
-   exits non-zero on a licence outside the allowlist. Commit the regenerated document with the
-   manifest change — the document is committed output, not a hand-maintained list.
+   dependency graph `package-lock.json` resolves, lists every direct and transitive dependency with
+   its version and licence, and exits non-zero on a licence outside the allowlist. Commit the
+   regenerated document with the manifest change — the document is committed output, not a
+   hand-maintained list.
 
 Install at the repository root, never inside a workspace, and never hand-edit `package-lock.json`:
 the one root lockfile is what `npm ci` installs and what the dependency report is read from.

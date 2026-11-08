@@ -57,10 +57,11 @@
  * the catalogue — an announcement written by a component about to disappear is an announcement no one
  * hears. The page therefore owns the sentence, keyed to the standard it concerns so switching
  * standard cannot carry a stale message across, and the control owns only the refusals that leave it
- * on screen. The sentence names the governance event the review appended — its identifier, its type,
- * the account that recorded it and the ground it states, or that it recorded none — because that
- * event is the decision's record: the proposal's status column moves while an appended event never
- * does, and the operator's reason is held nowhere else.
+ * on screen. The sentence states the status the review's own answer carries rather than the one the
+ * request sent, and names the governance event the review appended — its identifier, its type, the
+ * account that recorded it and the ground it states, or that it recorded none — because that event is
+ * the decision's record: the proposal's status column moves while an appended event never does, and
+ * the operator's reason is held nowhere else.
  *
  * **Presentation only.** No business rule, no outcome derivation, no label derivation, no arithmetic
  * and no persistence live here: every number, status and identifier is rendered as the service
@@ -278,13 +279,18 @@ const REVIEW_SUBMITTING_HINT = "Recording the decision; the actions are unavaila
 const REVIEW_DECIDED_HINT =
   "The decision was recorded. The proposal list is being read again, so the status shown above is about to be the one the service holds.";
 
-/** The sentence the page announces after a decision the service applied. */
+/**
+ * The sentence the page announces after a decision the service applied.
+ *
+ * The status it states is the one the review's own answer carries — the row the route moved — rather
+ * than the status the request sent, so the announcement reports what the service recorded.
+ */
 function describeDecision(
   proposalId: string,
-  status: ProposalReviewStatus,
+  recordedStatus: ProposalStatus,
   event: GovernanceEvent | null,
 ): string {
-  const decision = `Proposal ${proposalId} is now ${status}: the review moved its status and appended a governance event.`;
+  const decision = `Proposal ${proposalId} is now ${recordedStatus}: the review moved its status and appended a governance event.`;
 
   // The event is the decision's own record — the status column moves while an appended event never
   // does — so the announcement names it and states the ground it carries. An answer that carried no
@@ -1252,10 +1258,12 @@ function ProposalReviewControl(props: {
     try {
       const reviewed = await reviewProposal(props.proposalId, body);
       setIsDecided(true);
-      // The announcement names the governance event the service appended, read from the review's own
-      // answer: the event is the decision's durable record, and the only place the ground the operator
+      // The announcement names the status the service recorded and the governance event the review
+      // appended, both read from the review's own answer: the returned proposal is the row the route
+      // moved, so the sentence states the status the service holds rather than the one that was sent,
+      // and the event is the decision's durable record — the only place the ground the operator
       // stated with it is held.
-      announcement = describeDecision(props.proposalId, status, reviewed.event);
+      announcement = describeDecision(props.proposalId, reviewed.proposal.status, reviewed.event);
     } catch (error: unknown) {
       const reading = describeReviewRefusal(error, props.proposalId);
       if (reading.kind === "stale") {
@@ -1394,6 +1402,21 @@ function ProposalItem(props: {
 }
 
 /**
+ * How many proposals the standard holds in all, said beside the page of them the read carried.
+ *
+ * The count comes from the payload's own `proposal_total` rather than from the page, which answers one
+ * page of the history rather than the history itself: a page shorter than the history is the newest
+ * page of a longer one, and a page that holds every proposal is the history. Neither is inferred here
+ * from the size of the list.
+ */
+function describeProposalTotal(proposalTotal: number, listed: number): string {
+  const held = `This standard holds ${proposalTotal} ${proposalTotal === 1 ? "proposal" : "proposals"}`;
+  return listed < proposalTotal
+    ? `${held} in all; only its ${listed} most recent ${listed === 1 ? "is" : "are"} listed here.`
+    : `${held} in all.`;
+}
+
+/**
  * The proposals of the open standard and the two ways this page writes one: the contributor's form, and
  * the operator's decision on a proposal that has not been decided yet.
  *
@@ -1435,6 +1458,14 @@ function ProposalsSection(props: {
           account is selected in the switcher above. The status stated with each proposal is the one the
           service holds for it.
         </p>
+      )}
+
+      {/* The size of the proposal history, from the payload's own total: the catalogue read above
+          answers one page of it, so the section states what the standard holds in all beside the page
+          it carries. A standard no one has proposed against yet is stated by the empty state's own
+          explanation rather than twice. */}
+      {proposals.length === 0 ? null : (
+        <p>{describeProposalTotal(props.standard.proposal_total, proposals.length)}</p>
       )}
 
       {proposals.length === 0 ? (

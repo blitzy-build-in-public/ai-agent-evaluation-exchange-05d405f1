@@ -264,6 +264,30 @@ function actingAs(role: AccountRole): RequestOptions {
   return { account: server.accountForRole(role) };
 }
 
+/**
+ * The request options that send one write as a seeded developer that does not own the given listing.
+ *
+ * It exists for the version row's `403` "not owner", which no role refusal reaches: the acting
+ * account must carry the role the row requires and still not own the listing. The seeded second
+ * developer is that account — it owns none of the seeded listings — and it is reached through the
+ * harness's account list rather than by handle or a retyped identifier, with the listing's own
+ * account excluded so the case cannot be built against the acting developer's own listing.
+ */
+function actingAsNonOwner(listingId: string): RequestOptions {
+  const owner = server.accountOf(listingId);
+  const nonOwner = server.accounts.find(
+    (account) => account.role === "developer" && account.id !== owner,
+  );
+
+  if (nonOwner === undefined) {
+    throw new Error(
+      "route walk: the seed carries no second developer, so the version row's ownership refusal cannot be reached.",
+    );
+  }
+
+  return { account: nonOwner };
+}
+
 /** The sorted keys of a response body, which is how the envelope's shape is compared. */
 function keysOf(value: object): string[] {
   return Object.keys(value).sort();
@@ -486,6 +510,30 @@ describe("route walk: every row of the API contract table", () => {
         403,
         "forbidden",
       );
+    });
+
+    it("refuses a version write from a developer that does not own the listing, naming ownership and no role", async () => {
+      // The row's `403` "not owner", which is a case of its own beside the role rule: the acting
+      // account is the seeded **second** developer, whose role the row requires and which owns none
+      // of the seeded listings, so nothing but the ownership of this listing can be what refuses it.
+      const listingId = captured(walk.createdListingId, "the created listing");
+
+      const response = await server.post(
+        `/listings/${listingId}/versions`,
+        { version_string: "9.9.9" },
+        actingAsNonOwner(listingId),
+      );
+
+      // The status and the code are the contract's and unchanged; the sentence is what this case adds.
+      expectRefusal(response, 403, "forbidden");
+
+      // The refusal reaches the caller with the condition it actually met. It says the listing is not
+      // the caller's, and it may not tell a developer whose role is the row's that its role is wrong.
+      const message = response.json<{ readonly error: { readonly message: string } }>().error
+        .message;
+
+      expect(message).toMatch(/another developer/);
+      expect(message).not.toContain("role");
     });
   });
 

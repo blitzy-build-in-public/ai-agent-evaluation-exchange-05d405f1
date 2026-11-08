@@ -173,13 +173,15 @@ export const listingIdParamsSchema = {
  * from the body.
  *
  * Statuses this row produces or hands on: `400` for a missing or empty `title`,
- * `summary`, `category_id` or `license_code`, for a bounded text field over its
- * stated maximum, or for a `pricing_model` outside {@link PRICING_MODELS} — and
- * for a declared field carrying a value of another JSON type, or for a field this
- * object does not declare, refused by the request-body policy before the handler
- * runs; `401` for a missing or unresolvable demo header; and `403` for a
- * resolvable account whose role is not `developer`. Success is `201` with the
- * created listing. Whether `category_id` names a category that exists is decided
+ * `summary`, `category_id` or `license_code`, for a `title`, `summary` or
+ * `license_code` that carries no non-whitespace character, for a bounded text
+ * field over its stated maximum, or for a `pricing_model` outside
+ * {@link PRICING_MODELS} — and for a declared field carrying a value of another
+ * JSON type, or for a field this object does not declare, refused by the
+ * request-body policy before the handler runs; `401` for a missing or
+ * unresolvable demo header; and `403` for a resolvable account whose role is not
+ * `developer`. Success is `201` with the created listing. Whether `category_id`
+ * names a category that exists is decided
  * elsewhere: this schema constrains the field's shape, and the reference is held
  * by the foreign key to `categories.id` in
  * `packages/shared/migrations/0002_listings_and_versions.sql`, checked by the
@@ -191,6 +193,19 @@ export const listingIdParamsSchema = {
  * empty string: `title: ""` is a validation failure rather than a listing with a
  * blank heading.
  *
+ * The three text fields carry `pattern: '\\S'` as well, because a length is not
+ * the whole of what makes a value usable. JSON Schema's `pattern` is a search
+ * rather than a whole-string match, so `\S` requires **at least one
+ * non-whitespace character**: `title: "   "` — which `minLength: 1` admits,
+ * counting five characters — is refused exactly as `title: ""` is, while
+ * `title: "  Depot notes  "` is accepted with its surrounding whitespace left
+ * for the route to store as the developer wrote it. The rule is load-bearing
+ * for a listing's title, because that string is what a reader encounters as
+ * text: the detail page renders it as the heading, the results card as its link
+ * text and the compare control as part of its accessible name, so a
+ * whitespace-only one produces a page with no heading and a link and a button
+ * with no name for assistive technology rather than a merely odd label.
+ *
  * The three free-text fields also carry a stated `maxLength` — `title` 200,
  * `summary` 2000 and `license_code` 64 — because a stored value is carried by
  * every collection read: a summary with no ceiling lets one client inflate every
@@ -198,18 +213,24 @@ export const listingIdParamsSchema = {
  * matches. `category_id` carries none, and must not: it is an identifier
  * resolved against the catalogue rather than text a reader is meant to read. The
  * other three numbers are this module's own choice, large enough for the content
- * of that kind. No content rule beyond membership of an enum is imposed on a
- * listing's text.
+ * of that kind.
+ *
+ * The one content rule imposed on a listing's text is therefore the
+ * non-whitespace pattern stated above: substance, and not only length, decides
+ * whether a value is accepted. No second rule belongs there — `license_code` is
+ * free text because the exchange publishes no licence catalogue, `summary` is
+ * the developer's own words, and a vocabulary or format invented here would
+ * refuse content this contract says the exchange accepts.
  */
 export const listingCreateBodySchema = {
   body: {
     type: 'object',
     required: ['title', 'summary', 'category_id', 'license_code', 'pricing_model'],
     properties: {
-      title: { type: 'string', minLength: 1, maxLength: 200 },
-      summary: { type: 'string', minLength: 1, maxLength: 2000 },
+      title: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' },
+      summary: { type: 'string', minLength: 1, maxLength: 2000, pattern: '\\S' },
       category_id: { type: 'string', minLength: 1 },
-      license_code: { type: 'string', minLength: 1, maxLength: 64 },
+      license_code: { type: 'string', minLength: 1, maxLength: 64, pattern: '\\S' },
       pricing_model: { type: 'string', enum: PRICING_MODELS },
     },
     additionalProperties: false,

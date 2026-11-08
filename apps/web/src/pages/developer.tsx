@@ -2053,7 +2053,7 @@ function PublishVersionForm(props: {
 
 /** The sentence the create form's status region announces when its own check refused a field. */
 const CREATE_INCOMPLETE_SENTENCE =
-  "The listing was not published, and no request was sent: every field below needs a value.";
+  "The listing was not published, and no request was sent: every field above needs a value.";
 
 /** The sentence beside each create field when it holds nothing. */
 const BLANK_TITLE_SENTENCE = "Enter a title before publishing the listing.";

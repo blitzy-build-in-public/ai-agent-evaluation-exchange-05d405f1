@@ -43,7 +43,7 @@ import { OFFER_MODELS } from '../types/commerce';
  * Body contract for `POST /inquiries` (buyer).
  *
  * The buyer's message on one listing, and nothing else: the two required
- * non-empty strings are the whole request.
+ * non-blank strings are the whole request.
  *
  * The buyer's identity is resolved server-side from the `X-Demo-Account` demo
  * session and is deliberately not a field here, so a caller cannot write an
@@ -69,12 +69,24 @@ import { OFFER_MODELS } from '../types/commerce';
  * this module's own choice, large enough to state a buyer's question in full and
  * no larger.
  *
+ * `message` also carries `pattern: '\\S'`, requiring at least one non-whitespace
+ * character: JSON Schema's `pattern` is a search rather than a whole-string
+ * match, so `\S` asks for substance rather than for length, and `minLength: 1`
+ * alone would admit `"   "` — five characters that state nothing. A
+ * whitespace-only value is refused the same way an empty one is, while
+ * `"  Is this listed for a trial?  "` is accepted with its surrounding
+ * whitespace left for the route to store as the buyer wrote it. The rule is the
+ * one `./listings-schema.ts` states for the text a listing is written in: a
+ * value a reader cannot read is not the thing the field says it holds, and the
+ * inquiry surface renders the message it was given.
+ *
  * Statuses this row produces or hands on: `400` for a missing or empty
- * `listing_id` or `message`, or a `message` over its stated maximum; `404` from
- * the route for a `listing_id` that names no listing; `401` for a missing or
- * unresolvable demo header; `403` for a resolvable account whose role is not
- * `buyer`; and success is `201`, the write appending an `audit_events` row of
- * resource type `inquiry`.
+ * `listing_id` or `message`, for a `message` that carries no non-whitespace
+ * character or one over its stated maximum; `404` from the route for a
+ * `listing_id` that names no listing; `401` for a missing or unresolvable demo
+ * header; `403` for a resolvable account whose role is not `buyer`; and success
+ * is `201`, the write appending an `audit_events` row of resource type
+ * `inquiry`.
  */
 export const inquiryCreateBodySchema = {
   body: {
@@ -82,7 +94,7 @@ export const inquiryCreateBodySchema = {
     required: ['listing_id', 'message'],
     properties: {
       listing_id: { type: 'string', minLength: 1 },
-      message: { type: 'string', minLength: 1, maxLength: 2000 },
+      message: { type: 'string', minLength: 1, maxLength: 2000, pattern: '\\S' },
     },
     additionalProperties: false,
   },

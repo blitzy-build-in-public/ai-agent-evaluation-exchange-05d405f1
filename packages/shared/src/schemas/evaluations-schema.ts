@@ -351,8 +351,7 @@ export const appealIdParamsSchema = {
 } as const;
 
 /**
- * Body contract for `POST /evaluations/{id}/appeals` (developer who owns the
- * appealed report).
+ * Body contract for `POST /evaluations/{id}/appeals` (developer).
  *
  * The report being appealed comes from the **path**, through
  * {@link evaluationIdParamsSchema}, and never from this body, so a caller cannot
@@ -381,9 +380,9 @@ export const appealIdParamsSchema = {
  *
  * Statuses: `400` for a missing or empty `reason` or a `reason` over its stated
  * maximum, `404` for an unknown report, `401` for a missing or unresolvable demo
- * header, `403` for a resolvable account whose role is not `developer` or which
- * does not own the appealed report. Success is `201` with the appeal in status
- * `open`.
+ * header, `403` for a resolvable account whose role is not `developer`. The route
+ * checks that role and performs no ownership lookup, so any developer may appeal
+ * any report. Success is `201` with the appeal in status `open`.
  */
 export const appealCreateBodySchema = {
   body: {

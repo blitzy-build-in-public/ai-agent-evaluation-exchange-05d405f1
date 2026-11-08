@@ -163,7 +163,7 @@ scripts. This table is the whole interface: if a command is not here, it is not 
 | `npm run test:a11y` | Accessibility and responsiveness checks on the homepage, a listing page, a compare page and a report page at 1280 px and 360 px, with the no-horizontal-scroll assertion at 360 px. | Before a pull request that renders anything. |
 | `npm run test:all` | `npm test`, then `npm run test:e2e`, then `npm run test:a11y`. | Before a pull request that touches the UI or the API. |
 | `npm run scan:exclusions` | The four-class exclusion scan over the working tree, the manifests, the lockfiles and the local git history. Exits `0` on no finding, `1` on a finding, `2` when it could not reach a verdict. Reports each finding with its file and line and deletes nothing. | Before a pull request, and whenever content is added. |
-| `npm run deps:report` | Regenerates `docs/DEPENDENCIES.md` from the installed tree and checks every licence against the allowlist, exiting non-zero on a licence outside it. | After any manifest change; commit the regenerated document with it. |
+| `npm run deps:report` | Regenerates `docs/DEPENDENCIES.md` from the dependency graph `package-lock.json` resolves and checks every licence against the allowlist, exiting non-zero on a licence outside it. | After any manifest change; commit the regenerated document with it. |
 | `npx playwright install chromium` | Downloads the one browser the browser suites use. This is the single network step in the project's life; no Playwright browser is in the dependency set itself. | Once per machine, before `npm run test:e2e` or `npm run test:a11y`. |
 
 The browser suites start the built application themselves, on a port derived from `CLONE_INDEX` (the

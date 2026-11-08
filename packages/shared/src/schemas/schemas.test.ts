@@ -568,6 +568,7 @@ describe('inquiryCreateBodySchema', () => {
       type: 'string',
       minLength: 1,
       maxLength: 2000,
+      pattern: '\\S',
     });
     expect(inquiryCreateBodySchema.body.additionalProperties).toBe(false);
   });
@@ -586,6 +587,64 @@ describe('inquiryCreateBodySchema', () => {
       expect(inquiryCreateBodySchema.body.properties).not.toHaveProperty(serverOwnedField);
     }
   });
+});
+
+describe('the free-text write fields refuse a value that is only whitespace', () => {
+  /**
+   * The four fields the non-blank rule covers, each as the name a reader looks it up by, the
+   * pattern it declares and an ordinary value of its own kind.
+   *
+   * `minLength` counts characters, so it admits a value made only of whitespace — which is the
+   * whole of the defect this group closes: a listing stored with a whitespace-only title
+   * renders an empty heading, a results-card link with no accessible name and a compare
+   * control labelled `Add to compare: ` with nothing after it. The rule the four fields carry
+   * instead is a `pattern`, which JSON Schema searches rather than matches whole, so `\S`
+   * requires at least one non-whitespace character. The ordinary value is what proves the rule
+   * is a floor rather than a filter: a value with text in it keeps its surrounding whitespace,
+   * which the routes store exactly as written.
+   */
+  const nonBlankFields: Array<[string, string, string]> = [
+    [
+      'listingCreateBodySchema.body.properties.title',
+      listingCreateBodySchema.body.properties.title.pattern,
+      '  Depot intake notes  ',
+    ],
+    [
+      'listingCreateBodySchema.body.properties.summary',
+      listingCreateBodySchema.body.properties.summary.pattern,
+      '  A summary the listing write contract accepts.  ',
+    ],
+    [
+      'listingCreateBodySchema.body.properties.license_code',
+      listingCreateBodySchema.body.properties.license_code.pattern,
+      ' MIT ',
+    ],
+    [
+      'inquiryCreateBodySchema.body.properties.message',
+      inquiryCreateBodySchema.body.properties.message.pattern,
+      '  Is this listed for a licensing trial?  ',
+    ],
+  ];
+
+  it.each(nonBlankFields)(
+    '%s refuses a whitespace-only value and accepts one with text in it',
+    (field, pattern, ordinaryValue) => {
+      // One spelling across the four fields: a divergent rule on any of them fails here rather
+      // than leaving three of them checked and the fourth a length check alone.
+      expect(pattern).toBe('\\S');
+
+      // The field declares the pattern at all. `new RegExp(undefined)` compiles to the empty
+      // pattern, which matches everything, so a `pattern` key that went missing fails the two
+      // assertions below instead of passing them quietly.
+      const accepted = new RegExp(pattern);
+
+      for (const blank of ['   ', ' \t\n ', '\u00a0']) {
+        expect(accepted.test(blank)).toBe(false);
+      }
+
+      expect(accepted.test(ordinaryValue)).toBe(true);
+    },
+  );
 });
 
 describe('the simulated-commerce request contracts', () => {

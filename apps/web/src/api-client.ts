@@ -57,7 +57,10 @@ import {
   DEMO_ACCOUNT_HEADER,
   LISTING_PAGE_SIZE,
   LISTING_STATUSES,
+  PRICING_MODELS,
   PROPOSAL_STATUSES,
+  REPORT_LABELS,
+  REPORT_OUTCOMES,
   STANDARD_STATUSES,
 } from "@adem/shared";
 import type {
@@ -171,6 +174,11 @@ const RATE_LIMIT_MESSAGE =
  * reached from this one. It is consulted only when a failure arrived **without** the
  * error envelope — a body that was not JSON, or JSON that was not the envelope — so a
  * conforming failure always yields the code the server chose.
+ *
+ * Total over the statuses the API's own vocabulary carries, the two the framework raises
+ * before a handler runs included — a body above the route's limit (`413`) and a media type
+ * no parser is registered for (`415`) — so a failure that arrived without the envelope is
+ * labelled from the status it had rather than as a fault of the service.
  */
 const STATUS_FALLBACK_CODES: Readonly<Partial<Record<number, string>>> = Object.freeze({
   400: "validation_error",
@@ -178,6 +186,8 @@ const STATUS_FALLBACK_CODES: Readonly<Partial<Record<number, string>>> = Object.
   403: "forbidden",
   404: "not_found",
   409: "conflict",
+  413: "payload_too_large",
+  415: "unsupported_media_type",
   422: "unprocessable",
   429: "rate_limited",
   500: "internal_error",
@@ -631,6 +641,63 @@ function listingStatusOf(value: unknown, response: ApiResponse): ListingStatus {
 }
 
 /**
+ * The outcome of a listing's latest report, and `null` when the listing states none.
+ *
+ * The report pair is the one place a closed-vocabulary field may legitimately be absent: a
+ * listing whose newest version carries no report sends `null` (or omits the key), and that
+ * absence stays `null` for the pages, which render it with the `No SGI report yet` copy
+ * rather than an outcome of this client's own.
+ *
+ * A value that is **present** and names no member of {@link REPORT_OUTCOMES} is a response
+ * that cannot be read, on the same rule {@link listingStatusOf} applies to a listing status:
+ * the outcome is rendered as an outcome, so this module renders the closed vocabulary it was
+ * sent and never a word outside it.
+ */
+function reportOutcomeOf(value: unknown, response: ApiResponse): ReportOutcome | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const outcome = readMember(value, REPORT_OUTCOMES);
+  if (outcome === null) {
+    throw unreadableResponse(response.status);
+  }
+  return outcome;
+}
+
+/**
+ * The label of a listing's latest report, `null` when the listing states none.
+ *
+ * Read on exactly the rule {@link reportOutcomeOf} reads the outcome with — nullable where
+ * the listing has no report, and refused rather than rendered verbatim when a present value
+ * names no member of {@link REPORT_LABELS}.
+ */
+function reportLabelOf(value: unknown, response: ApiResponse): ReportLabel | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const label = readMember(value, REPORT_LABELS);
+  if (label === null) {
+    throw unreadableResponse(response.status);
+  }
+  return label;
+}
+
+/**
+ * A listing's pricing model, read from its closed vocabulary.
+ *
+ * Not nullable, unlike the report pair: every listing declares one and the column is
+ * constrained to {@link PRICING_MODELS}, so a value that names no member is a response that
+ * cannot be read rather than a listing offered on a term this client does not hold.
+ */
+function pricingModelOf(value: unknown, response: ApiResponse): PricingModel {
+  const pricingModel = readMember(value, PRICING_MODELS);
+  if (pricingModel === null) {
+    throw unreadableResponse(response.status);
+  }
+  return pricingModel;
+}
+
+/**
  * Adds one filter to a search query, and nothing when the filter is absent or blank: a
  * filter a page did not choose is dropped rather than sent empty, which would narrow the
  * search to nothing.
@@ -720,8 +787,13 @@ function normalizeCategory(value: unknown): Category {
  * This is where a page stops depending on the wire: whether the payload spelled a missing
  * report field as `null` or omitted it, the value a card receives is the same
  * {@link ListingSummary}.
+ *
+ * The three closed-vocabulary members are read from their vocabularies rather than asserted
+ * — the pricing model from {@link PRICING_MODELS}, the outcome and the label through
+ * {@link reportOutcomeOf} and {@link reportLabelOf} — so a word outside one of them is a
+ * response that cannot be read rather than a card rendering it verbatim.
  */
-function normalizeListingSummary(value: unknown): ListingSummary {
+function normalizeListingSummary(value: unknown, response: ApiResponse): ListingSummary {
   const record = recordOrNull(value) ?? {};
   return {
     id: readString(record["id"]),
@@ -730,21 +802,22 @@ function normalizeListingSummary(value: unknown): ListingSummary {
     summary: readString(record["summary"]),
     developer_handle: readString(record["developer_handle"]),
     category: normalizeCategory(record["category"]),
-    pricing_model: record["pricing_model"] as PricingModel,
+    pricing_model: pricingModelOf(record["pricing_model"], response),
     license_code: readString(record["license_code"]),
     version_string: readString(record["version_string"]),
-    outcome: readText(record["outcome"]) as ReportOutcome | null,
+    outcome: reportOutcomeOf(record["outcome"], response),
     standard_version_id: readText(record["standard_version_id"]),
-    label: readText(record["label"]) as ReportLabel | null,
+    label: reportLabelOf(record["label"], response),
     limitation: readText(record["limitation"]),
   };
 }
 
 /**
  * One listing's detail as the listing page reads it: the report provenance and the resolved
- * category as above, and its version history, claims and offer models as arrays — the empty
- * list when the response carried none, which is the state the page renders for a listing
- * with nothing published yet.
+ * category as above, the pricing model read from its own vocabulary rather than left to the
+ * spread below, and its version history, claims and offer models as arrays — the empty list
+ * when the response carried none, which is the state the page renders for a listing with
+ * nothing published yet.
  */
 function normalizeListingDetail(response: ApiResponse): ListingDetail {
   const record = requireRecord(response);
@@ -752,6 +825,10 @@ function normalizeListingDetail(response: ApiResponse): ListingDetail {
     ...(record as unknown as ListingDetail),
     developer_handle: readString(record["developer_handle"]),
     category: normalizeCategory(record["category"]),
+    // Read explicitly rather than left to the spread above: `pricing_model` names a closed
+    // vocabulary, and the spread would carry whatever the payload held into a field the page
+    // renders as the term the listing is offered on.
+    pricing_model: pricingModelOf(record["pricing_model"], response),
     versions: arrayOrEmpty(record["versions"]) as ListingVersion[],
     // The version history arrives as a bounded page — the most recent one — so the number of
     // versions the listing holds in all is read beside it rather than inferred from the page: a
@@ -759,9 +836,9 @@ function normalizeListingDetail(response: ApiResponse): ListingDetail {
     version_total: requireCount(record["version_total"], response),
     claims: arrayOrEmpty(record["claims"]) as ListingClaim[],
     report_id: readText(record["report_id"]),
-    outcome: readText(record["outcome"]) as ReportOutcome | null,
+    outcome: reportOutcomeOf(record["outcome"], response),
     standard_version_id: readText(record["standard_version_id"]),
-    label: readText(record["label"]) as ReportLabel | null,
+    label: reportLabelOf(record["label"], response),
     offer_models: arrayOrEmpty(record["offer_models"]) as OfferModel[],
   };
 }
@@ -770,20 +847,24 @@ function normalizeListingDetail(response: ApiResponse): ListingDetail {
  * One column of a comparison: the same normalisation as a search result, with the claims and
  * the collected limitations as arrays, so a side-by-side table renders a listing that states
  * no limitation as one that states none rather than as one that failed to load.
+ *
+ * The three closed-vocabulary members are read exactly as {@link normalizeListingSummary}
+ * reads them, so a column shows a pricing model, an outcome and a label the vocabulary holds
+ * or reports a response that cannot be read.
  */
-function normalizeCompareEntry(value: unknown): CompareEntry {
+function normalizeCompareEntry(value: unknown, response: ApiResponse): CompareEntry {
   const record = recordOrNull(value) ?? {};
   return {
     listing_id: readString(record["listing_id"]),
     title: readString(record["title"]),
     claims: arrayOrEmpty(record["claims"]) as ListingClaim[],
     report_id: readText(record["report_id"]),
-    outcome: readText(record["outcome"]) as ReportOutcome | null,
+    outcome: reportOutcomeOf(record["outcome"], response),
     standard_version_id: readText(record["standard_version_id"]),
-    label: readText(record["label"]) as ReportLabel | null,
+    label: reportLabelOf(record["label"], response),
     limitations: arrayOrEmpty(record["limitations"]).map(readString),
     license_code: readString(record["license_code"]),
-    pricing_model: record["pricing_model"] as PricingModel,
+    pricing_model: pricingModelOf(record["pricing_model"], response),
   };
 }
 
@@ -835,8 +916,8 @@ export interface ThreadListItem extends Thread {
 }
 
 /**
- * One row of the standards catalogue: the standard, with the versions published under it and
- * the proposals made against it as arrays.
+ * One row of the standards catalogue: the standard, with the versions published under it, the page of
+ * the proposals made against it this read carries, and the number of proposals it holds in all.
  *
  * The thresholds a version carries are what the standards page renders, and a proposal's
  * status is what the review trail is read from, so both collections are present here even
@@ -847,6 +928,12 @@ export interface StandardListItem extends Standard {
   readonly versions: readonly StandardVersion[];
   /** The proposals made against this standard, in the order they were submitted. */
   readonly proposals: readonly StandardProposal[];
+  /**
+   * How many proposals this standard holds in all, so a reader can tell the page it carries from the
+   * standard's whole proposal history: `proposals` is one page of that history, while this is the
+   * number the next page of it would answer with.
+   */
+  readonly proposal_total: number;
 }
 
 /**
@@ -898,7 +985,9 @@ export interface ListingModerationResult {
  */
 export async function listListings(query: ListingSearchQuery): Promise<ListingSearchResult> {
   const response = await send("GET", "/listings", { query: listingSearchQuery(query) });
-  const items = requireArray(response, ["items"]).map(normalizeListingSummary);
+  const items = requireArray(response, ["items"]).map(
+    (raw: unknown): ListingSummary => normalizeListingSummary(raw, response),
+  );
   if (items.length > LISTING_PAGE_SIZE) {
     throw new ApiClientError(
       response.status,
@@ -950,7 +1039,11 @@ export async function getListing(id: string): Promise<ListingDetail> {
  */
 export async function compareListings(ids: readonly string[]): Promise<CompareResult> {
   const response = await send("GET", "/compare", { query: compareQuery(ids) });
-  return { entries: requireArray(response, ["entries"]).map(normalizeCompareEntry) };
+  return {
+    entries: requireArray(response, ["entries"]).map(
+      (raw: unknown): CompareEntry => normalizeCompareEntry(raw, response),
+    ),
+  };
 }
 
 /**
@@ -1026,12 +1119,14 @@ export async function getReport(reportId: string): Promise<EvaluationReportDetai
  * `POST /evaluations/{id}/appeals` (developer): opens an appeal against a report with a
  * stated reason.
  *
- * The report comes from the path and the ground for contesting it from the body. An appeal
+ * The report comes from the path and the ground for contesting it from the body. The
+ * resolved account's role is the whole of the check the route makes — it performs no
+ * ownership lookup, so any developer account may open an appeal against any report. An appeal
  * never changes the report it concerns: a ruling appends a governance event, and
  * `GET /evaluations/{id}` returns the identical report afterwards.
  *
- * Raises {@link ApiClientError} for `404` (an unknown report), `401`, `403` — the selected
- * account is not a developer, or does not own the report — and `400`.
+ * Raises {@link ApiClientError} for `404` (an unknown report), `401`, `403` — the resolved
+ * account is not a developer — and `400`.
  */
 export async function openAppeal(reportId: string, body: AppealCreateBody): Promise<Appeal> {
   const response = await send("POST", `/evaluations/${encodeURIComponent(reportId)}/appeals`, {
@@ -1355,8 +1450,12 @@ function standardProposalRowFrom(raw: unknown, response: ApiResponse): StandardP
  * proposal again: a row that states none of the fields this client carries is raised as an
  * unreadable response rather than dropped, and a page therefore reads a typed value.
  *
+ * Each item's proposals are one page of that standard's proposal history — its most recent page — and
+ * the number of proposals the standard holds in all is read beside it as the item's own
+ * `proposal_total`, so a page discloses the page it holds instead of presenting it as the history.
+ *
  * Raises {@link ApiClientError} for a response that carries no standards to read, and for one
- * whose standard, version or proposal rows cannot be read.
+ * whose standard, version or proposal rows, or a standard's proposal total, cannot be read.
  */
 export async function listStandards(): Promise<StandardListItem[]> {
   const response = await send("GET", "/standards");
@@ -1374,6 +1473,10 @@ export async function listStandards(): Promise<StandardListItem[]> {
       proposals: ownedCollection(record["proposals"], proposals, "standard_id", standard.id).map(
         (entry: unknown): StandardProposal => standardProposalRowFrom(entry, response),
       ),
+      // The proposals arrive as a bounded page — the most recent one — so the number of proposals
+      // the standard holds in all is read beside it rather than inferred from the page: a client
+      // that took the page for the history would show 20 proposals of a standard that has 25.
+      proposal_total: requireCount(record["proposal_total"], response),
     };
   });
 }

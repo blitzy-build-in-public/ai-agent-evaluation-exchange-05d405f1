@@ -85,11 +85,11 @@ ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and 0BSD, and MPL-2.0 is permitted f
 dependencies — such a licence must never appear in a runtime graph, because one permitted for
 development alone is not one that may be distributed. Fourth, a purpose record so the generated
 report can answer for the package. Fifth, a regenerated report: `npm run deps:report` rewrites
-`docs/DEPENDENCIES.md` from the installed tree and exits non-zero on a licence outside the allowlist,
-and the regenerated document is committed with the manifest change. Install at the repository root,
-never inside a workspace, and never hand-edit `package-lock.json`. Three classes of package cannot be
-added at all, whatever their licence: a payment provider's library, an analytics or tracking SDK, and
-an advertising SDK._
+`docs/DEPENDENCIES.md` from the dependency graph `package-lock.json` resolves and exits non-zero on
+a licence outside the allowlist, and the regenerated document is committed with the manifest change.
+Install at the repository root, never inside a workspace, and never hand-edit `package-lock.json`.
+Three classes of package cannot be added at all, whatever their licence: a payment provider's
+library, an analytics or tracking SDK, and an advertising SDK._
 
 ## Hard exclusions that decline a request at the source
 

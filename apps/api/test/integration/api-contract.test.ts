@@ -31,8 +31,9 @@
  * 3. *Reproducibility*: one candidate's recorded submission is sent twice, as the developer that
  *    owns the version, and the two reports must be equal on every field they can be equal on.
  * 4. *The statuses no other suite owns*: `400` for a query value the search contract rejects, for a
- *    listing body whose text fields exceed the schema's maximum and for a `page` whose offset the
- *    store cannot address, `404` for a listing, a standard version and a standard that no row carries,
+ *    listing body whose text fields exceed the schema's maximum or hold no non-whitespace character,
+ *    for an inquiry body whose message holds none, for a `page` whose offset the store cannot
+ *    address, `404` for a listing, a standard version and a standard that no row carries,
  *    `409` for a version string a listing has already published, and `200` with an empty page where a
  *    search matches nothing, where it is asked for a page past the end of its results, and where the
  *    catalogue is genuinely empty.
@@ -213,6 +214,29 @@ const OVER_LONG_TITLE = "A".repeat(
 const OVER_LONG_SUMMARY = "A".repeat(
   listingCreateBodySchema.body.properties.summary.maxLength + 1,
 );
+
+/**
+ * A value a length check admits and a reader cannot read: the whitespace-only string the write
+ * contract's pattern exists to refuse.
+ *
+ * `minLength` counts characters, so five spaces satisfied it and a listing was stored whose title
+ * rendered as an empty heading and as a link and a compare button with no accessible name. The value
+ * is written as spaces rather than as a tab or a non-breaking space because it is the spelling a client
+ * reaches for by accident, and the sibling unit suite
+ * (`packages/shared/src/schemas/schemas.test.ts`) covers the other spellings of the same class against
+ * the pattern itself.
+ */
+const BLANK_TEXT = "   ";
+
+/**
+ * The three text fields of a listing's create body, as the probe below sends them one at a time.
+ *
+ * Each is set to {@link BLANK_TEXT} in the body the route would otherwise accept, so a refusal that
+ * depended on which field was blank would be one field's rule rather than the rule all three carry.
+ * `category_id` is deliberately absent: it is an identifier the route resolves against the catalogue
+ * rather than text a reader is meant to read, so no non-blank rule applies to it.
+ */
+const NON_BLANK_LISTING_FIELDS = ["title", "summary", "license_code"] as const;
 
 /** One seeded report as this file reads it: the candidate it belongs to, its id and its payload. */
 interface SeededReportView {
@@ -574,31 +598,38 @@ function countRows(harness: TestServer, sql: string, ...params: readonly unknown
 }
 
 /**
- * A category and a licence code a listing body has to name, read from the seed through the harness's
- * own connection.
+ * A category, a licence code and a listing identifier a write body has to name, read from the seed
+ * through the harness's own connection.
  *
  * `POST /listings` is the write whose body carries references no route publishes: `category_id` names a
  * catalogue row and `license_code` a licence the seed chose, so both come from the seed's own first
  * listing rather than from anything invented here. Reading them is what keeps the refusal below about
  * one thing only — with a resolvable category and a real licence code, a body the schema had bounded
  * nothing in would be created and would change the count that case asserts is unchanged, where an
- * invented category would refuse for a reason the contract names nowhere.
+ * invented category would refuse for a reason the contract names nowhere. That same row is the listing
+ * `POST /inquiries` addresses, so the inquiry probe below names a listing the seed really wrote and
+ * retypes no identifier to do it.
  *
- * @returns The two values, keyed by the body field each belongs in.
+ * @returns The three values, keyed by the body field each belongs in.
  */
-function seededListingReference(): { readonly categoryId: string; readonly licenseCode: string } {
+function seededListingReference(): {
+  readonly listingId: string;
+  readonly categoryId: string;
+  readonly licenseCode: string;
+} {
   const row = server.query<{
+    readonly id: string;
     readonly category_id: string;
     readonly license_code: string;
-  }>("SELECT category_id, license_code FROM listings ORDER BY rowid ASC LIMIT 1")[0];
+  }>("SELECT id, category_id, license_code FROM listings ORDER BY rowid ASC LIMIT 1")[0];
 
   if (row === undefined) {
     throw new Error(
-      "this suite reads a category and a licence code from the seeded catalogue, and the seed wrote no listing to read them from",
+      "this suite reads a listing, a category and a licence code from the seeded catalogue, and the seed wrote no listing to read them from",
     );
   }
 
-  return { categoryId: row.category_id, licenseCode: row.license_code };
+  return { listingId: row.id, categoryId: row.category_id, licenseCode: row.license_code };
 }
 
 /**
@@ -952,6 +983,66 @@ describe("evaluations contract", () => {
       // for listings, so the count is read from the harness's own connection, as every other refusal of
       // this file reads the rows it did not leave behind.
       expect(countRows(server, "SELECT COUNT(*) AS total FROM listings")).toBe(listingsBefore);
+    });
+
+    it.each(NON_BLANK_LISTING_FIELDS)(
+      "answers 400 for a listing body whose %s is only whitespace, and writes nothing",
+      async (blankField) => {
+        // A length is not the whole of what makes a value usable: `minLength` counts characters, so
+        // five spaces satisfied it and the write was answered `201` with a listing stored whose title
+        // rendered as an empty heading and as a link and a compare button with no accessible name. The
+        // refusal here is the field's own `pattern`, which JSON Schema searches for at least one
+        // non-whitespace character, and it happens at the edge before the handler that resolves the
+        // category, reads the demo header or writes a row runs at all.
+        const { categoryId, licenseCode } = seededListingReference();
+        const developer = server.accountForRole("developer");
+        const listingsBefore = countRows(server, "SELECT COUNT(*) AS total FROM listings");
+
+        // Every other field is a value the route accepts, so nothing except the blank one can be what
+        // the schema refused: the category and the licence code are the seed's own.
+        expectErrorEnvelope(
+          await server.post(
+            "/listings",
+            {
+              title: "A listing the write contract accepts",
+              summary: "A summary the listing write contract accepts.",
+              category_id: categoryId,
+              license_code: licenseCode,
+              pricing_model: "purchase",
+              [blankField]: BLANK_TEXT,
+            },
+            { account: developer },
+          ),
+          400,
+          "validation_error",
+        );
+
+        // No refusal reached a handler, so the blank field wrote no listing, and the count is read
+        // after the probe as well as before it.
+        expect(countRows(server, "SELECT COUNT(*) AS total FROM listings")).toBe(listingsBefore);
+      },
+    );
+
+    it("answers 400 for an inquiry whose message is only whitespace, and writes nothing", async () => {
+      // The same rule on the other write body this share owns: `inquiryCreateBodySchema` requires a
+      // non-whitespace character of `message`, so a message that only looks like one is refused at the
+      // edge rather than stored and read back by the listing's inquiry surface as a question with
+      // nothing in it.
+      const { listingId } = seededListingReference();
+      const buyer = server.accountForRole("buyer");
+      const inquiriesBefore = countRows(server, "SELECT COUNT(*) AS total FROM inquiries");
+
+      expectErrorEnvelope(
+        await server.post(
+          "/inquiries",
+          { listing_id: listingId, message: BLANK_TEXT },
+          { account: buyer },
+        ),
+        400,
+        "validation_error",
+      );
+
+      expect(countRows(server, "SELECT COUNT(*) AS total FROM inquiries")).toBe(inquiriesBefore);
     });
 
     it("answers 404 for a listing and a standard version that no row carries", async () => {

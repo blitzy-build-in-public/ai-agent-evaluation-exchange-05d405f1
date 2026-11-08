@@ -1,18 +1,20 @@
 /**
  * `npm run deps:report` — the generated dependency report and the licence-allowlist gate.
  *
- * Reads the installed dependency tree, writes `docs/DEPENDENCIES.md` listing every direct and
- * transitive dependency with its version and licence, and exits non-zero when a licence outside the
- * allowlist appears in the tree. The allowlist is data (`scripts/license-allowlist.json`), so
- * widening it is a reviewable diff rather than a code change.
+ * Reads the dependency graph the committed `package-lock.json` resolves, writes `docs/DEPENDENCIES.md`
+ * listing every direct and transitive dependency with its version and licence, and exits non-zero when
+ * a licence outside the allowlist appears in that graph. The allowlist is data
+ * (`scripts/license-allowlist.json`), so widening it is a reviewable diff rather than a code change.
  *
  * Five properties the report rests on:
  *
  * - **It is generated, never hand-edited.** The document is committed, so identical input must render
  *   byte-identically: no timestamp, no machine name, no absolute path, no run counter. A spurious
  *   diff on every run would hide a real one.
- * - **Versions and licences are read from the installed tree**, never re-derived from the lockfile's
- *   ranges, which is what keeps the document and `npm ci` from disagreeing.
+ * - **The entry set is the committed lockfile's, not this host's `node_modules`.** npm installs a
+ *   platform-conditional optional package only on the platform it names, so an entry list read from an
+ *   installed tree differs between hosts and the committed document stops being the artefact it
+ *   regenerates. The licence still prefers the installed copy, so the document and `npm ci` agree.
  * - **An in-repo workspace is a third kind, not a graph.** Every workspace the root manifest declares
  *   is listed with `workspace` as its kind and its graph: it is this repository's own member, read
  *   from its own manifest rather than reached from one, and it belongs to neither the runtime graph
@@ -28,7 +30,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve as resolvePath } from 'node:path';
+import { dirname, join, relative, resolve as resolvePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { InitOpts, ModuleInfo, ModuleInfos } from 'license-checker-rseidelsohn';
@@ -42,8 +44,19 @@ const REPORT_RELATIVE_PATH = join('docs', 'DEPENDENCIES.md');
 /** Path of the allowlist data, relative to the repository root. */
 const ALLOWLIST_RELATIVE_PATH = join('scripts', 'license-allowlist.json');
 
+/**
+ * The committed lockfile the entry set and both dependency graphs are read from.
+ *
+ * Held as a relative name because the document names its sources relatively and carries no absolute
+ * path, and because `npm ci` installs exactly what it resolves on any host.
+ */
+const LOCKFILE_RELATIVE_PATH = 'package-lock.json';
+
 /** The files the report is generated from. Relative names only: the document carries no absolute path. */
-const REPORT_SOURCES: readonly string[] = ['package.json', 'package-lock.json'];
+const REPORT_SOURCES: readonly string[] = ['package.json', LOCKFILE_RELATIVE_PATH];
+
+/** The `node_modules` segment a lockfile path carries when it names an installed package. */
+const NODE_MODULES_SEGMENT = 'node_modules/';
 
 /** Exit code for an unexpected command line — the only code {@link main} decides on its own. */
 const USAGE_EXIT_CODE = 2;
@@ -99,11 +112,15 @@ const DECLARED_MAP_LABELS: Readonly<Record<string, string>> = {
 /** What a declared package whose purpose the record does not hold renders as, in place of a failure. */
 const NOT_RECORDED_PURPOSE = 'not recorded';
 
-/** One dependency of the delivered product, with the licence the installed tree reports for it. */
+/**
+ * One dependency of the delivered product: the package the committed lockfile resolves, with the
+ * licence this checkout's installed copy reports for it where there is one, and the lockfile's record
+ * of that licence where this host did not install the package.
+ */
 export interface DependencyEntry {
   /** Package name as published, for example `fastify` or `@adem/shared`. */
   readonly name: string;
-  /** Exactly the version installed under `node_modules`. */
+  /** Exactly the version the committed lockfile resolves. */
   readonly version: string;
   /**
    * Normalised licence operands from {@link normalizeLicense}: one element per alternative, where an
@@ -186,7 +203,7 @@ export interface RunDepsReportOptions {
   readonly allowlistPath?: string;
   /** Path of the document to write. Defaults to `<root>/docs/DEPENDENCIES.md`. */
   readonly reportPath?: string;
-  /** Entries to report on instead of reading the installed tree, as the unit test does. */
+  /** Entries to report on instead of reading the resolved dependency graph, as the unit test does. */
   readonly entries?: readonly DependencyEntry[];
   /** Allowlist to check against instead of reading the data file. */
   readonly allowlist?: Allowlist;
@@ -207,8 +224,9 @@ export interface DeclaredPackageDeclaration {
  *
  * AAP §0.4.1 fixes an inventory entry as the package's exact version, its licence and its purpose, and
  * the workspace it belongs to. The version, the workspace and the map come from the declaring
- * manifests, the licence comes from the entry the installed tree reports (an in-repo workspace's own
- * manifest licence for `@adem/*`), and the purpose comes from {@link DECLARED_PACKAGE_PURPOSES}.
+ * manifests, the licence comes from the entry the resolved graph holds for the package (an in-repo
+ * workspace's own manifest licence for `@adem/*`), and the purpose comes from
+ * {@link DECLARED_PACKAGE_PURPOSES}.
  */
 export interface DeclaredPackage {
   /** Package name as published, for example `fastify` or `@types/node`. */
@@ -219,7 +237,7 @@ export interface DeclaredPackage {
    * workspaces disagree, which the report then shows rather than picking one silently.
    */
   readonly versions: readonly string[];
-  /** The licences the installed entry for this package reports; empty when none is installed. */
+  /** The licences the resolved entry for this package reports; empty when the graph holds none. */
   readonly licenses: readonly string[];
   /**
    * Who declares the package, root first and then by workspace name, so the list is stable across
@@ -235,8 +253,9 @@ export interface DeclaredPackage {
  *
  * AAP §0.4.1 fixes a package's inventory entry as its exact version, its licence and its purpose, and
  * it requires an entry before a package is declared. The version and the licence a declaration answers
- * for come from the manifest and the installed tree; the purpose — why the product needs the package
- * at all — has no other home, because it is a statement about the design rather than about the tree.
+ * for come from the manifest and the resolved dependency graph; the purpose — why the product needs the
+ * package at all — has no other home, because it is a statement about the design rather than about the
+ * graph.
  * That is what this record holds: one line for every package the root manifest or a workspace
  * manifest declares, phrased in the plan's own words where §0.4.1 lists the package and in the plan's
  * requirements where it does not.
@@ -451,7 +470,7 @@ const splitTopLevel = (expression: string, operator: 'AND' | 'OR'): readonly str
  * licence (`UNLICENSED`, `UNKNOWN`, `SEE LICENSE IN …`) is kept verbatim so a violation can quote
  * the raw value rather than paraphrase it — the decision on such a marker is always "not allowlisted".
  *
- * @param value - The `licenses` field as the installed tree reports it.
+ * @param value - The `licenses` field as the installed copy or the lockfile reports it.
  * @returns The deduplicated operand list in first-seen order; empty when no licence is declared.
  */
 export function normalizeLicense(value: string | readonly string[] | undefined): readonly string[] {
@@ -572,7 +591,7 @@ export function isAllowlisted(
  * In-repo workspaces are skipped: they are this repository's own unpublished packages, not third
  * party dependencies, and the report states that exemption where it lists them.
  *
- * @param entries - The entries to check, typically from {@link readInstalledTree}.
+ * @param entries - The entries to check, typically from {@link readResolvedTree}.
  * @param allowlist - The licence policy to check against.
  * @returns The violations sorted by name, then version, then reason, so output is diffable.
  */
@@ -771,7 +790,7 @@ const sortDeclarations = (
   );
 };
 
-/** Returns the licences of the entry the installed tree reports for a declared package. */
+/** Returns the licences of the entry the resolved graph holds for a declared package. */
 const licencesOfDeclaredPackage = (
   name: string,
   versions: readonly string[],
@@ -787,13 +806,13 @@ const licencesOfDeclaredPackage = (
 /**
  * Collects the inventory entry of every package the root manifest or a workspace manifest declares.
  *
- * The declared set is what the manifests say, not what the tree happens to hold: a package declared
- * but not installed still appears, with no licence recorded, so the gap is visible in the report
- * rather than hidden by it. Licences come from the entry the installed tree reports for the declared
+ * The declared set is what the manifests say, not what the graph happens to hold: a package declared
+ * but resolved nowhere still appears, with no licence recorded, so the gap is visible in the report
+ * rather than hidden by it. Licences come from the entry the resolved graph holds for the declared
  * version, which is the same source the dependency table uses.
  *
  * @param rootDir - Repository root whose manifests are read.
- * @param entries - The entries the installed tree reports, as {@link readInstalledTree} returns them.
+ * @param entries - The entries the resolved graph holds, as {@link readResolvedTree} returns them.
  * @returns One inventory entry per declared package, in name order; empty when the root holds no
  * manifest, which is the case a caller supplies its own entries and no repository for.
  * @throws When the root manifest or a workspace manifest is unreadable or malformed.
@@ -835,16 +854,174 @@ export function collectDeclaredPackages(
   return packages;
 }
 
-/** Resolves a dependency name from an installed package, the way Node walks `node_modules`. */
-const resolveInstalledPackage = (fromDir: string, name: string): string | null => {
-  let current = resolvePath(fromDir);
-  for (;;) {
-    const candidate = join(current, 'node_modules', ...name.split('/'));
-    if (existsSync(join(candidate, 'package.json'))) return candidate;
-    const parent = dirname(current);
-    if (parent === current) return null;
-    current = parent;
+/** One package the committed lockfile resolves: its identity, the licence it records and its edges. */
+interface LockfilePackage {
+  /** `name@version`, the key the runtime graph and the installed-licence map are keyed by. */
+  readonly key: string;
+  /** Package name as published: the entry's own `name` where npm records one, its path otherwise. */
+  readonly name: string;
+  /** Exactly the version the lockfile resolves for that name. */
+  readonly version: string;
+  /** The licence operands the entry's own `license` field normalises to; empty when it records none. */
+  readonly licenses: readonly string[];
+  /**
+   * The names in the entry's own `dependencies` and `optionalDependencies` maps, which are the edges
+   * the runtime graph is closed over. `devDependencies` is never followed.
+   */
+  readonly dependencies: readonly string[];
+}
+
+/**
+ * The committed lockfile as the report reads it.
+ *
+ * `packages` holds every record the lockfile resolves, keyed by the record's own path: the installed
+ * packages under `node_modules` and the in-repo workspace directories, which are what a dependency on
+ * a workspace resolves to. `linkTargets` maps each `link` record — the workspace symlink npm writes
+ * under `node_modules` — to the directory it stands for, so resolution lands on the workspace's own
+ * record rather than on the symlink. `installed` is the records under `node_modules` in path order,
+ * which is the entry set and the order each `name@version` takes its occurrence in.
+ */
+interface ResolvedLockfile {
+  /** Every record the lockfile resolves, keyed by its lockfile path. */
+  readonly packages: ReadonlyMap<string, LockfilePackage>;
+  /** The directory each `link` record stands for, keyed by the link record's own path. */
+  readonly linkTargets: ReadonlyMap<string, string>;
+  /** The records under `node_modules`, in lockfile path order. */
+  readonly installed: readonly LockfilePackage[];
+}
+
+/** Reads the licence field of a lockfile record, keeping only the strings it holds. */
+const readLockfileLicense = (value: unknown): string | readonly string[] | undefined => {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.filter((member): member is string => typeof member === 'string');
+  return undefined;
+};
+
+/** Reads the names of a lockfile record's own `dependencies` and `optionalDependencies` maps. */
+const readLockfileDependencies = (record: Record<string, unknown>): readonly string[] => {
+  const names: string[] = [];
+  for (const map of ['dependencies', 'optionalDependencies']) {
+    const value = record[map];
+    if (!isRecord(value)) continue;
+    for (const name of Object.keys(value)) {
+      if (name.trim().length > 0) names.push(name);
+    }
   }
+  return uniqueStrings(names);
+};
+
+/** The package name a lockfile path ends with, which is where npm records the name of a plain install. */
+const nameOfLockfilePath = (path: string): string =>
+  path.slice(path.lastIndexOf(NODE_MODULES_SEGMENT) + NODE_MODULES_SEGMENT.length);
+
+/** Reads one lockfile record into the package the report resolves it as. */
+const toLockfilePackage = (path: string, record: Record<string, unknown>): LockfilePackage => {
+  // An aliased install carries the name it stands in for — `node_modules/wrap-ansi-cjs` records
+  // `name: "wrap-ansi"` — so the entry's own `name` is the published name and its path is the fallback.
+  const recordedName = typeof record.name === 'string' ? record.name.trim() : '';
+  const name = recordedName.length > 0 ? recordedName : nameOfLockfilePath(path);
+  const version =
+    typeof record.version === 'string' && record.version.length > 0 ? record.version : 'unknown';
+  return {
+    key: `${name}@${version}`,
+    name,
+    version,
+    licenses: normalizeLicense(readLockfileLicense(record.license)),
+    dependencies: readLockfileDependencies(record),
+  };
+};
+
+/** Reads the repository-relative directory a `link` record stands for, or `null` when it names none. */
+const linkTargetOf = (record: Record<string, unknown>): string | null => {
+  if (typeof record.resolved !== 'string') return null;
+  const target = record.resolved.trim().replace(/^\.\//, '').replace(/\/+$/, '');
+  return target.length === 0 ? null : target;
+};
+
+/**
+ * Reads the committed lockfile into the graph the report resolves its entries and graphs from.
+ *
+ * A `link` record is not a package: it is the symlink npm writes under `node_modules` for a workspace
+ * member, and the record it stands for is the workspace's own directory, which resolution lands on.
+ * The project's own root record is skipped, because it is not a dependency of anything.
+ *
+ * @param rootDir - Repository root whose lockfile is read.
+ * @returns The resolved records, the link targets and the records under `node_modules`; all three are
+ * empty when the root holds no lockfile, which is the state the command answers with an instruction.
+ * @throws When the lockfile is present but is not JSON, or carries no `packages` map.
+ */
+const readLockfile = (rootDir: string): ResolvedLockfile => {
+  const file = join(rootDir, LOCKFILE_RELATIVE_PATH);
+  if (!existsSync(file)) return { packages: new Map(), linkTargets: new Map(), installed: [] };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error: unknown) {
+    throw new Error(`dependency lockfile at ${file} is not valid JSON: ${messageOf(error)}`);
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.packages)) {
+    throw new Error(
+      `dependency lockfile at ${file} is malformed: expected an object carrying the resolved dependency graph as a "packages" map`,
+    );
+  }
+
+  const packages = new Map<string, LockfilePackage>();
+  const linkTargets = new Map<string, string>();
+  const installed: LockfilePackage[] = [];
+  // Path order decides which occurrence of a `name@version` that the lockfile resolves at more than one
+  // path is listed, so the entry set is one list whatever order the map's keys arrive in.
+  for (const path of Object.keys(parsed.packages).sort(compareStrings)) {
+    const record = parsed.packages[path];
+    if (path.length === 0 || !isRecord(record)) continue;
+    if (record.link === true) {
+      const target = linkTargetOf(record);
+      if (target !== null) linkTargets.set(path, target);
+      continue;
+    }
+    const resolved = toLockfilePackage(path, record);
+    packages.set(path, resolved);
+    if (path.includes(NODE_MODULES_SEGMENT)) installed.push(resolved);
+  }
+  return { packages, linkTargets, installed };
+};
+
+/**
+ * Resolves a dependency name from a package's lockfile path, the way Node walks `node_modules`.
+ *
+ * The walk is over ancestor directory prefixes: a dependency of `packages/shared` is looked for at
+ * `packages/shared/node_modules/<name>`, then `packages/node_modules/<name>`, then
+ * `node_modules/<name>`. One trailing segment is stripped at a time, as Node does, so a package nested
+ * at `node_modules/a/node_modules/b` looks in its own `node_modules` before its ancestors'. A `link`
+ * record resolves to the directory it stands for, which is the workspace's own record.
+ *
+ * @returns The lockfile path the name resolves to, or `null` when nothing there holds it.
+ */
+const resolveLockfilePath = (
+  lockfile: ResolvedLockfile,
+  fromPath: string,
+  name: string,
+): string | null => {
+  let current = fromPath;
+  for (;;) {
+    const prefix = current.length === 0 ? '' : `${current}/`;
+    const candidate = `${prefix}node_modules/${name}`;
+    const linkTarget = lockfile.linkTargets.get(candidate);
+    if (linkTarget !== undefined) {
+      return lockfile.packages.has(linkTarget) ? linkTarget : null;
+    }
+    if (lockfile.packages.has(candidate)) return candidate;
+    if (current.length === 0) return null;
+    const segments = current.split('/');
+    segments.pop();
+    current = segments.join('/');
+  }
+};
+
+/** The lockfile path of a directory inside the repository, `''` for the repository root's own. */
+const lockfilePathOfDirectory = (rootDir: string, dir: string): string => {
+  const fromRoot = relative(rootDir, dir);
+  return fromRoot.length === 0 ? '' : fromRoot.split(sep).join('/');
 };
 
 /** Collects every package name any manifest in the repository declares. */
@@ -859,27 +1036,38 @@ const collectDeclaredNames = (manifests: readonly Manifest[]): ReadonlySet<strin
 };
 
 /**
- * Splits the installed packages into the runtime and development graphs.
+ * Splits the resolved packages into the runtime and development graphs.
  *
  * license-checker's own `production`/`development` options cannot make this split here: they filter
  * against the root manifest's own dependency maps, and an npm-workspaces root declares no
  * dependencies of its own, so the production pass returns only the root project while the
  * development pass returns the whole tree. Membership is therefore derived from what the manifests
  * declare — the root's and every in-repo workspace's `dependencies`, `optionalDependencies` and
- * `peerDependencies` — closed transitively over the installed packages' own `dependencies` and
- * `optionalDependencies`. `devDependencies` are never followed, so a package reachable only through
- * them is a development dependency.
+ * `peerDependencies` — each resolved against the lockfile and closed transitively over the resolved
+ * entries' own `dependencies` and `optionalDependencies`. `devDependencies` are never followed, so a
+ * package reachable only through them is a development dependency.
+ *
+ * Reading the walk from the lockfile rather than from `node_modules` is what makes the split the same
+ * on every host: npm places a platform-conditional optional package only on the platform it names, so
+ * a graph walked from an installed tree loses whichever ones this host did not install.
  *
  * @param manifests - The root manifest followed by every in-repo workspace manifest.
+ * @param lockfile - The committed lockfile, as {@link readLockfile} reads it.
+ * @param rootDir - Repository root that the manifests' directories are made relative to.
  * @returns The `name@version` keys of the packages in the runtime graph.
  */
-const collectRuntimeGraph = (manifests: readonly Manifest[]): ReadonlySet<string> => {
+const collectRuntimeGraph = (
+  manifests: readonly Manifest[],
+  lockfile: ResolvedLockfile,
+  rootDir: string,
+): ReadonlySet<string> => {
   const runtime = new Set<string>();
-  const pending: Array<{ readonly fromDir: string; readonly name: string }> = [];
+  const pending: Array<{ readonly fromPath: string; readonly name: string }> = [];
   for (const manifest of manifests) {
+    const fromPath = lockfilePathOfDirectory(rootDir, manifest.dir);
     for (const map of RUNTIME_DEPENDENCY_MAPS) {
       for (const name of manifest.dependencyMaps[map] ?? []) {
-        pending.push({ fromDir: manifest.dir, name });
+        pending.push({ fromPath, name });
       }
     }
   }
@@ -887,17 +1075,14 @@ const collectRuntimeGraph = (manifests: readonly Manifest[]): ReadonlySet<string
   while (pending.length > 0) {
     const next = pending.shift();
     if (next === undefined) break;
-    const dir = resolveInstalledPackage(next.fromDir, next.name);
-    if (dir === null) continue;
-    const manifest = readManifestIfPresent(dir);
-    if (manifest === null) continue;
-    const key = `${manifest.name}@${manifest.version}`;
-    if (runtime.has(key)) continue;
-    runtime.add(key);
-    for (const map of ['dependencies', 'optionalDependencies']) {
-      for (const name of manifest.dependencyMaps[map] ?? []) {
-        pending.push({ fromDir: dir, name });
-      }
+    const path = resolveLockfilePath(lockfile, next.fromPath, next.name);
+    if (path === null) continue;
+    const resolved = lockfile.packages.get(path);
+    if (resolved === undefined) continue;
+    if (runtime.has(resolved.key)) continue;
+    runtime.add(resolved.key);
+    for (const name of resolved.dependencies) {
+      pending.push({ fromPath: path, name });
     }
   }
   return runtime;
@@ -966,48 +1151,79 @@ const readInstalledPackages = async (rootDir: string): Promise<ModuleInfos> => {
 };
 
 /**
- * Reads every installed package, classifying it by graph, directness and origin.
+ * Reads the licence every installed copy reports, keyed `name@version`.
  *
- * Versions and licences come from the installed tree, so the document cannot disagree with what
- * `npm ci` installed. In-repo workspaces are read from their own manifests rather than from their
- * `UNLICENSED` private-package rows, and the project itself — which is not a dependency of anything —
- * is left out. Each in-repo workspace is classified `workspace`: it is this repository's own member,
- * listed from its own manifest rather than because something reaches it, so whether anything depends
- * on it never decides that, and it is neither a runtime dependency nor a development one. Only the
- * name, version and licences of a package are kept: the raw license-checker payload embeds every
- * licence's full text, which would make the document unusable and its size arbitrary.
+ * The map is consulted for an entry the lockfile resolved and this checkout installed, so that entry
+ * reports the licence of the installed copy — the strongest evidence of what would be distributed —
+ * while an entry this host did not install keeps the licence the lockfile records. A checkout with no
+ * `node_modules` yields an empty map, and the document is then generated from the lockfile alone.
+ *
+ * @param rootDir - Repository root whose installed tree is read.
+ * @returns The licence operands each installed `name@version` reports; empty when nothing is installed.
+ */
+const readInstalledLicenses = async (
+  rootDir: string,
+): Promise<ReadonlyMap<string, readonly string[]>> => {
+  if (!existsSync(join(rootDir, 'node_modules'))) return new Map();
+
+  const installed = await readInstalledPackages(rootDir);
+  const licenses = new Map<string, readonly string[]>();
+  for (const key of Object.keys(installed).sort(compareStrings)) {
+    const info = installed[key];
+    const { name, version } = parseInstalledKey(key, info);
+    const pair = `${name}@${version}`;
+    if (licenses.has(pair)) continue;
+    licenses.set(pair, normalizeLicense(info?.licenses));
+  }
+  return licenses;
+};
+
+/**
+ * Reads the resolved dependency graph, classifying every package by graph, directness and origin.
+ *
+ * The entry set is the committed lockfile's, not this host's `node_modules`: npm places an optional
+ * package only on the platform it names, so an entry list read from an installed tree would differ
+ * between hosts and the committed document would stop being the artefact `npm run deps:report`
+ * regenerates. One entry is listed per distinct `name@version`, taken at the lockfile path that sorts
+ * first, so the list is stable across runs and hosts. The licence prefers the installed copy: a package
+ * this checkout has installed reports the licence of that installed copy, and a package the lockfile
+ * resolves but this host did not install reports the licence the lockfile records.
+ *
+ * In-repo workspaces are read from their own manifests rather than from the lockfile's `link` records,
+ * and the project itself — which is not a dependency of anything — is left out. Each in-repo workspace
+ * is classified `workspace`: it is this repository's own member, listed from its own manifest rather
+ * than because something reaches it, so whether anything depends on it never decides that, and it is
+ * neither a runtime dependency nor a development one. Only the name, version and licences of a package
+ * are kept: the raw license-checker payload embeds every licence's full text, which would make the
+ * document unusable and its size arbitrary.
  *
  * @param root - Repository root to read from. Defaults to the current working directory.
- * @returns The entries, sorted by name then version; empty when no installed tree is present.
+ * @returns The entries, sorted by name then version; empty when no lockfile is present, which is the
+ * state the command answers with an instruction rather than an inventory of nothing.
  */
-export async function readInstalledTree(root: string = process.cwd()): Promise<readonly DependencyEntry[]> {
+export async function readResolvedTree(root: string = process.cwd()): Promise<readonly DependencyEntry[]> {
   const rootDir = resolvePath(root);
-  if (!existsSync(join(rootDir, 'node_modules'))) return [];
+  if (!existsSync(join(rootDir, LOCKFILE_RELATIVE_PATH))) return [];
 
   const { root: rootManifest, workspaces: workspaceManifests } = readRepositoryManifests(rootDir);
   const manifests: readonly Manifest[] = [rootManifest, ...workspaceManifests];
   const declaredNames = collectDeclaredNames(manifests);
-  const runtime = collectRuntimeGraph(manifests);
-  const inRepo = new Map(workspaceManifests.map((manifest) => [manifest.name, manifest] as const));
+  const lockfile = readLockfile(rootDir);
+  const runtime = collectRuntimeGraph(manifests, lockfile, rootDir);
+  const inRepo = new Set(workspaceManifests.map((manifest) => manifest.name));
+  const installed = await readInstalledLicenses(rootDir);
 
-  const installed = await readInstalledPackages(rootDir);
   const entries: DependencyEntry[] = [];
-  for (const key of Object.keys(installed).sort(compareStrings)) {
-    const info = installed[key];
-    const { name, version } = parseInstalledKey(key, info);
-    if (inRepo.has(name)) continue;
-    const modulePath = typeof info?.path === 'string' ? info.path : undefined;
-    const isProjectItself =
-      modulePath !== undefined
-        ? resolvePath(modulePath) === rootDir
-        : name === rootManifest.name;
-    if (isProjectItself) continue;
+  const listed = new Set<string>();
+  for (const resolved of lockfile.installed) {
+    if (listed.has(resolved.key) || inRepo.has(resolved.name)) continue;
+    listed.add(resolved.key);
     entries.push({
-      name,
-      version,
-      licenses: normalizeLicense(info?.licenses),
-      direct: declaredNames.has(name),
-      graph: runtime.has(key) ? 'runtime' : 'development',
+      name: resolved.name,
+      version: resolved.version,
+      licenses: installed.get(resolved.key) ?? resolved.licenses,
+      direct: declaredNames.has(resolved.name),
+      graph: runtime.has(resolved.key) ? 'runtime' : 'development',
       inRepo: false,
     });
   }
@@ -1207,10 +1423,10 @@ export function renderDependencyReport(input: {
   lines.push('# Dependency inventory');
   lines.push('');
   lines.push(
-    `Generated by \`${input.generatedBy}\`. This file must not be edited by hand: it is regenerated from`,
+    `Generated by \`${input.generatedBy}\`. This file must not be edited by hand: it is regenerated on every`,
   );
-  lines.push('the installed dependency tree on every run, so edit a manifest — or the purpose record in');
-  lines.push(`\`scripts/deps-report.ts\`, or the allowlist data — and run \`${input.generatedBy}\` again.`);
+  lines.push('run from the dependency graph `package-lock.json` resolves, so edit a manifest — or the purpose record');
+  lines.push(`in \`scripts/deps-report.ts\`, or the allowlist data — and run \`${input.generatedBy}\` again.`);
   lines.push('');
   lines.push('## Sources');
   lines.push('');
@@ -1248,6 +1464,11 @@ export function renderDependencyReport(input: {
   lines.push('in-repo workspace is listed from its own manifest rather than by reachability, so it belongs to');
   lines.push('neither graph, and the `@adem/*` workspaces list the licence their own manifest declares: they are');
   lines.push('not third-party dependencies, and they are exempt from the allowlist check.');
+  lines.push('');
+  lines.push('The list is what the committed `package-lock.json` resolves — the optional platform binaries npm');
+  lines.push('installs only on the platform they name included — so the document is the same artefact wherever it');
+  lines.push('is regenerated. A package this checkout has installed reports the licence of that installed copy;');
+  lines.push('one the lockfile resolves but this host did not install reports the licence the lockfile records.');
   lines.push('');
   lines.push(
     '| Package | Version | License | Kind (direct/transitive/workspace) | Graph (runtime/development/workspace) |',
@@ -1319,12 +1540,12 @@ const printLine = (line: string): void => {
 };
 
 /**
- * Runs the whole command: read the policy, read the tree, write the document, report the outcome.
+ * Runs the whole command: read the policy, read the resolved graph, write the document, report the outcome.
  *
- * The document is always written when there is a tree to describe — a reviewer has to be able to see
- * the offending entries — and the exit code alone carries the verdict. When no installed tree is
- * present the command returns an instruction rather than a stack trace, and writes nothing, because a
- * document generated from no tree would read as an inventory of nothing.
+ * The document is always written when there is a graph to describe — a reviewer has to be able to see
+ * the offending entries — and the exit code alone carries the verdict. When the committed lockfile is
+ * absent the command returns an instruction rather than a stack trace, and writes nothing, because a
+ * document generated from no graph would read as an inventory of nothing.
  *
  * @param options - Overrides for the root, the two paths and the inputs, which is how the unit test
  * drives both exit paths without spawning a process.
@@ -1335,17 +1556,19 @@ export async function runDepsReport(options: RunDepsReportOptions = {}): Promise
   const reportPath = resolvePath(options.reportPath ?? join(rootDir, REPORT_RELATIVE_PATH));
   const allowlistPath = resolvePath(options.allowlistPath ?? join(rootDir, ALLOWLIST_RELATIVE_PATH));
 
-  // The tree is checked before the policy so that a checkout whose dependencies are not installed is
-  // told to install them, whatever state the policy file happens to be in.
-  if (options.entries === undefined && !existsSync(join(rootDir, 'node_modules'))) {
-    const note = `no installed dependency tree found at ${join(rootDir, 'node_modules')}; run \`npm ci\` first`;
+  // The lockfile is checked before the policy so that a checkout that is missing it is told to restore
+  // it, whatever state the policy file happens to be in. It is the source of the entry set: npm places
+  // a platform-conditional optional package only on the platform it names, so a report built from this
+  // host's `node_modules` would differ from one built on another host.
+  if (options.entries === undefined && !existsSync(join(rootDir, LOCKFILE_RELATIVE_PATH))) {
+    const note = `no dependency lockfile found at ${join(rootDir, LOCKFILE_RELATIVE_PATH)}; restore the committed package-lock.json and run \`npm ci\` first`;
     printLine(note);
     return { entries: [], violations: [], reportPath, wroteReport: false, notes: [note], exitCode: 1 };
   }
 
   const allowlist = options.allowlist ?? loadAllowlist(allowlistPath);
 
-  const entries = options.entries ?? (await readInstalledTree(rootDir));
+  const entries = options.entries ?? (await readResolvedTree(rootDir));
   const violations = checkLicenses(entries, allowlist);
   const document = renderDependencyReport({
     entries,
@@ -1380,9 +1603,10 @@ export async function runDepsReport(options: RunDepsReportOptions = {}): Promise
 /**
  * Decides what the command line allows before any work starts.
  *
- * The report is built asynchronously — the installed tree is read through license-checker's callback
- * API — so this returns the code the synchronous part settles on and leaves the run itself to
- * {@link runDepsReport}. The command takes no arguments, which is the only thing it can decide here.
+ * The report is built asynchronously — the licences of the installed copies are read through
+ * license-checker's callback API — so this returns the code the synchronous part settles on and
+ * leaves the run itself to {@link runDepsReport}. The command takes no arguments, which is the only
+ * thing it can decide here.
  *
  * @param argv - Arguments after the script name. Defaults to the process's own.
  * @returns `0` when the command may proceed, {@link USAGE_EXIT_CODE} for an unexpected argument.
