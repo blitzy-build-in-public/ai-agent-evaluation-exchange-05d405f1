@@ -260,8 +260,8 @@ const SELECT_CHALLENGE_TOTAL = "SELECT COUNT(*) AS total FROM challenges";
  * The subquery is the same window `SELECT_BOARD` reads, so the responses answered for are exactly those
  * of the page's own challenges. Its variable part is two bound numbers — the fixed page size and the
  * page's offset — so the statement's text and its parameter count are constant however large the board
- * grows, and nothing a client sent reaches either. The list form this replaced carried one placeholder
- * per challenge the board returned, which put SQLite's limit on bound variables in the way of a growing
+ * grows, and nothing a client sent reaches either. A list of ids bound here would carry one placeholder
+ * per challenge the board returned, which puts SQLite's limit on bound variables in the way of a growing
  * table: a statement of 32,767 placeholders is refused outright (`too many SQL variables`), and the
  * refusal is a failed read rather than a shorter one.
  */

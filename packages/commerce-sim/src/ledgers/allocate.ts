@@ -13,9 +13,9 @@ import { renderReceived } from "../config";
  * The function is pure — no clock, no random source, no I/O — so the same arguments always
  * yield the same allocation.
  *
- * @param amountMinorUnits The amount to allocate from, in whole minor units of `DEMO`.
+ * @param amountMinorUnits - The amount to allocate from, in whole minor units of `DEMO`.
  *   A non-negative safe integer.
- * @param rateBasisPoints The allocation rate in basis points, where a basis point is one
+ * @param rateBasisPoints - The allocation rate in basis points, where a basis point is one
  *   hundredth of one percent and the default rate of 25 basis points is a quarter of one
  *   percent. A non-negative safe integer.
  * @returns The allocation in whole minor units.

@@ -136,9 +136,9 @@ function holdsOneDeclaredType(fragment: Record<string, unknown>, value: unknown)
  * plain-object test, so a schema that is a string, an array or `null`, and a value of any type
  * whatever, are answered rather than raised over.
  *
- * @param schema The schema fragment the body or one of its members is validated against, as the route
+ * @param schema - The schema fragment the body or one of its members is validated against, as the route
  *   carries it — the raw object, not a compiled validator.
- * @param value The parsed value to judge.
+ * @param value - The parsed value to judge.
  * @returns `true` when the value holds every type the fragment declares and carries no field the
  *   fragment refuses; `false` only when it does not.
  */
@@ -217,7 +217,7 @@ export function holdsDeclaredTypes(schema: unknown, value: unknown): boolean {
  * folder and nothing else: the static handler and the SPA fallback are the composition root's routes
  * and are not reached by it.
  *
- * @param app The instance to register the hook on. It is the encapsulated scope of
+ * @param app - The instance to register the hook on. It is the encapsulated scope of
  *   `./register-routes`, whose routes are the ones the policy governs.
  */
 export function registerRequestBodyPolicy(app: FastifyInstance): void {

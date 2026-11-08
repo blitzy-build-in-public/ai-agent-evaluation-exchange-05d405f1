@@ -220,8 +220,8 @@ const defaultNow = (): string => new Date().toISOString();
  * touched — SQLite stores it as an integer, the driver returns it as one, and no conversion, scaling
  * or rounding belongs on a read path.
  *
- * @param db The caller's database handle.
- * @param transactionId Identifier of the transaction to read.
+ * @param db - The caller's database handle.
+ * @param transactionId - Identifier of the transaction to read.
  * @returns The stored transaction, or `undefined` when the table holds no row for that identifier.
  */
 function readTransaction(db: Database, transactionId: string): Transaction | undefined {
@@ -240,8 +240,8 @@ function readTransaction(db: Database, transactionId: string): Transaction | und
  * as one whose refunds sum to nothing — and an identifier nothing references answers `0` for the same
  * reason: there is nothing to sum.
  *
- * @param db The caller's database handle.
- * @param transactionId Identifier of the transaction whose refund rows are summed.
+ * @param db - The caller's database handle.
+ * @param transactionId - Identifier of the transaction whose refund rows are summed.
  * @returns The refunded total in whole minor units, `0` when the transaction has no refund rows.
  */
 function readRefundedTotal(db: Database, transactionId: string): number {
@@ -265,8 +265,8 @@ function readRefundedTotal(db: Database, transactionId: string): number {
  * asking for it to be read a second time. A transaction that has been refunded in full answers `0`
  * here, which is the arithmetic the two refusal reasons share.
  *
- * @param transaction The stored transaction, read by the caller.
- * @param refundedTotal What that transaction's refund rows already account for, in minor units.
+ * @param transaction - The stored transaction, read by the caller.
+ * @param refundedTotal - What that transaction's refund rows already account for, in minor units.
  * @returns The transaction's amount less its refunded total, in whole minor units.
  */
 function remainingAfterRefunds(transaction: Transaction, refundedTotal: number): number {
@@ -294,8 +294,8 @@ function remainingAfterRefunds(transaction: Transaction, refundedTotal: number):
  * computes the same figure from it through {@link remainingAfterRefunds} and {@link readRefundedTotal}
  * rather than having this function read that row again.
  *
- * @param db The caller's database handle.
- * @param transactionId Identifier of the transaction to measure.
+ * @param db - The caller's database handle.
+ * @param transactionId - Identifier of the transaction to measure.
  * @returns The net remaining in whole minor units, or `0` when no transaction carries the identifier.
  */
 export function computeNetRemaining(db: Database, transactionId: string): number {
@@ -326,8 +326,8 @@ export function computeNetRemaining(db: Database, transactionId: string): number
  * caller pins one. Every amount is a whole number of minor units of the synthetic currency, and both
  * labels arrive from the resolved configuration rather than from the caller.
  *
- * @param db The caller's database handle.
- * @param input The transaction to refund, the amount, the operator account, the resolved
+ * @param db - The caller's database handle.
+ * @param input - The transaction to refund, the amount, the operator account, the resolved
  *   configuration and the optional clock.
  * @returns The appended refund and the two reversal entries appended for it, or a refusal naming why
  *   nothing was appended.

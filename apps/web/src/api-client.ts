@@ -1759,8 +1759,7 @@ export async function refundTransaction(
  * every entry ever appended to it, so the read answers one page of `COLLECTION_PAGE_SIZE`
  * entries: page 1 is the most recent page of the history, and each later page is the page
  * before it, so a ledger view that can state a page can reach an older entry — and, through
- * the transaction that entry names, an older transaction's refund control. Without the page
- * every call read page 1, and the history behind it was unreachable from the product.
+ * the transaction that entry names, an older transaction's refund control.
  *
  * These are the operator-only reads, which is why this read requires the demo account
  * header. Raises {@link ApiClientError} for `403` when the resolved account is not an

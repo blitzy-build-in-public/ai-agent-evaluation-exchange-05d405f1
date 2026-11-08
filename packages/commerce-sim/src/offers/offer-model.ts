@@ -56,7 +56,7 @@ export type { OfferModel };
  * treat it as an {@link OfferModel} afterwards; refusing a model a listing does not offer is
  * a separate, domain decision, made in `./select-offer`.
  *
- * @param value Any value, of any type.
+ * @param value - Any value, of any type.
  * @returns `true` if the value is one of the four models, `false` otherwise.
  */
 export function isOfferModel(value: unknown): value is OfferModel {

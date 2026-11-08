@@ -1249,8 +1249,8 @@ const FIRST_UNBINDABLE_OFFSET = 2 ** 63;
  * The sentence is one short line, written from the characters the UI's error notice renders, so the
  * reader is told which parameter was the problem instead of the generic explanation.
  *
- * @param pageSize The fixed page size the search answers with, from the resolved configuration.
- * @param page The 1-based page number the query named, already coerced by the query schema.
+ * @param pageSize - The fixed page size the search answers with, from the resolved configuration.
+ * @param page - The 1-based page number the query named, already coerced by the query schema.
  * @returns The offset the requested page reads from: a non-negative value below
  * {@link FIRST_UNBINDABLE_OFFSET}.
  * @throws ApiError of `400 validation_error` when the offset is not a non-negative number, or is at

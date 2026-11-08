@@ -378,9 +378,9 @@ function canonicalBody(response: TestResponse): string {
  * the contract's `not_found`. The path named in each failure message is the full one,
  * {@link API_PREFIX} included, because that is the URL whose answer is being checked.
  *
- * @param response The answer the server gave the attempt.
- * @param method The method attempted, named in the failure messages.
- * @param path The prefix-relative path attempted; the messages state its full form.
+ * @param response - The answer the server gave the attempt.
+ * @param method - The method attempted, named in the failure messages.
+ * @param path - The prefix-relative path attempted; the messages state its full form.
  */
 function expectUnregisteredRoute(response: TestResponse, method: string, path: string): void {
   const where = `${method} ${API_PREFIX}${path}`;
@@ -548,7 +548,7 @@ const REFUND_MINOR_UNITS = 1;
  * invented identifier would still be answered `404`, but it would prove nothing about the resources
  * a real client can reach.
  *
- * @param harness The started harness to write through.
+ * @param harness - The started harness to write through.
  * @returns The identifiers the attempts address.
  * @throws {Error} When any of the four writes is refused, when a set-up read answers something other
  *   than the one row it expects, or when the fixture candidate the suite scores carries no report —

@@ -156,7 +156,7 @@ export const DEFAULT_COMMERCE_CONFIG: Readonly<CommerceConfig> = Object.freeze({
 /**
  * Resolves the simulated commerce configuration from the overrides a caller passes.
  *
- * @param overrides The members to resolve a different value for. Absent members resolve to the
+ * @param overrides - The members to resolve a different value for. Absent members resolve to the
  *   product's defaults; a present member whose value is `undefined` is not possible in TypeScript
  *   and resolves to the default if an untyped caller supplies one.
  * @returns A newly built configuration, never `DEFAULT_COMMERCE_CONFIG` itself, so a caller cannot

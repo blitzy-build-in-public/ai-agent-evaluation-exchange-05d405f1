@@ -192,7 +192,7 @@ export interface CreateServerOptions {
  * to open the path it was given, and the migration runner's refusal when an applied migration file
  * has changed, been renamed or disappeared.
  *
- * @param options The caller's handle or path, the run it already made on that handle, its port and web
+ * @param options - The caller's handle or path, the run it already made on that handle, its port and web
  *   directory, and its configuration overrides. Every member is optional; an absent one resolves to the
  *   configuration's own value, except the recorded run, which is read only beside a handle.
  * @returns The instance, with every route, handler and hook registered, before it is listening.
@@ -366,7 +366,7 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
  * operator needs. The instance's logger is built at `info`, which emits both levels, so no record
  * depends on the configured level.
  *
- * @param status The status the failure is answered with.
+ * @param status - The status the failure is answered with.
  * @returns `error` at `500` and above, `warn` below it.
  */
 export function failureLogLevel(status: number): "warn" | "error" {
@@ -387,7 +387,7 @@ function apiRootPath(): string {
 /**
  * Whether a request path belongs to the API's own surface, and so must be answered with JSON.
  *
- * @param path A request path with its query and fragment removed.
+ * @param path - A request path with its query and fragment removed.
  * @returns `true` for {@link API_ROOT_PATH} itself and for every path below it, at any contract
  *   version: a client that asked the API for something the API does not serve must not be handed the
  *   web application's HTML.
@@ -399,7 +399,7 @@ function isApiPath(path: string): boolean {
 /**
  * A request target's path: everything before its query string or fragment.
  *
- * @param url The request target as Fastify delivers it, query and fragment included.
+ * @param url - The request target as Fastify delivers it, query and fragment included.
  * @returns The path alone. A target carrying neither separator is returned unchanged.
  */
 function pathnameOf(url: string): string {
@@ -410,7 +410,7 @@ function pathnameOf(url: string): string {
 /**
  * Whether a path names a file rather than a route of the client application.
  *
- * @param path A request path with its query and fragment removed.
+ * @param path - A request path with its query and fragment removed.
  * @returns `true` when the last segment carries a dot. No route of this product's client application
  *   does — they are `/`, `/listings`, `/report/<id>`, `/compare`, `/academy` and their siblings — so a
  *   path whose last segment has an extension is a request for an asset, which exists or does not.
@@ -422,7 +422,7 @@ function looksLikeStaticFile(path: string): boolean {
 /**
  * Whether a request is one a browser made for a document.
  *
- * @param method The request's HTTP method, as Fastify delivers it in upper case.
+ * @param method - The request's HTTP method, as Fastify delivers it in upper case.
  * @returns `true` for `GET` and `HEAD`, the two methods the client application is reached by. Every
  *   other method on a path this API does not serve is answered with the envelope and a 404, so a
  *   mutation attempt is never answered with a document and a 200.
@@ -440,7 +440,7 @@ function isDocumentRequest(method: string): boolean {
  * than a construction-time certainty. This function performs the read and reports its failure; what
  * an unreadable file means for the answer is the caller's decision, not this function's.
  *
- * @param filePath The path of the file to read.
+ * @param filePath - The path of the file to read.
  * @returns The file's contents as text, or `undefined` when it is absent, is a directory, is
  *   unreadable, or is replaced mid-read.
  */
@@ -457,8 +457,8 @@ function readFileText(filePath: string): string | undefined {
 /**
  * Answers a request with an {@link ApiError} in the one envelope.
  *
- * @param reply The reply to send on.
- * @param error The mapped failure: its `status`, its `code` of the closed vocabulary and the sentence
+ * @param reply - The reply to send on.
+ * @param error - The mapped failure: its `status`, its `code` of the closed vocabulary and the sentence
  *   the client reads are the whole of what is sent, and nothing is added to the body.
  */
 function sendApiError(reply: FastifyReply, error: ApiError): void {
@@ -480,7 +480,7 @@ function sendApiError(reply: FastifyReply, error: ApiError): void {
  * performs on the failures Fastify really raises, rather than a copy of it written in the suite; the
  * composition root is otherwise its only caller.
  *
- * @param error The value a route, a hook or a plugin threw, of any type.
+ * @param error - The value a route, a hook or a plugin threw, of any type.
  * @returns The mapped error, which is always an `ApiError`: this function never throws, so a mapping
  *   that cannot be made cannot turn one failure into two.
  */
@@ -507,7 +507,7 @@ export function mapFailure(error: unknown): ApiError {
 /**
  * The status a framework-raised failure carries, when it carries one in the client-error range.
  *
- * @param error The thrown value, of any type.
+ * @param error - The thrown value, of any type.
  * @returns The whole number in the 400–499 range the value carries in `statusCode`, or `undefined`
  *   when it carries none: a value that is not an object, a value without the member, and a member that
  *   is not an integer in range all answer `undefined`, so a status the contract does not define is
@@ -524,8 +524,8 @@ function clientErrorStatus(error: unknown): number | undefined {
 /**
  * Reads a member from a thrown value, of any type.
  *
- * @param value The thrown value.
- * @param key The member's name.
+ * @param value - The thrown value.
+ * @param key - The member's name.
  * @returns The member, or `undefined` for a value that is not an object and for a value carrying no
  *   such member.
  */

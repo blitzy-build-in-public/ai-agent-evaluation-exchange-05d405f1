@@ -266,8 +266,8 @@
    (criterion 2.4.7).
 
    The :not([tabindex="-1"]) part is a decision, not a slip, and widening the
-   selector back would restore a defect: an element carrying tabindex="-1" is
-   focusable only programmatically, so it is not a control, Tab never reaches it,
+   selector would put the ring on a non-control: an element carrying tabindex="-1"
+   is focusable only programmatically, so it is not a control, Tab never reaches it,
    and the ring drawn on it is not the keyboard user's location. The shell's
    bypass link moves focus to the routed page's <main>, and three pages move
    focus to a region of their own, so the ring would be drawn around a container

@@ -88,11 +88,11 @@ export type OfferSelection =
  * environment and no database, never mutates, sorts or reorders `offers` — a frozen array or one
  * declared `as const` type-checks — and answers one of the two result shapes rather than throwing.
  *
- * @param offers The offers the listing makes, in the order the listing states them. The first entry
+ * @param offers - The offers the listing makes, in the order the listing states them. The first entry
  *   whose model matches the request is selected: a listing that states one model twice is a
  *   data-integrity problem owned by the seed and the schema, and summing or preferring the largest
  *   of two duplicates would invent pricing behaviour nothing asks for.
- * @param requested The offer model the caller selected.
+ * @param requested - The offer model the caller selected.
  * @returns The selected offer, or the reason the selection was refused.
  */
 export function selectOffer(

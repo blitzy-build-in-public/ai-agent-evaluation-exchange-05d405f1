@@ -378,9 +378,9 @@ let seededReports: readonly SeededReportView[] = [];
  * the row, and a message that is a sentence rather than a trace — non-empty and single-line, which is
  * what lets a client render an explanation instead of an error dump.
  *
- * @param response The response the harness received, whatever its status.
- * @param status The status the contract documents for this refusal.
- * @param code The stable code the contract fixes for it.
+ * @param response - The response the harness received, whatever its status.
+ * @param status - The status the contract documents for this refusal.
+ * @param code - The stable code the contract fixes for it.
  */
 function expectErrorEnvelope(response: TestResponse, status: number, code: string): void {
   expect(response.status).toBe(status);
@@ -401,8 +401,8 @@ function expectErrorEnvelope(response: TestResponse, status: number, code: strin
  * report and its evidence are readable by anyone, and a case that sent a header would leave that
  * unproven.
  *
- * @param harness The started harness whose server answers.
- * @param reportId The report identifier, from a harness accessor or a write's own response.
+ * @param harness - The started harness whose server answers.
+ * @param reportId - The report identifier, from a harness accessor or a write's own response.
  * @returns The report with its per-case evidence.
  */
 async function readReport(harness: TestServer, reportId: string): Promise<EvaluationReportDetail> {
@@ -553,8 +553,8 @@ function canonicalComparedPayload(report: EvaluationReportDetail): string {
  * document states them. There is no retest field to set: the body carries none, and the server derives
  * the link from the reports already stored for this candidate version and standard version.
  *
- * @param candidate The candidate's recording, read from the fixture pack's document for it.
- * @param standardVersionId The standard version to score against, which the fixture file also states
+ * @param candidate - The candidate's recording, read from the fixture pack's document for it.
+ * @param standardVersionId - The standard version to score against, which the fixture file also states
  *   and which a caller overrides only to probe a reference that resolves to nothing.
  */
 function submissionFor(
@@ -579,9 +579,9 @@ function submissionFor(
  *
  * The statement must alias its count `AS total`, which every call site below does.
  *
- * @param harness The started harness whose connection is read.
- * @param sql One `SELECT COUNT(*) AS total ...` statement, with `?` placeholders.
- * @param params The values to bind, positionally.
+ * @param harness - The started harness whose connection is read.
+ * @param sql - One `SELECT COUNT(*) AS total ...` statement, with `?` placeholders.
+ * @param params - The values to bind, positionally.
  * @returns The count, which a `COUNT(*)` always answers, so a missing row is a defect and is thrown.
  */
 function countRows(harness: TestServer, sql: string, ...params: readonly unknown[]): number {

@@ -4,8 +4,8 @@
  * one at a time, their answers are collected in page order, and the walk ends on the data it was given.
  *
  * The public listing search is replaced by a recording double, so each case can assert what the read
- * asked for and how much of it was in flight at once: the count of requests per render is the whole
- * subject of the finding this read exists to resolve, and it is not observable from the returned array.
+ * asked for and how much of it was in flight at once: the count of requests per render is what the
+ * recording double exists to observe, and it is not observable from the returned array.
  * Expectations are stated as values rather than recomputed from the module.
  */
 

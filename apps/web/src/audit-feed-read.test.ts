@@ -5,8 +5,8 @@
  * on the data it was given.
  *
  * The feed read is replaced by a recording double, so each case can assert what the walk asked for and
- * how much of it was in flight at once: which pages of the feed the ruling surface reaches is the whole
- * subject of the finding this read exists to resolve, and it is not observable from the returned array.
+ * how much of it was in flight at once: which pages of the feed the ruling surface reaches is what the
+ * recording double exists to observe, and it is not observable from the returned array.
  * Expectations are stated as values rather than recomputed from the module.
  */
 

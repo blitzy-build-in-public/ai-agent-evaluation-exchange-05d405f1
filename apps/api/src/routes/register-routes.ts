@@ -123,9 +123,9 @@ export interface RouteContext {
  * readiness before it serves traffic, which is the composition root's responsibility, not this
  * function's.
  *
- * @param app The instance to register the groups on. It is the root instance in the running product;
+ * @param app - The instance to register the groups on. It is the root instance in the running product;
  *   the groups are given the scoped instance created here, never this one.
- * @param context The open database handle and the resolved configuration, passed on to every group.
+ * @param context - The open database handle and the resolved configuration, passed on to every group.
  */
 export function registerRoutes(app: FastifyInstance, context: RouteContext): void {
   app.register(

@@ -8,7 +8,7 @@
  * page describes a question or an answer as evidence for a listing's claims, as a pass, or as
  * anything about safety.
  *
- * Six decisions shape this file, each of which a later reader could otherwise "improve" into a
+ * Seven decisions shape this file, each of which a later reader could otherwise "improve" into a
  * bug.
  *
  *   - **The selection lives in the address and nowhere else.** `?id=<challenge id>` is the whole

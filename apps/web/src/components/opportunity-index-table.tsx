@@ -14,11 +14,10 @@
  *
  *   - **Two columns, not five.** A column per figure reads well at a desk and badly at 360px: with
  *     four numeric columns each takes an equal share of the viewport and the category identifiers
- *     break mid-word, which is what the first version of this file did when it was measured in a
- *     browser. So the row header carries the grouping key and the second cell carries the three
- *     figures as a `<dl>` of label/value pairs. Every value then sits beside its own label inside
- *     the row at every width, and the two cells keep a share of the viewport wide enough for a
- *     hyphenated category slug to break where it is written to break.
+ *     break mid-word. So the row header carries the grouping key and the second cell carries the
+ *     three figures as a `<dl>` of label/value pairs. Every value then sits beside its own label
+ *     inside the row at every width, and the two cells keep a share of the viewport wide enough
+ *     for a hyphenated category slug to break where it is written to break.
  *
  *   - **Nothing is derived here.** `deriveOpportunityIndex` is the workspace's single definition of
  *     the index; calling it, importing its demand table or recomputing a ratio in this file would

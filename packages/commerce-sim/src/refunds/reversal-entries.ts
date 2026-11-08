@@ -95,7 +95,7 @@ export interface BuildReversalEntriesInput {
  * yields its two entries rather than a refusal. The function performs no I/O, holds no mutable state
  * and never reads a clock or a random source.
  *
- * @param input The refund, the transaction it corrects and the resolved configuration.
+ * @param input - The refund, the transaction it corrects and the resolved configuration.
  * @returns Exactly two entries: the marketplace reversal, a `credit` of the refunded amount against
  *   the transaction, and the founder-allocation reversal, a `debit` of that amount at the
  *   configured rate. Each carries the transaction's identifier, an explicit `null` report

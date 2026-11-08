@@ -345,8 +345,8 @@ function groupPostsByThread(rows: readonly ThreadPostRow[]): Map<string, ThreadP
  * changes no row and appends no audit event. The `total` is a count read from `threads`, never a
  * stored balance that a write maintains.
  *
- * @param database The caller's database handle.
- * @param page The requested page, 1-based, already resolved from the query schema's default.
+ * @param database - The caller's database handle.
+ * @param page - The requested page, 1-based, already resolved from the query schema's default.
  * @returns The page's threads with their replies, and the page and total the response states.
  */
 function listBoard(database: Database, page: number): ThreadBoardResult {
@@ -392,9 +392,9 @@ function listBoard(database: Database, page: number): ThreadBoardResult {
  * operator feed never claims a write that did not happen. `appendAuditEvent` opens no transaction of
  * its own and is called inside this one for exactly that reason.
  *
- * @param database The caller's database handle.
- * @param title The thread's title, validated against `threadCreateBodySchema` before this call.
- * @param authorAccountId `accounts.id` of the resolved demo account — any role.
+ * @param database - The caller's database handle.
+ * @param title - The thread's title, validated against `threadCreateBodySchema` before this call.
+ * @param authorAccountId - `accounts.id` of the resolved demo account — any role.
  * @returns The inserted row, in the shape the `201` carries and `threads` stores.
  */
 function insertThread(database: Database, title: string, authorAccountId: string): Thread {
@@ -434,10 +434,10 @@ function insertThread(database: Database, title: string, authorAccountId: string
  * The thread comes from the path and never from the body, so a reply cannot name a thread other than
  * the one its address names.
  *
- * @param database The caller's database handle.
- * @param threadId The thread identifier from the request path.
- * @param body The reply's text, validated against `threadPostBodySchema` before this call.
- * @param authorAccountId `accounts.id` of the resolved demo account — any role.
+ * @param database - The caller's database handle.
+ * @param threadId - The thread identifier from the request path.
+ * @param body - The reply's text, validated against `threadPostBodySchema` before this call.
+ * @param authorAccountId - `accounts.id` of the resolved demo account — any role.
  * @returns The inserted row, in the shape the `201` carries.
  * @throws {ApiError} `404 not_found` when no thread carries `threadId`.
  */

@@ -341,7 +341,7 @@ export interface TestServer {
  * connection closed behind the failure, so a refused start-up leaves no listening socket and no open
  * handle for a later case to trip over.
  *
- * @param options The configuration sections to resolve a different value for, and whether to load the
+ * @param options - The configuration sections to resolve a different value for, and whether to load the
  *   seed. Absent, the product's own configuration and the seed are used.
  * @returns The started harness, whose `baseUrl` and `database` are the two things a suite reaches the
  *   server and the data through.
@@ -445,11 +445,11 @@ class HarnessServer implements TestServer {
    * assertions read the serialised envelope, and a body that is not JSON is kept as text rather than
    * thrown over, because "no JSON body" is an ordinary state for a refusal to be in.
    *
-   * @param method The HTTP method. Any method may be sent, so a suite can attempt an update or a
+   * @param method - The HTTP method. Any method may be sent, so a suite can attempt an update or a
    *   delete of an append-only resource and assert that no route accepts it.
-   * @param path A prefix-relative path, query string excluded.
-   * @param options The demo account, further headers and query parameters.
-   * @param body An already-serialised body. It is a parameter of the implementation and not of
+   * @param path - A prefix-relative path, query string excluded.
+   * @param options - The demo account, further headers and query parameters.
+   * @param body - An already-serialised body. It is a parameter of the implementation and not of
    *   {@link TestServer.request}, which the suites use: {@link HarnessServer.post} is its only caller.
    * @returns The response, whatever its status. It refuses nothing, and never retries.
    */
@@ -661,8 +661,8 @@ class HarnessServer implements TestServer {
    * The one cast below is the boundary of the escape hatch: the driver returns its rows as `unknown`,
    * and only the caller's own type parameter says what shape it asked for.
    *
-   * @param sql A single statement, with `?` placeholders for the parameters that follow.
-   * @param params The values to bind, positionally.
+   * @param sql - A single statement, with `?` placeholders for the parameters that follow.
+   * @param params - The values to bind, positionally.
    * @returns The rows the statement selected, typed by the caller.
    */
   query<T>(sql: string, ...params: readonly unknown[]): T[] {

@@ -100,7 +100,7 @@ export type { CreateServerOptions };
  * missing built-web directory is a supported state, and a migration refusal surfaces from the
  * migration runner rather than from here.
  *
- * @param options The caller's database handle or path, the run it already made on that handle, its
+ * @param options - The caller's database handle or path, the run it already made on that handle, its
  *   port and built web directory, and its configuration overrides. Every member is optional, and an
  *   absent one resolves to the configuration's own value — except the recorded run, which is read only
  *   beside a handle and is what keeps one start-up to one run over the migration files — so
@@ -157,7 +157,7 @@ function isProcessEntryPoint(): boolean {
 /**
  * A path's real path, or its absolute form when the real path cannot be resolved.
  *
- * @param path A filesystem path, relative or absolute.
+ * @param path - A filesystem path, relative or absolute.
  * @returns The canonical path with every symbolic link resolved. A path the filesystem cannot resolve
  *   — one that does not exist, or one this process may not inspect — answers with its absolute form
  *   instead: the comparison in {@link isProcessEntryPoint} needs two values to compare, and a failure
@@ -185,7 +185,7 @@ function realPathOf(path: string): string {
  * released before the failure leaves it, so a refused start-up is a process that exits rather than one
  * that half-ran.
  *
- * @param started The observer this start-up records its instance on, so that a failure after the
+ * @param started - The observer this start-up records its instance on, so that a failure after the
  *   instance exists is reported through the instance's own logger.
  * @throws {ConfigurationError} From `./config`, for an environment value that is present and unusable.
  * @throws {Error} From `./db/connection` for a connection that cannot be opened, from `./db/migrate`
@@ -250,8 +250,8 @@ async function startFromEnvironment(started: StartedInstance): Promise<void> {
  * keeps the event loop alive, so the process ends on its own with the code it earned — which is what
  * makes a clean signal shutdown observable as a clean one rather than as a code chosen for it.
  *
- * @param instance The listening instance.
- * @param database The connection this start-up opened, which the composition root does not close.
+ * @param instance - The listening instance.
+ * @param database - The connection this start-up opened, which the composition root does not close.
  */
 function installShutdownHandlers(instance: FastifyInstance, database: Database): void {
   let shuttingDown = false;
@@ -281,8 +281,8 @@ function installShutdownHandlers(instance: FastifyInstance, database: Database):
  * Never throws and never rejects. The failure being handled is the one that matters, so a failure
  * while releasing is reported on its own line instead of replacing it.
  *
- * @param instance The instance, or `undefined` when the start-up failed before creating one.
- * @param database The connection this start-up opened.
+ * @param instance - The instance, or `undefined` when the start-up failed before creating one.
+ * @param database - The connection this start-up opened.
  */
 async function releaseOwnedResources(instance: FastifyInstance | undefined, database: Database): Promise<void> {
   if (instance !== undefined) {
@@ -303,9 +303,9 @@ async function releaseOwnedResources(instance: FastifyInstance | undefined, data
 /**
  * Reports a failure to release a resource, through the instance's own logger when there is one.
  *
- * @param instance The instance, or `undefined` when the start-up failed before creating one.
- * @param error The value the release threw, of any type.
- * @param sentence What could not be done, which is the report's message.
+ * @param instance - The instance, or `undefined` when the start-up failed before creating one.
+ * @param error - The value the release threw, of any type.
+ * @param sentence - What could not be done, which is the report's message.
  */
 function reportReleaseFailure(instance: FastifyInstance | undefined, error: unknown, sentence: string): void {
   if (instance === undefined) {
@@ -327,9 +327,9 @@ function reportReleaseFailure(instance: FastifyInstance | undefined, error: unkn
  * refusal, a connection that could not be opened, or the migration runner refusing a changed file, each
  * of which arrives with its own message naming the file or the variable an operator acts on.
  *
- * @param started The observer the start-up records its instance on, still empty when nothing was
+ * @param started - The observer the start-up records its instance on, still empty when nothing was
  *   created.
- * @param error The value the start-up threw, of any type.
+ * @param error - The value the start-up threw, of any type.
  */
 function reportStartupFailure(started: StartedInstance, error: unknown): void {
   if (started.instance === undefined) {
@@ -350,7 +350,7 @@ function reportStartupFailure(started: StartedInstance, error: unknown): void {
  * value's own message, the configured database path included, and with it nothing else this process
  * was given.
  *
- * @param error The thrown value, of any type.
+ * @param error - The thrown value, of any type.
  * @returns The value's own message when it has one — an `Error` and every subclass, the configuration
  *   module's refusal and the migration runner's among them — and its text form when it does not, so a
  *   failure is never reported as unnamed.

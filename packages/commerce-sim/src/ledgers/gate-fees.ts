@@ -111,8 +111,8 @@ export interface RecordGateFeeChargeInput {
  * `packages/shared/migrations/0010_append_only_triggers.sql` — and they propagate unwrapped rather
  * than being re-shaped into an answer this module would have to invent.
  *
- * @param db The caller's database handle.
- * @param input The report identifier, the resolved configuration and the optional clock.
+ * @param db - The caller's database handle.
+ * @param input - The report identifier, the resolved configuration and the optional clock.
  * @returns The appended entry, or `null` when the configured fee is zero and nothing was appended.
  */
 export function recordGateFeeCharge(

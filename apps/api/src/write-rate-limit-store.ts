@@ -153,7 +153,7 @@ export class WriteRateLimitStore implements FastifyRateLimitStore {
   /**
    * Builds the store over the registration's own options.
    *
-   * @param options The registration's resolved window and optional key capacity; an absent or unusable
+   * @param options - The registration's resolved window and optional key capacity; an absent or unusable
    *   one falls back to the documented default rather than throwing, because a registration that
    *   states neither is the product's normal case.
    */
@@ -179,8 +179,8 @@ export class WriteRateLimitStore implements FastifyRateLimitStore {
    * dropped when the capacity is reached, and a full sweep runs at most once per capacity increments
    * to reclaim windows that expired behind a live one.
    *
-   * @param key The client the plugin resolved, which is the address no `keyGenerator` overrides.
-   * @param callback Called synchronously with `null` and the window, as the store contract requires.
+   * @param key - The client the plugin resolved, which is the address no `keyGenerator` overrides.
+   * @param callback - Called synchronously with `null` and the window, as the store contract requires.
    */
   incr(key: string, callback: WriteRateLimitIncrementCallback): void {
     const nowMs = Date.now();

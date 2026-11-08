@@ -195,9 +195,9 @@ interface RefundReversalResult {
  * reason — reaches the client through the one place that builds a failure body, and no
  * handler-local error body exists to disagree with it.
  *
- * @param app The instance or the encapsulated scope the group is registered on; the versioned prefix
+ * @param app - The instance or the encapsulated scope the group is registered on; the versioned prefix
  *   is applied by the caller.
- * @param context The open database handle and the resolved configuration.
+ * @param context - The open database handle and the resolved configuration.
  */
 export function registerRefundRoutes(app: FastifyInstance, context: RefundRouteContext): void {
   app.post<{ Params: { id: string }; Body: RefundCreateBody }>(

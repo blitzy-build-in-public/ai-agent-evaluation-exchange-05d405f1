@@ -251,8 +251,8 @@ function toLedgerEntry(row: LedgerEntryRow): LedgerEntry {
  * `packages/shared/migrations/0010_append_only_triggers.sql` — and they propagate unwrapped rather
  * than being re-shaped into an outcome this module would have to invent.
  *
- * @param db The caller's database handle.
- * @param input The nine stored values, plus the optional clock this call appends the row under.
+ * @param db - The caller's database handle.
+ * @param input - The nine stored values, plus the optional clock this call appends the row under.
  * @returns The appended entry: the caller's nine values with the generated identifier and instant.
  */
 export function insertLedgerEntry(
@@ -314,8 +314,8 @@ export function insertLedgerEntry(
  * Like {@link insertLedgerEntry} it refuses nothing of its own: a refusal reaches the caller
  * unwrapped from the database, and if one does, the transaction leaves no row of this batch behind.
  *
- * @param db The caller's database handle.
- * @param inputs The entries to append, in the order they are to be appended.
+ * @param db - The caller's database handle.
+ * @param inputs - The entries to append, in the order they are to be appended.
  * @returns One appended entry per input, in input order, each carrying its generated identifier and
  *   insertion instant. An empty input returns an empty array.
  */
@@ -369,9 +369,9 @@ export function insertLedgerEntries(
  * read this function exists to bound. Nothing else is refused: an unknown ledger name cannot reach it
  * through the type, and a ledger with no rows is answered with an empty array rather than a refusal.
  *
- * @param db The caller's database handle.
- * @param ledger The ledger to read, one of the three names.
- * @param window The page to read: at most `limit` entries per page, `offset` newest entries skipped.
+ * @param db - The caller's database handle.
+ * @param ledger - The ledger to read, one of the three names.
+ * @param window - The page to read: at most `limit` entries per page, `offset` newest entries skipped.
  *   Defaults to the ledger's first, most recent page of {@link COLLECTION_PAGE_SIZE} entries.
  * @returns The page's entries in insertion order, oldest first within the page, each an appended row.
  * @throws {RangeError} If `window.limit` is not a positive whole number or `window.offset` is not a
@@ -417,8 +417,8 @@ export function listLedgerEntries(
  * without any arithmetic of the product's own. `COUNT(*)` over a predicate with no grouping answers
  * exactly one row on every call, including the empty ledger, which holds `0` rather than nothing.
  *
- * @param db The caller's database handle.
- * @param ledger The ledger to count, one of the three names.
+ * @param db - The caller's database handle.
+ * @param ledger - The ledger to count, one of the three names.
  * @returns How many entries that ledger holds in all: `0` for a ledger no row was appended to.
  */
 export function countLedgerEntries(db: Database, ledger: LedgerName): number {

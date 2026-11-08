@@ -104,8 +104,8 @@ export interface RecordMarketplaceChargeInput {
  * A repeated call appends another row: recording the same transaction twice leaves two entries,
  * which is what an append-only ledger means and what the immutability check relies on.
  *
- * @param db The caller's database handle.
- * @param input The transaction, the amount, the resolved configuration and the optional clock.
+ * @param db - The caller's database handle.
+ * @param input - The transaction, the amount, the resolved configuration and the optional clock.
  * @returns The appended entry, carrying the generated identifier and insertion instant.
  */
 export function recordMarketplaceCharge(

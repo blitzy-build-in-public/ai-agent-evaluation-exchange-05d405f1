@@ -261,7 +261,7 @@ export function defaultWebDir(): string {
  * consumer can mutate a configuration another consumer is holding; a consumer that needs different
  * values resolves its own.
  *
- * @param overrides The members to resolve a different value for. An absent member resolves to the
+ * @param overrides - The members to resolve a different value for. An absent member resolves to the
  *   environment's value where one is read, and to the product's default otherwise.
  * @returns A newly built configuration, frozen, whose members carry the resolved values.
  * @throws {ConfigurationError} If `ADEM_PORT` is set and is not a whole number between 1 and 65535,
@@ -381,7 +381,7 @@ function repositoryRoot(): string {
  * file — and a `file:` URI, whose scheme is case-insensitive. Whitespace around an accepted value is
  * left where it is; normalizing the driver's own two special names is the driver's business.
  *
- * @param value The value {@link requirePath} accepted for {@link DATABASE_PATH_ENV_VAR}.
+ * @param value - The value {@link requirePath} accepted for {@link DATABASE_PATH_ENV_VAR}.
  * @returns The absolute form of a relative path, or the value as it was given.
  */
 function resolveDatabasePath(value: string): string {

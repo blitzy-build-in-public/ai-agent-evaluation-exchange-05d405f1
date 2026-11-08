@@ -108,8 +108,8 @@ export interface RecordFounderAllocationInput {
  * appended when it is raised. A failed append reaches the caller unwrapped as well: the database's
  * own foreign-key, `CHECK` and abort-trigger failures are not re-shaped here.
  *
- * @param db The caller's database handle.
- * @param input The transaction the allocation belongs to, its net amount, the resolved configuration
+ * @param db - The caller's database handle.
+ * @param input - The transaction the allocation belongs to, its net amount, the resolved configuration
  *   supplying the rate and both labels, and the optional clock.
  * @returns The appended entry: the nine stored values with the generated identifier and instant.
  * @throws {RangeError} From {@link allocate}, if the net amount or the configured rate is not a
