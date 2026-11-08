@@ -190,12 +190,12 @@ export function ruleAppeal(
   const { appealId, operatorAccountId, ruling, reason } = input;
 
   const row = db
-    .prepare(
+    .prepare<[string], AppealRow>(
       `SELECT id, report_id, developer_account_id, reason, status, created_at
        FROM appeals
        WHERE id = ?`,
     )
-    .get(appealId) as AppealRow | undefined;
+    .get(appealId);
 
   if (row === undefined) {
     throw new AppealNotFoundError(appealId);

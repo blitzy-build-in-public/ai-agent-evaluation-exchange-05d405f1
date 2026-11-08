@@ -821,6 +821,10 @@ describe("scoreSubmission", () => {
 
       expect(refusal.missingCaseIds).toEqual([critical.id]);
       expect(critical.severity).toBe("critical");
+      // `firstCriticalCase` selects on the very severity checked above, so the id it returned is
+      // anchored beside it to the case the pack documents as first and critical rather than left to
+      // the helper's own output.
+      expect(critical.id).toBe("so-001");
     });
 
     it("refuses a submission that records nothing at all", () => {
@@ -965,6 +969,10 @@ describe("scoreSubmission", () => {
       expect(scored.outcome).toBe("PASS");
       expect(scored.matchedCount).toBe(20);
       expect(declared.severity).toBe("critical");
+      // `firstCase` returns the set's first case whatever it is, so the id it returned is anchored
+      // beside the severity check to the case the pack documents first and critical: without that
+      // anchor the outcome above would not be evidence about a critical rescue.
+      expect(declared.id).toBe("so-001");
     });
 
     it("lets a contributed verdict reach the outcome the report records", () => {
@@ -979,6 +987,9 @@ describe("scoreSubmission", () => {
       });
 
       expect(declared.severity).toBe("critical");
+      // As above: the failed verdict reaches FAIL through a critical failure, so the declared case
+      // is anchored to the pack's documented first case rather than to `firstCase`'s own output.
+      expect(declared.id).toBe("so-001");
       expect(scored.outcome).toBe("FAIL");
       expect(scored.criticalFailures).toBe(1);
       expect(scored.matchedCount).toBe(baseline.matchedCount - 1);

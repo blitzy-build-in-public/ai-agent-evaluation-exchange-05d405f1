@@ -14,10 +14,12 @@
  *
  * What it evidences: the `appeals` table contract of the plan's data model (an appeal is
  * inserted `open` and the operator's later ruling is the only thing that moves it), the
- * immutability criterion's opening half (the appealed report is read and never written, and
- * opening appends no governance event), and the deliberate absence of an ownership lookup in
- * this path — the last of which is asserted structurally, by recording the SQL the module
- * prepares, because the absence of a read is not something a behavioural case can show.
+ * opening half of the governance record (every opening appends exactly one `appeal_opened`
+ * event carrying the developer's stated ground and naming the report, and a refused opening
+ * appends none), the immutability criterion's opening half (the appealed report is read and
+ * never written), and the deliberate absence of an ownership lookup in this path — the last
+ * of which is asserted structurally, by recording the SQL the module prepares, because the
+ * absence of a read is not something a behavioural case can show.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -73,6 +75,18 @@ interface StoredReportRow {
   readonly label: string;
   readonly rubric_reference: string;
   readonly prior_report_id: string | null;
+  readonly created_at: string;
+}
+
+/** The stored shape of one `governance_events` row, as `0007` declares its columns. */
+interface StoredEventRow {
+  readonly id: string;
+  readonly subject_type: string;
+  readonly subject_id: string;
+  readonly event_type: string;
+  readonly actor_account_id: string;
+  readonly reason: string | null;
+  readonly payload_json: string | null;
   readonly created_at: string;
 }
 
@@ -192,10 +206,37 @@ function readReportRow(): StoredReportRow {
   return row;
 }
 
-/** How many governance events the log holds. */
-function countGovernanceEvents(): number {
-  const row = db.prepare("SELECT COUNT(*) AS n FROM governance_events").get() as { readonly n: number };
-  return row.n;
+/**
+ * Every stored governance event, in the order the log was written. The statement is
+ * parameterised with the row shape rather than its result cast to it, so the reader's own
+ * typing is checked against the columns it selects.
+ */
+function readEventRows(): StoredEventRow[] {
+  return db
+    .prepare<[], StoredEventRow>(
+      `SELECT id, subject_type, subject_id, event_type, actor_account_id, reason, payload_json, created_at
+       FROM governance_events
+       ORDER BY created_at, id`,
+    )
+    .all();
+}
+
+/** The only stored governance event, failing the case rather than the assertion when the log is empty. */
+function firstEventRow(): StoredEventRow {
+  const row = readEventRows()[0];
+  if (row === undefined) {
+    throw new Error("expected the governance log to hold a row");
+  }
+  return row;
+}
+
+/** The payload text of the only stored event, failing the case when it stores none. */
+function firstEventPayload(): string {
+  const { payload_json: payloadJson } = firstEventRow();
+  if (payloadJson === null) {
+    throw new Error("expected the appended event to store a payload");
+  }
+  return payloadJson;
 }
 
 /** How many triggers guard a table, by whatever names a migration gave them. */
@@ -325,11 +366,49 @@ describe("openAppeal", () => {
     expect(readReportRow()).toStrictEqual(before);
   });
 
-  it("appends no governance event, though the shared vocabulary declares appeal_opened", () => {
-    openAppeal(db, { reportId: REPORT_ID, developerAccountId: OWNER_DEVELOPER_ID, reason: REASON });
+  it("appends one appeal_opened governance event naming the appeal, its report and the ground", () => {
+    const appeal: Appeal = openAppeal(db, {
+      reportId: REPORT_ID,
+      developerAccountId: OWNER_DEVELOPER_ID,
+      reason: REASON,
+    });
+    const event = firstEventRow();
 
-    expect(GOVERNANCE_EVENT_TYPES).toContain("appeal_opened");
-    expect(countGovernanceEvents()).toBe(0);
+    expect(readEventRows()).toHaveLength(1);
+    expect(event.subject_type).toBe("appeal");
+    expect(event.subject_id).toBe(appeal.id);
+    // The written spelling is the closed vocabulary's member for this append site: the
+    // shared tuple names `appeal_opened` as the event type of an appeal's opening, and
+    // `appendEvent` refuses anything outside that tuple, so this is the value the log holds.
+    expect(GOVERNANCE_EVENT_TYPES).toContain(event.event_type);
+    expect(event.event_type).toBe("appeal_opened");
+    expect(event.actor_account_id).toBe(OWNER_DEVELOPER_ID);
+    expect(event.reason).toBe(REASON);
+    expect(event.reason).not.toBe(REASON.trim());
+    expect(JSON.parse(firstEventPayload())).toStrictEqual({ appealId: appeal.id, reportId: REPORT_ID });
+    expect(event.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(Number.isNaN(Date.parse(event.created_at))).toBe(false);
+  });
+
+  it("appends one appeal_opened event per opening, so every appeal has its own", () => {
+    const first = openAppeal(db, {
+      reportId: REPORT_ID,
+      developerAccountId: OWNER_DEVELOPER_ID,
+      reason: REASON,
+    });
+    const second = openAppeal(db, {
+      reportId: REPORT_ID,
+      developerAccountId: BYSTANDER_DEVELOPER_ID,
+      reason: "A second reading of the same evidence.",
+    });
+    const events = readEventRows();
+
+    expect(events).toHaveLength(readAppealRows().length);
+    expect(events.map((event) => event.subject_id).sort()).toEqual([first.id, second.id].sort());
+    expect(events.map((event) => event.event_type)).toEqual(["appeal_opened", "appeal_opened"]);
+    expect(events.map((event) => event.actor_account_id).sort()).toEqual(
+      [OWNER_DEVELOPER_ID, BYSTANDER_DEVELOPER_ID].sort(),
+    );
   });
 
   it("does not verify that the named developer owns the report", () => {
@@ -382,7 +461,10 @@ describe("openAppeal", () => {
     expect((failure as InvalidAppealError).code).toBe("invalid_appeal");
     expect((failure as InvalidAppealError).name).toBe("InvalidAppealError");
     expect((failure as InvalidAppealError).field).toBe("reason");
+    // The refusal is raised before either write, so the appeal and the event recording its
+    // opening are both absent rather than one of the two existing on its own.
     expect(readAppealRows()).toHaveLength(0);
+    expect(readEventRows()).toEqual([]);
   });
 
   it("refuses a blank reason before it reads the report", () => {
@@ -390,6 +472,7 @@ describe("openAppeal", () => {
       openAppeal(db, { reportId: UNKNOWN_REPORT_ID, developerAccountId: OWNER_DEVELOPER_ID, reason: "   " }),
     ).toThrow(InvalidAppealError);
     expect(readAppealRows()).toHaveLength(0);
+    expect(readEventRows()).toEqual([]);
   });
 
   it("accepts the shortest padded reason, which the blank set does not contain", () => {
@@ -419,6 +502,7 @@ describe("openAppeal", () => {
     expect((failure as ReportNotFoundError).name).toBe("ReportNotFoundError");
     expect((failure as ReportNotFoundError).message).toContain(UNKNOWN_REPORT_ID);
     expect(readAppealRows()).toHaveLength(0);
+    expect(readEventRows()).toEqual([]);
   });
 });
 
@@ -440,17 +524,19 @@ describe("the appeals table openAppeal writes", () => {
 });
 
 describe("the statements openAppeal prepares", () => {
-  it("reads the appealed report, inserts the appeal row, and prepares nothing else", () => {
+  it("reads the appealed report, inserts the appeal row, appends its event, and prepares nothing else", () => {
     installPrepareRecorder();
 
     openAppeal(db, { reportId: REPORT_ID, developerAccountId: OWNER_DEVELOPER_ID, reason: REASON });
 
     const reportReads = preparedStatements.filter((source) => /\bevaluation_reports\b/.test(source));
     const appealWrites = preparedStatements.filter((source) => /\bINSERT\s+INTO\s+appeals\b/i.test(source));
+    const eventWrites = preparedStatements.filter((source) => /\bINSERT\s+INTO\s+governance_events\b/i.test(source));
 
     expect(reportReads).toHaveLength(1);
     expect(appealWrites).toHaveLength(1);
-    expect(preparedStatements).toHaveLength(2);
+    expect(eventWrites).toHaveLength(1);
+    expect(preparedStatements).toHaveLength(3);
   });
 
   it("prepares no statement that reads a table belonging to another owner", () => {

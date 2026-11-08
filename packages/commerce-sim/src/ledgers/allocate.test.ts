@@ -8,7 +8,7 @@ import { allocate } from './allocate';
  * default twenty-five basis points is the headline case; four thousand at the same rate is
  * the partial-refund case. Two hundred at twenty-five basis points is the half-up tie — its
  * product is exactly one half of ten thousand — and it is the only case here that tells
- * half-up apart from half-even or from truncation.
+ * half-up apart from half-even.
  */
 const allocationCases = [
   { amountMinorUnits: 10000, rateBasisPoints: 25, expected: 25 },
@@ -19,6 +19,17 @@ const allocationCases = [
   { amountMinorUnits: 100, rateBasisPoints: 25, expected: 0 },
   { amountMinorUnits: 10000, rateBasisPoints: 200, expected: 200 },
 ];
+
+/**
+ * The amounts the whole-number sweep walks. They are chosen to land on the seams of the
+ * rounding rule instead of being sampled evenly: 199 and 201 straddle the 200 half-up tie,
+ * 4999999 and 5000001 straddle 5000000, whose product is an exact multiple of the ten-thousand
+ * divisor and so needs no rounding at all, and the rest are the headline amount the acceptance
+ * criterion names (10000) with a whole multiple of it (20000), the smallest amount above the
+ * zero the table above already carries (1), and 100001, whose 25-basis-point product leaves a
+ * remainder just above an exact multiple.
+ */
+const wholeNumberSweepAmounts = [1, 199, 201, 10000, 20000, 100001, 4999999, 5000001];
 
 /**
  * Arguments that are not numbers at all, in either position: a refusal has to be the
@@ -63,14 +74,21 @@ describe('allocate', () => {
       });
     }
 
-    it('yields a whole number of minor units for every case', () => {
-      const results = allocationCases.map(({ amountMinorUnits, rateBasisPoints }) =>
-        allocate(amountMinorUnits, rateBasisPoints),
-      );
+    // The integer check alone cannot fail for a wrong allocation — a truncated, floored or
+    // half-even whole number satisfies it just as well — so each sweep amount's expectation is
+    // anchored to the documented share of that amount, computed here from the rule itself
+    // (amount times the rate in basis points, divided by ten thousand, rounded half up) rather
+    // than read back from `allocate`, which would make the expectation agree with whatever the
+    // function under test returned.
+    for (const amountMinorUnits of wholeNumberSweepAmounts) {
+      it(`returns the documented whole-number share of ${amountMinorUnits} at 25 basis points`, () => {
+        const documentedShare = Math.floor((amountMinorUnits * 25 + 5000) / 10000);
+        const allocated = allocate(amountMinorUnits, 25);
 
-      expect(results).not.toHaveLength(0);
-      expect(results.every((result) => Number.isInteger(result))).toBe(true);
-    });
+        expect(Number.isInteger(allocated)).toBe(true);
+        expect(allocated).toBe(documentedShare);
+      });
+    }
 
     it('returns the same allocation for the same arguments', () => {
       // The anchor is what makes this case able to fail: without it, comparing the function

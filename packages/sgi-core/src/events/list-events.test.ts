@@ -237,9 +237,10 @@ describe("listEvents", () => {
 
     it("tie-breaks two rows written at the same instant by rowid rather than by id", () => {
       // The insert below is a plain INSERT, which is the appender's own statement: migration 0010
-      // guards UPDATE and DELETE on this table and leaves INSERT alone. It is also the only way to
-      // reach this case at all, because `appendEvent` always stamps a fresh instant and so no two
-      // appended rows ever share one.
+      // guards UPDATE and DELETE on this table and leaves INSERT alone. The pinned instant is what
+      // reaches the tie deliberately: `appendEvent` stamps `new Date().toISOString()` at its
+      // millisecond resolution, so two appends inside one millisecond reach it by accident; what
+      // this case adds is a `created_at` the test states rather than one the clock chose.
       const sameInstant = "2024-03-14T00:00:00.000Z";
       const insert = db.prepare(
         `INSERT INTO governance_events
@@ -267,8 +268,22 @@ describe("listEvents", () => {
 
       expect(returned).toEqual(["demo-event-yard-zulu", "demo-event-yard-alpha"]);
       // The two ids are written in the reverse of lexicographic order, so a read that ordered by id
-      // rather than by rowid would return them the other way round: this pair pins the tie-break.
+      // rather than by rowid would return them the other way round: this pair pins the key, and the
+      // filtered read below pins the tie-break clause itself.
       expect(returned).toEqual(written.map((row) => row.id).sort().reverse());
+
+      // The indexed read is the one that parts company with a read missing the tie-break, and the
+      // plan rather than the filter is why: `EXPLAIN QUERY PLAN` reports `SCAN governance_events ;
+      // USE TEMP B-TREE FOR ORDER BY` for the unfiltered read above, whose sort sees the rows in
+      // `rowid` order and so returns them the same way with or without the clause, while this one's
+      // plan is `SEARCH governance_events USING INDEX idx_governance_events_subject
+      // (subject_type=?)`, whose rows arrive in `subject_id` order — the reverse of the order in
+      // which they were appended. This read, and not the pair above, therefore fails once `rowid ASC`
+      // leaves `listEvents`' `ORDER BY`.
+      const filtered = listEvents(db, { subjectType: "listing" }).map((event) => event.id);
+
+      expect(filtered).toEqual(written.map((row) => row.id));
+      expect(filtered).toEqual(returned);
     });
 
     it("takes its order from the query rather than from any comparison in TypeScript", () => {

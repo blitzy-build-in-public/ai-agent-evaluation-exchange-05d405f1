@@ -108,9 +108,9 @@ export type StandardProposal = {
  * built rather than re-read, because every value it holds was just written.
  *
  * Submission appends no governance event, deliberately: the append sites are a proposal's review, a
- * moderation action, an appeal's ruling, a standard version's publication and a retest, and the
- * inserted row is itself the record of the submission. A single-row insert is already atomic and
- * needs no transaction, so a caller's open transaction is joined cleanly rather than nested.
+ * moderation action, an appeal's opening, an appeal's ruling, a standard version's publication and a
+ * retest, and the inserted row is itself the record of the submission. A single-row insert is already
+ * atomic and needs no transaction, so a caller's open transaction is joined cleanly rather than nested.
  *
  * @param db - The caller's database handle.
  * @param input - The standard the proposal concerns, the contributing account submitting it, and

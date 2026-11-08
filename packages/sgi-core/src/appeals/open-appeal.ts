@@ -9,7 +9,8 @@
  * which is what `GET /evaluations/{id}` proves by returning the same report after a
  * ruling.
  *
- * Two decisions are stated here, because the code alone would read as an omission:
+ * Two decisions are stated here, because the code alone would leave each open to
+ * misreading:
  *
  * 1. **No ownership lookup, deliberately.** Resolving whether the named developer owns
  *    the appealed report would mean reading `listings` and `listing_versions`, which
@@ -17,18 +18,21 @@
  *    route's `403` from the resolved demo-account role. `developerAccountId` is
  *    therefore taken as given and never checked against the report: adding the check
  *    here would put a read of another owner's tables inside this package.
- * 2. **Opening an appeal appends no governance event.** The plan's append sites are a
- *    standard proposal's review, a listing moderation action, an appeal's ruling, a
- *    standard version's publication and a retest. The shared vocabulary
- *    `GOVERNANCE_EVENT_TYPES` does declare an `appeal_opened` member, so that vocabulary
- *    is wider than the append-site list; nothing asks this module to write it, and the
- *    inserted appeal row is itself the record of the opening. A later reader must not
- *    read this absence as a missing call to `appendEvent`.
+ * 2. **Opening an appeal appends one governance event.** An appeal's opening is itself a
+ *    governance decision — a developer has contested a measurement — so it is recorded in
+ *    the append-only log alongside the ruling that later answers it, through the package's
+ *    single insert path into that log, `../events/append-event`. The vocabulary's member
+ *    for this site is `appeal_opened`, and the event carries the developer's stated ground
+ *    exactly as the row does, because an appeal opened states the ground it rests on, and
+ *    names the report it contests. The `appeals` row is the appeal's current state; the
+ *    event is the record of its opening, which a reader of the trail still finds after the
+ *    row's `status` has moved on.
  *
  * The `appeals` table is deliberately not one of the nine append-only tables and carries
  * no `RAISE(ABORT)` trigger, which is what makes a ruling's later `UPDATE` legal: its
  * `status` is the row's only mutable column. `evaluation_reports` is append-only and
- * nothing here touches it — this module reads that table and inserts one appeal.
+ * nothing here touches it — this module reads that table and writes one appeal with the
+ * event that records its opening.
  *
  * The database handle belongs to the caller (ports and adapters): this module opens no
  * connection, reads no environment variable and resolves no filesystem path.
@@ -37,6 +41,7 @@
 import { randomUUID } from "node:crypto";
 import type { AppealStatus } from "@adem/shared";
 import type { Database } from "better-sqlite3";
+import { appendEvent } from "../events/append-event";
 
 /**
  * One `appeals` row as the domain reads it: the developer's challenge to a single
@@ -124,7 +129,8 @@ export class InvalidAppealError extends Error {
  * 2. **The report is verified to exist** with one read-only existence check against
  *    `evaluation_reports` alone — no join and no other table, so the refusal is about the
  *    report and nothing else. No row raises {@link ReportNotFoundError}.
- * 3. **Exactly one `appeals` row is inserted**, in status `open`, and returned.
+ * 3. **One `appeals` row is inserted and one `appeal_opened` governance event is
+ *    appended**, in that order, inside one transaction, and the row is returned.
  *
  * The reason is stored exactly as given, untrimmed: it is the developer's own statement
  * of ground, and a reader of the appeal must see what was submitted. `id` comes from
@@ -134,8 +140,13 @@ export class InvalidAppealError extends Error {
  * rather than re-read, because every value it holds was just written.
  *
  * The insert is a plain `INSERT`: no upsert clause appears, and this module issues no
- * `UPDATE` and no `DELETE`. A single-row insert is already atomic and needs no
- * transaction, so a caller's open transaction is joined cleanly rather than nested.
+ * `UPDATE` and no `DELETE`. The row and the event that records its opening are wrapped
+ * together in one `db.transaction(...)`, so an appeal and the log entry for the moment it
+ * was opened cannot diverge — a failure between the two writes would leave an appeal whose
+ * opening nothing recorded, which is the gap the pair exists to close. Better-sqlite3 nests
+ * that as a savepoint when a caller already holds a transaction open, so a write route that
+ * wraps this call still works. The appended event is not part of the return shape: what
+ * this function opens is an appeal, and the log is read back through `../events/list-events`.
  *
  * @param db - The caller's database handle.
  * @param input - The appealed report, the developer opening the appeal, and the stated
@@ -162,10 +173,25 @@ export function openAppeal(
   const id = randomUUID();
   const createdAt = new Date().toISOString();
 
-  db.prepare(
-    `INSERT INTO appeals (id, report_id, developer_account_id, reason, status, created_at)
-     VALUES (@id, @reportId, @developerAccountId, @reason, 'open', @createdAt)`,
-  ).run({ id, reportId, developerAccountId, reason, createdAt });
+  const writeOpening = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO appeals (id, report_id, developer_account_id, reason, status, created_at)
+       VALUES (@id, @reportId, @developerAccountId, @reason, 'open', @createdAt)`,
+    ).run({ id, reportId, developerAccountId, reason, createdAt });
+
+    // Inside the same transaction, which is what makes the appeal and the record of its
+    // opening indivisible: the appender joins an open transaction rather than opening its
+    // own. The developer's stated ground travels verbatim, as the row stores it.
+    appendEvent(db, {
+      subjectType: "appeal",
+      subjectId: id,
+      eventType: "appeal_opened",
+      actorAccountId: developerAccountId,
+      reason,
+      payload: { appealId: id, reportId },
+    });
+  });
+  writeOpening();
 
   return { id, reportId, developerAccountId, reason, status: "open", createdAt };
 }

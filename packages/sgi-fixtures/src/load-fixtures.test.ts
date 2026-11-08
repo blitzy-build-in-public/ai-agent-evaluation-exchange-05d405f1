@@ -6,7 +6,8 @@
  *
  * - **The documented case set.** `SGI-SO-1.0.0` declares 20 cases, 5 of them
  *   `critical`; every case id is unique and shaped `so-NNN`, and every case
- *   carries an instruction, a source and an expected output.
+ *   carries an instruction, a source and an expected output that is a non-empty
+ *   JSON object.
  * - **The three recorded outcomes, recomputed.** `seed-alpha` passes 20 of 20,
  *   `seed-beta` fails one critical case and `seed-gamma` falls below the 18-of-20
  *   threshold. Each is recomputed here from the case set and the candidate alone
@@ -254,11 +255,19 @@ describe("the SGI-SO-1.0.0 fixture pack", () => {
       }
     });
 
-    it("gives every case an instruction, a source and an expected output", () => {
+    it("gives every case an instruction, a source and a comparable expected output", () => {
       for (const fixtureCase of loadCaseSet(STANDARD_VERSION_ID).cases) {
         expect(fixtureCase.input.instruction.length).toBeGreaterThan(0);
         expect(fixtureCase.input.source.length).toBeGreaterThan(0);
-        expect(fixtureCase.expected_output).toBeDefined();
+
+        // The shape, not definedness. The loader already refuses a case with no JSON
+        // `expected_output`, while `null`, a scalar and an array are all defined JSON, so a
+        // definedness assertion could not fail for a wrong expectation. What the evaluator's
+        // comparison consumes is an object with at least one member: `{}` compares against
+        // nothing, and a scalar or a `null` reaches the comparison with no member at all.
+        const rendered = canonicalize(fixtureCase.expected_output);
+        expect(rendered).toMatch(/^\{/);
+        expect(rendered).not.toBe("{}");
       }
     });
   });
