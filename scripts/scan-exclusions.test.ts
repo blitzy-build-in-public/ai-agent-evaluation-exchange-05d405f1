@@ -14,6 +14,12 @@
  * worst false-positive case - so a literal address, telephone number, private-key header or credential
  * value here would make the clean-run case fail on the suite's own text.
  *
+ * Two of the scan's own artefacts are asserted from the delivered files rather than from a copy: the
+ * rule set and the limit statement it declares, and the provider digest store, which has to hold
+ * digests and nothing else. One further temporary tree carries only the shapes this repository is
+ * itself made of - an npm scope, a UUID, a version, a plain count - which the scan has to stay silent
+ * about.
+ *
  * The temporary trees live under `tmpdir()` and are removed in `afterAll`; no run writes anything into
  * the repository, and the identity of the temporary commit comes from the spawned git process's
  * environment rather than from any `git config` write.
@@ -27,7 +33,15 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { EXCLUSION_RULES, SCAN_LIMITATIONS, hashToken, loadBlockedProviderTokens } from './exclusion-rules';
+import {
+  EXCLUSION_CLASSES,
+  EXCLUSION_RULES,
+  SCAN_LIMITATIONS,
+  hashToken,
+  loadBlockedProviderTokens,
+  maskExcerpt,
+  tokenVariants,
+} from './exclusion-rules';
 import type { RuleLineContext, RuleMatch } from './exclusion-rules';
 import { main, renderScanReport, runScan } from './scan-exclusions';
 import type { ScanResult } from './scan-exclusions';
@@ -299,6 +313,222 @@ const REFUSED_STORES: ReadonlyArray<{
   },
 ];
 
+/** The five rule ids the scanner and the rules module define, in the order the report prints them. */
+const EXPECTED_RULE_IDS: readonly string[] = [
+  'email-address',
+  'telephone-number',
+  'private-key-header',
+  'credential-assignment',
+  'prohibited-dependency',
+];
+
+/** The id of the one rule whose matcher reads a dependency name rather than a line. */
+const DEPENDENCY_RULE_ID = 'prohibited-dependency';
+
+/** The four classes the scan may report, in the order it groups findings by them. */
+const EXPECTED_CLASSES: readonly string[] = [
+  'email-address',
+  'telephone-number',
+  'credential-material',
+  'prohibited-dependency',
+];
+
+/** The three file kinds every content rule applies to, in the order the rules module lists them. */
+const CONTENT_KINDS: readonly string[] = ['text', 'manifest', 'lockfile'];
+
+/** The two file kinds the dependency rule alone applies to, in that same order. */
+const DEPENDENCY_KINDS: readonly string[] = ['manifest', 'lockfile'];
+
+/**
+ * A sentence claiming the scan guarantees the absence of private information, which no limitation may
+ * be. `guaranteeing` sits deliberately outside this pattern: the delivered text uses that word in a
+ * refusal, and a case that could not tell the two apart would be no case at all.
+ */
+const CLAIM_OF_GUARANTEE = /\bguarantees?\b|\bguaranteed\b/i;
+
+/** A JSON string literal in the delivered digest store, escapes included. */
+const QUOTED_JSON_STRING = /"((?:[^"\\]|\\.)*)"/g;
+
+/** The shape a stored provider token digest has. */
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+/** The delivered digest store: the file whose digests the prohibited-dependency rule matches. */
+const DIGEST_STORE_PATH = join(REPO_ROOT, STORE_FILE);
+
+/** A 64-character hex digest, assembled so this file holds no 64-character hex run of its own. */
+const SHAPE_DIGEST = '0123456789abcdef'.repeat(4);
+
+/** A UUID and an ISO-8601 timestamp, both assembled from parts for that same reason. */
+const SHAPE_UUID = ['3f2504e0', '4f89', '11d3', '9a0c', '0305e82c3301'].join('-');
+const SHAPE_TIMESTAMP = `${['2024-01-02', '03:04:05'].join('T')}Z`;
+
+/** The npm scope the delivered manifests declare, which is the shape an address is not. */
+const SHAPE_SCOPE = ['@adem', 'shared'].join('/');
+
+/** The temporary root holding only the machine-written shapes the scan has to stay silent about. */
+const CLEAN_ROOT = mkdtempSync(join(tmpdir(), 'scan-exclusions-clean-'));
+
+/** The temporary root whose ignored directories and binary file are counted rather than reported. */
+const BINARY_ROOT = mkdtempSync(join(tmpdir(), 'scan-exclusions-counts-'));
+
+/** The temporary root holding one manifest that declares a scoped dependency. */
+const VARIANT_ROOT = mkdtempSync(join(tmpdir(), 'scan-exclusions-variant-'));
+
+/** The temporary git repository whose only address sits in its commit's own metadata. */
+const METADATA_ROOT = mkdtempSync(join(tmpdir(), 'scan-exclusions-metadata-'));
+
+/** The lines of the clean text file: the shapes this repository is itself made of, and no violation. */
+const CLEAN_SHAPE_LINES: readonly string[] = [
+  `an npm scope: "${SHAPE_SCOPE}"`,
+  `a uuid: ${SHAPE_UUID}`,
+  `an iso-8601 timestamp: ${SHAPE_TIMESTAMP}`,
+  'a conformance target: WCAG 2.1',
+  'a protocol version: HTTP/1.1',
+  'the approved runtime: node 20.20.2',
+  'a prebuilt native module: node-v115-linux-x64',
+  'a provisional rate: 0.25%',
+  'two viewports and two ports: 1280, 360, 3000, 15000',
+  `a 64-character digest: ${SHAPE_DIGEST}`,
+  'a licence field spelled as the manifests spell it: "license": "MIT"',
+  'a digest list opening: "tokens": [',
+  'The words token, key, secret and hash are ordinary words on this line, never an assignment.',
+];
+
+/** The clean manifest: a scope, a licence field, and no dependency name the delivered store knows. */
+const CLEAN_MANIFEST_LINES: readonly string[] = [
+  '{',
+  '  "name": "clean-probe-tree",',
+  '  "version": "0.1.0",',
+  '  "private": true,',
+  '  "license": "MIT",',
+  '  "dependencies": {',
+  `    "${SHAPE_SCOPE}": "0.1.0"`,
+  '  }',
+  '}',
+];
+
+/** The digest-list shape: the store's own opening, in a file that is not the store. */
+const CLEAN_DIGEST_LIST_LINES: readonly string[] = [
+  '{',
+  '  "tokens": [',
+  `    "${SHAPE_DIGEST}"`,
+  '  ]',
+  '}',
+];
+
+/** Every file the clean tree holds, and the exact contents the suite writes into it. */
+const CLEAN_FILE_CONTENTS: ReadonlyArray<{ readonly file: string; readonly contents: string }> = [
+  { file: 'clean-shapes.txt', contents: `${CLEAN_SHAPE_LINES.join('\n')}\n` },
+  { file: 'clean-manifest/package.json', contents: `${CLEAN_MANIFEST_LINES.join('\n')}\n` },
+  { file: 'clean-digest-shapes.json', contents: `${CLEAN_DIGEST_LIST_LINES.join('\n')}\n` },
+];
+
+/** The one text file the counts tree holds, which is read and holds no finding. */
+const COUNTED_TEXT_FILE = 'counted-text.txt';
+
+/** The binary file that tree holds: a NUL in its first bytes, so no rule ever reads a byte of one. */
+const SKIPPED_BINARY_FILE = 'opaque-blob.bin';
+
+/** The directories the walk never descends into, each planted with an address it must not report. */
+const IGNORED_DIRECTORY_NAMES: readonly string[] = ['node_modules', 'dist'];
+
+/** A dependency name the store knows only through the unscoped, suffix-free variant of it. */
+const SCOPED_PROVIDER_NAME = ['@synthetic-scope', 'zzqqprov-sdk'].join('/');
+
+/** The base variant of that name, which is what the injected digests are computed from. */
+const SCOPED_PROVIDER_BASE = 'zzqqprov';
+
+/**
+ * The digests of that base's own variants, injected in place of the delivered store. They deliberately
+ * hold no digest of the scoped name itself, so a finding can only come from the variant walk the
+ * prohibited-dependency rule performs - which is the whole point of the override.
+ */
+const SCOPED_PROVIDER_DIGESTS: ReadonlySet<string> = new Set(
+  tokenVariants(SCOPED_PROVIDER_BASE).map((variant) => hashToken(variant)),
+);
+
+/** The lines of the manifest that declares the scoped dependency. */
+const VARIANT_MANIFEST_LINES: readonly string[] = [
+  '{',
+  '  "name": "variant-probe-tree",',
+  '  "version": "0.0.0",',
+  '  "private": true,',
+  '  "dependencies": {',
+  `    ${JSON.stringify(SCOPED_PROVIDER_NAME)}: "1.0.0"`,
+  '  }',
+  '}',
+];
+
+/** The clean file the metadata-only commit carries. */
+const METADATA_FILE = 'metadata-clean.txt';
+
+/** Its lines: no rule can fire on them, so any finding would have to come from a commit header. */
+const METADATA_LINES: readonly string[] = [
+  '# a commit whose content holds no finding',
+  'the only address in this repository is the committing tool identity',
+];
+
+/** Writes every file the clean tree, the counts tree and the variant tree hold. */
+function writeProbeTrees(): void {
+  for (const clean of CLEAN_FILE_CONTENTS) {
+    writeTempFile(CLEAN_ROOT, clean.file, clean.contents);
+  }
+  writeTempFile(BINARY_ROOT, COUNTED_TEXT_FILE, '# one text file, and no finding in it\n');
+  writeFileSync(join(BINARY_ROOT, SKIPPED_BINARY_FILE), Buffer.from([0, 1, 2, 0, 3, 4, 5]));
+  for (const ignored of IGNORED_DIRECTORY_NAMES) {
+    writeTempFile(BINARY_ROOT, `${ignored}/ignored.txt`, `contact ${PLANTED_ADDRESS} for details\n`);
+  }
+  writeTempFile(VARIANT_ROOT, MANIFEST_FILE, `${VARIANT_MANIFEST_LINES.join('\n')}\n`);
+}
+
+/** The error a call threw, asserted rather than assumed: a silent pass would hide a non-throw. */
+function errorOf(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw new Error(`the call threw a value that is not an Error: ${String(error)}`);
+  }
+  throw new Error('the call did not throw at all');
+}
+
+/** The delivered digest store's text, read from the file the scan itself reads. */
+function deliveredStoreText(): string {
+  return readFileSync(DIGEST_STORE_PATH, 'utf8');
+}
+
+/** The delivered digest store as a JSON object, refusing a document that is not one. */
+function deliveredStoreDocument(): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(deliveredStoreText());
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`the delivered digest store at ${DIGEST_STORE_PATH} is not a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** The store's `tokens` array, refusing a document that holds none. */
+function deliveredStoreTokens(): readonly unknown[] {
+  const tokens = deliveredStoreDocument()['tokens'];
+  if (!Array.isArray(tokens)) {
+    throw new Error('the delivered digest store holds no "tokens" array');
+  }
+  return tokens;
+}
+
+/** The store's tokens as digests, refusing any entry that is not one rather than skipping it. */
+function deliveredStoreDigests(): readonly string[] {
+  const tokens = deliveredStoreTokens();
+  const digests = tokens.filter((entry): entry is string => typeof entry === 'string');
+  if (digests.length !== tokens.length) {
+    throw new Error('the delivered digest store holds an entry that is not a string');
+  }
+  return digests;
+}
+
+writeProbeTrees();
+
 for (const planted of PLANTED_FILE_CONTENTS) {
   writeTempFile(PLANTED_ROOT, planted.file, planted.contents);
 }
@@ -351,6 +581,38 @@ const HISTORY_IDENTITY_ENVIRONMENT: NodeJS.ProcessEnv = {
 function runGit(cwd: string, args: readonly string[]): CommandRun {
   return runProcess('git', args, cwd);
 }
+
+/**
+ * Builds the repository whose only address sits in its commit metadata rather than in its content.
+ *
+ * The identity comes from the spawned git process's environment, so no repository's configuration is
+ * written and no `git config` is ever run. `git log --format=%ae` then reads back what git actually
+ * recorded, which is what makes the guard below a fact about the commit rather than about this suite's
+ * intent - and it is the regression guard for this repository's own initial commit, whose author line
+ * carries the committing tool's address.
+ */
+function buildMetadataTree(): { readonly ok: boolean; readonly reason: string; readonly author: string } {
+  writeTempFile(METADATA_ROOT, METADATA_FILE, `${METADATA_LINES.join('\n')}\n`);
+  const steps: ReadonlyArray<{ readonly label: string; readonly args: readonly string[] }> = [
+    { label: 'git init', args: ['init', '--quiet'] },
+    { label: 'git add', args: ['add', '--', METADATA_FILE] },
+    { label: 'git commit', args: ['commit', '--quiet', '-m', 'clean content, address-shaped identity'] },
+  ];
+  for (const step of steps) {
+    const run = runGit(METADATA_ROOT, step.args);
+    if (run.status !== 0) {
+      return { ok: false, reason: `${step.label} failed: ${run.stderr.trim()}`, author: '' };
+    }
+  }
+  const author = runGit(METADATA_ROOT, ['log', '--format=%ae']);
+  if (author.status !== 0) {
+    return { ok: false, reason: `the recorded identity could not be read: ${author.stderr.trim()}`, author: '' };
+  }
+  return { ok: true, reason: '', author: author.stdout.trim() };
+}
+
+/** What the metadata-only repository achieved, read by the case that depends on it. */
+const METADATA_SETUP = buildMetadataTree();
 
 /**
  * The real command line, exactly as `npm run scan:exclusions` runs it: the workspace's tsx binary over
@@ -425,7 +687,7 @@ function snapshotTree(root: string): string {
 }
 
 afterAll(() => {
-  for (const root of [PLANTED_ROOT, HISTORY_ROOT, REFUSED_ROOT]) {
+  for (const root of [PLANTED_ROOT, HISTORY_ROOT, REFUSED_ROOT, CLEAN_ROOT, BINARY_ROOT, VARIANT_ROOT, METADATA_ROOT]) {
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -472,6 +734,14 @@ describe('the planted violations in a temporary tree', () => {
       expect(finding.excerpt).not.toContain(PLANTED_ADDRESS);
       expect(finding.excerpt).not.toContain(PLANTED_CREDENTIAL_VALUE);
       expect(finding.excerpt).not.toContain(PLANTED_TELEPHONE);
+    }
+  });
+
+  it('names every planted file and every fired rule in the rendered report', () => {
+    const report = renderScanReport(plantedScan());
+    for (const expectation of PLANTED_EXPECTATIONS) {
+      expect(report).toContain(`${expectation.file}:${expectation.line}`);
+      expect(report).toContain(expectation.ruleId);
     }
   });
 });
@@ -580,12 +850,20 @@ describe('determinism', () => {
       renderScanReport(runScan({ root: REPO_ROOT })),
     );
   });
+
+  it('returns deeply equal findings for two runs over the same root', () => {
+    const first = plantedScan();
+    const second = plantedScan();
+    expect(second).toStrictEqual(first);
+    expect(second.findings.length).toBeGreaterThan(0);
+  });
 });
 
 describe('the provider digest store', () => {
   it.each(REFUSED_STORES)('refuses $label', (refused) => {
     const path = join(REFUSED_ROOT, refused.file);
-    expect(() => loadBlockedProviderTokens(path)).toThrow();
+    const error = errorOf(() => loadBlockedProviderTokens(path));
+    expect(error.message).toContain(refused.file);
     const result = runScan({ root: REFUSED_ROOT, blockedProviderPath: path });
     expect(result.findings).toEqual([]);
     expect(result.exitCode).toBe(NO_VERDICT_EXIT_CODE);
@@ -602,5 +880,182 @@ describe('the provider digest store', () => {
     const report = renderScanReport(result);
     expect(report).toContain('reached no verdict');
     expect(report).not.toContain('0 finding(s)');
+  });
+
+  it('refuses a store that does not exist, naming the path it could not read', () => {
+    const missing = join(REFUSED_ROOT, 'no-such-store.json');
+    expect(errorOf(() => loadBlockedProviderTokens(missing)).message).toContain(missing);
+    const result = runScan({ root: REFUSED_ROOT, blockedProviderPath: missing });
+    expect(result.exitCode).toBe(NO_VERDICT_EXIT_CODE);
+    expect(result.findings).toEqual([]);
+    expect(result.notes).toHaveLength(1);
+    expect(result.notes[0]).toContain(missing);
+  });
+});
+
+describe('the rule set the scan declares', () => {
+  it('holds the five rule ids and the four classes, in the order the report groups them', () => {
+    expect(EXCLUSION_RULES.map((rule) => rule.id)).toEqual(EXPECTED_RULE_IDS);
+    expect(EXCLUSION_CLASSES).toEqual(EXPECTED_CLASSES);
+    expect([...new Set(EXCLUSION_RULES.map((rule) => rule.class))].sort()).toEqual(
+      [...EXPECTED_CLASSES].sort(),
+    );
+  });
+
+  it('scopes the dependency rule to manifests and lockfiles, and every other rule to all text', () => {
+    expect(EXCLUSION_RULES).toHaveLength(EXPECTED_RULE_IDS.length);
+    for (const rule of EXCLUSION_RULES) {
+      expect(rule.description.trim().length).toBeGreaterThan(0);
+      if (rule.id === DEPENDENCY_RULE_ID) {
+        expect(rule.kind).toBe('dependency');
+        expect([...rule.appliesTo]).toEqual(DEPENDENCY_KINDS);
+        expect(rule.matchDependency).toBeTypeOf('function');
+        continue;
+      }
+      expect(rule.kind).toBe('line');
+      expect([...rule.appliesTo]).toEqual(CONTENT_KINDS);
+      expect(rule.appliesTo).toContain('text');
+      expect(rule.matchLine).toBeTypeOf('function');
+    }
+  });
+});
+
+describe('what the scan says about its own limits', () => {
+  it('names the four classes it detects and the three areas it does not detect', () => {
+    const stated = SCAN_LIMITATIONS.join(' ');
+    expect(SCAN_LIMITATIONS.length).toBeGreaterThan(0);
+    expect(SCAN_LIMITATIONS.every((entry) => entry.trim().length > 0)).toBe(true);
+    expect(stated).toMatch(/four classes/);
+    for (const undetected of ['personal names', 'contextual disclosure', 'references to private projects']) {
+      expect(stated).toMatch(new RegExp(`does not detect[^.]*${undetected}`, 'i'));
+    }
+  });
+
+  it('calls itself supplementary to the manual review and claims no guarantee anywhere', () => {
+    const stated = SCAN_LIMITATIONS.join(' ');
+    expect(stated).toMatch(/supplementary/i);
+    expect(stated).toContain('docs/REVIEW-CHECKLIST.md');
+    expect(stated).toMatch(/not evidence/);
+    for (const entry of SCAN_LIMITATIONS) {
+      expect(entry).not.toMatch(CLAIM_OF_GUARANTEE);
+    }
+  });
+});
+
+describe('the delivered provider digest store', () => {
+  it('pins its algorithm and normalization, and lists sorted, unique, digest-shaped tokens', () => {
+    const store = deliveredStoreDocument();
+    expect(Object.keys(store).sort()).toEqual(['algorithm', 'normalization', 'note', 'tokens']);
+    expect(store['algorithm']).toBe('sha256');
+    expect(store['normalization']).toBe('trim-lowercase');
+    const tokens = deliveredStoreTokens();
+    expect(tokens.length).toBeGreaterThan(0);
+    expect(tokens.every((entry) => DIGEST_PATTERN.test(String(entry)))).toBe(true);
+    const digests = deliveredStoreDigests();
+    expect(digests).toEqual([...digests].sort());
+    expect(new Set(digests).size).toBe(digests.length);
+    expect(loadBlockedProviderTokens(DIGEST_STORE_PATH).size).toBe(digests.length);
+  });
+
+  it('holds digests only, so no plaintext provider name reaches this repository', () => {
+    const store = deliveredStoreDocument();
+    const note = store['note'];
+    expect(typeof note).toBe('string');
+    expect(String(note)).toMatch(/supplementary/i);
+    const allowed = new Set([
+      'algorithm',
+      'normalization',
+      'tokens',
+      'note',
+      'sha256',
+      'trim-lowercase',
+      String(note),
+    ]);
+    const readable: string[] = [];
+    for (const match of deliveredStoreText().matchAll(QUOTED_JSON_STRING)) {
+      const value = match[1] ?? '';
+      if (!DIGEST_PATTERN.test(value) && !allowed.has(value)) {
+        readable.push(value);
+      }
+    }
+    expect(readable).toEqual([]);
+  });
+});
+
+describe('a tree of clean shapes', () => {
+  it('reports nothing for the machine-written shapes this repository is itself made of', () => {
+    const result = runScan({ root: CLEAN_ROOT, blockedProviderPath: DIGEST_STORE_PATH });
+    expect(result.findings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+    expect(result.filesScanned).toBe(CLEAN_FILE_CONTENTS.length);
+    expect(renderScanReport(result)).toContain('0 finding(s) across 0 rule(s).');
+  });
+
+  it('reads no history outside a work tree, and says so instead of failing', () => {
+    const result = runScan({ root: CLEAN_ROOT, blockedProviderPath: DIGEST_STORE_PATH });
+    expect(result.historyLinesScanned).toBe(0);
+    expect(result.notes.join(' ')).toMatch(/no git history was read/);
+    expect(result.findings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('reports an address in that same tree once one line carries it, so the silence is not vacuous', () => {
+    const planted = join(CLEAN_ROOT, 'clean-shapes-plus-one-line.txt');
+    writeFileSync(planted, `contact ${PLANTED_ADDRESS} for details\n`, 'utf8');
+    try {
+      const result = runScan({ root: CLEAN_ROOT, blockedProviderPath: DIGEST_STORE_PATH });
+      expect(result.findings.map((finding) => finding.ruleId)).toEqual(['email-address']);
+      expect(result.findings[0]?.file).toBe('clean-shapes-plus-one-line.txt');
+      expect(result.exitCode).toBe(1);
+    } finally {
+      rmSync(planted, { force: true });
+    }
+  });
+});
+
+describe('the counts a run reports', () => {
+  it('counts the binary file as skipped and never reads the ignored directories', () => {
+    const result = runScan({ root: BINARY_ROOT, blockedProviderPath: DIGEST_STORE_PATH });
+    expect(result.findings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+    expect(result.filesScanned).toBe(1);
+    expect(result.filesSkipped).toBe(1);
+    expect(renderScanReport(result)).not.toContain('ignored.txt');
+  });
+});
+
+describe('a dependency the store knows only by its base', () => {
+  it('reports a scoped dependency through the variant walk, not through the whole name', () => {
+    expect(SCOPED_PROVIDER_DIGESTS.has(hashToken(SCOPED_PROVIDER_NAME))).toBe(false);
+    const result = runScan({ root: VARIANT_ROOT, blockedTokenDigests: SCOPED_PROVIDER_DIGESTS });
+    const [finding] = result.findings;
+    expect(finding?.ruleId).toBe('prohibited-dependency');
+    expect(finding?.file).toBe(MANIFEST_FILE);
+    expect(finding?.line).toBe(lineOf(VARIANT_MANIFEST_LINES, JSON.stringify(SCOPED_PROVIDER_NAME)));
+    expect(result.exitCode).toBe(1);
+  });
+});
+
+describe('the commit identity a history read meets', () => {
+  it('reports no finding for an address-shaped identity in a commit header', () => {
+    if (!METADATA_SETUP.ok) {
+      throw new Error(`the metadata-only repository could not be built: ${METADATA_SETUP.reason}`);
+    }
+    expect(METADATA_SETUP.author).toBe(PLANTED_ADDRESS);
+    const result = runScan({ root: METADATA_ROOT, blockedProviderPath: DIGEST_STORE_PATH });
+    expect(result.historyLinesScanned).toBeGreaterThan(0);
+    expect(result.findings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+    expect(renderScanReport(result)).not.toContain(PLANTED_ADDRESS);
+  });
+});
+
+describe('the excerpt a finding carries', () => {
+  it('masks a matched value to a prefix and a length, and masks an empty value to nothing', () => {
+    const masked = maskExcerpt(PLANTED_CREDENTIAL_VALUE);
+    expect(masked.startsWith(PLANTED_CREDENTIAL_VALUE.slice(0, 3))).toBe(true);
+    expect(masked.length).toBeLessThanOrEqual(24);
+    expect(masked).not.toContain(PLANTED_CREDENTIAL_VALUE);
+    expect(maskExcerpt('   ')).toBe('');
   });
 });
