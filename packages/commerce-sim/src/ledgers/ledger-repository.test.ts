@@ -21,7 +21,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { resolveCommerceConfig } from '../config';
 import type { LedgerEntryInput } from './ledger-types';
 import { insertLedgerEntries, insertLedgerEntry, listLedgerEntries } from './ledger-repository';
 
@@ -75,8 +74,21 @@ const ISO_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 /** The shape `crypto.randomUUID()` produces; asserted so two rows cannot share an identifier. */
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-/** The resolved configuration, which is the only source of the two labels an entry carries. */
-const CONFIG = resolveCommerceConfig();
+/**
+ * The two labels every fixture entry carries: the table's own synthetic currency label and the
+ * demonstration disclosure label a simulated amount is written with. Both are written out here
+ * rather than read from the package's configuration, because what this suite asserts is that the
+ * repository stores and returns the two values verbatim — the resolved configuration has its own test
+ * beside it — and because a repository test that reached for the configuration would fail for a
+ * reason that is not its own. The currency label is the one value the table's `CHECK` admits: a
+ * fixture naming any other label is refused at the insert rather than passing here, which is what
+ * keeps a real currency code out of the data at this level too.
+ */
+const CURRENCY_LABEL = 'DEMO' as const;
+
+/** A disclosure label of this fixture's own; the suite asserts it round-trips, not how it reads. */
+const DISCLOSURE_LABEL =
+  'Simulated demonstration: no money moves and no real currency is involved.';
 
 /** One appended entry of the marketplace ledger: a charge, which carries the transaction. */
 const MARKETPLACE_CHARGE: LedgerEntryInput = {
@@ -86,8 +98,8 @@ const MARKETPLACE_CHARGE: LedgerEntryInput = {
   amount_minor_units: 10000,
   transaction_id: TRANSACTION_ID,
   report_id: null,
-  currency_label: CONFIG.currencyLabel,
-  disclosure_label: CONFIG.disclosureLabel,
+  currency_label: CURRENCY_LABEL,
+  disclosure_label: DISCLOSURE_LABEL,
   description: 'Simulated marketplace charge for a completed checkout',
 };
 
@@ -99,8 +111,8 @@ const GATE_FEE_CHARGE: LedgerEntryInput = {
   amount_minor_units: 15000,
   transaction_id: null,
   report_id: REPORT_ID,
-  currency_label: CONFIG.currencyLabel,
-  disclosure_label: CONFIG.disclosureLabel,
+  currency_label: CURRENCY_LABEL,
+  disclosure_label: DISCLOSURE_LABEL,
   description: 'Simulated gate-evaluation fee for a completed evaluation report',
 };
 
@@ -112,8 +124,8 @@ const FOUNDER_ALLOCATION: LedgerEntryInput = {
   amount_minor_units: 25,
   transaction_id: TRANSACTION_ID,
   report_id: null,
-  currency_label: CONFIG.currencyLabel,
-  disclosure_label: CONFIG.disclosureLabel,
+  currency_label: CURRENCY_LABEL,
+  disclosure_label: DISCLOSURE_LABEL,
   description: 'Simulated founder allocation computed at 25 basis points',
 };
 
@@ -125,8 +137,8 @@ const MARKETPLACE_REVERSAL: LedgerEntryInput = {
   amount_minor_units: 4000,
   transaction_id: TRANSACTION_ID,
   report_id: null,
-  currency_label: CONFIG.currencyLabel,
-  disclosure_label: CONFIG.disclosureLabel,
+  currency_label: CURRENCY_LABEL,
+  disclosure_label: DISCLOSURE_LABEL,
   description: 'Simulated refund reversal of the marketplace charge',
 };
 
@@ -138,8 +150,8 @@ const FOUNDER_ALLOCATION_REVERSAL: LedgerEntryInput = {
   amount_minor_units: 10,
   transaction_id: TRANSACTION_ID,
   report_id: null,
-  currency_label: CONFIG.currencyLabel,
-  disclosure_label: CONFIG.disclosureLabel,
+  currency_label: CURRENCY_LABEL,
+  disclosure_label: DISCLOSURE_LABEL,
   description: 'Simulated refund reversal of the founder allocation',
 };
 
