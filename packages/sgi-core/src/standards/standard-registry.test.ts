@@ -346,8 +346,8 @@ describe("the standard registry against the delivered schema", () => {
       PUBLISHER_ACCOUNT_ID,
     );
 
-    // A catalogue row no version names, which the seed can leave behind: it is answered with the
-    // empty version list rather than left out of the catalogue.
+    // A catalogue row no version names, which the schema permits and neither writer commits: it is
+    // answered with the empty version list rather than left out of the catalogue.
     db.prepare<[string, string, string, string]>(
       "INSERT INTO standards (id, code, title, summary) VALUES (?, ?, ?, ?)",
     ).run(
@@ -402,10 +402,10 @@ describe("the standard registry against the delivered schema", () => {
 
     const second = registerStandardVersion(db, SGI_SO_1_0_0, PUBLISHER_ACCOUNT_ID);
 
-    // Idempotence is what lets a repeated seed run against the database file it already wrote,
-    // instead of failing on the unique pair or publishing the criteria a second time — and the
-    // publication is recorded once for the same reason: the append sits on the insert path alone, so
-    // a re-registration that finds the row already there appends no second event.
+    // The second registration finds the row the first call published and returns it instead of failing
+    // on the unique pair or publishing the criteria a second time — and the publication is recorded
+    // once for the same reason: the append sits on the insert path alone, so a re-registration that
+    // finds the row already there appends no second event.
     expect(second).toBe(first);
     expect(versionCount()).toBe(1);
     expect(standardRows()).toHaveLength(1);

@@ -577,9 +577,10 @@ function compareWithStored(
 /**
  * The `standards` row for a definition's code, inserted when the catalogue holds none yet.
  *
- * Reusing the existing row is what makes a second `npm run seed` leave the catalogue untouched,
- * and inserting the row when it is absent is what lets a seed be the first writer of it. An
- * existing row is never updated: the title and summary it was published with stay as published.
+ * Reusing the existing row is what makes a repeated registration leave the catalogue untouched,
+ * and inserting the row when it is absent is what lets the first registration be that catalogue's
+ * writer. An existing row is never updated: the title and summary it was published with stay as
+ * published.
  */
 function standardRowFor(db: SqliteDatabase, definition: StandardVersionDefinition): StandardRow {
   const [existing, ...rest] = findStandardRows(db, definition.code);
@@ -762,11 +763,12 @@ export function getStandardVersion(
  * nothing.
  *
  * Idempotent by design: registering the same definition twice returns the identifier of the row the
- * first call published and writes nothing the second time, which is what makes `npm run seed` safe
- * to run repeatedly against one database file. Refuses with `StandardDriftError` when that label is
- * already published with different criteria, naming the member that differs: a change to a standard
- * is published as a new version, never written into a version that already exists. Refuses with
- * `UnknownStandardError` when the definition's code resolves to more than one catalogue row.
+ * first call published and writes nothing the second time, which makes a repeated registration safe.
+ * `npm run seed` is not a repeatable caller: it seeds a fresh database and refuses one that already
+ * holds rows. Refuses with `StandardDriftError` when that label is already published with different
+ * criteria, naming the member that differs: a change to a standard is published as a new version,
+ * never written into a version that already exists. Refuses with `UnknownStandardError` when the
+ * definition's code resolves to more than one catalogue row.
  *
  * @param db - The caller's database handle.
  * @param definition - The versioned criteria to publish, as `./sgi-so-1.0.0` declares them.
