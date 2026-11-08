@@ -8,8 +8,11 @@
  *
  * Three properties the module's contract turns on are pinned here rather than left to a reader.
  * The derivation is deterministic and independent of the order its arguments arrive in. The ratio
- * rounds down, so the product keeps exactly one half-up rounding point — the commerce simulation's
- * founder allocation — and a second one here would be a second place for a half to be resolved. And
+ * rounds down, because the commerce simulation's founder allocation is the half-up rounding point
+ * this product documents for a monetary amount and a second one over money would be a second place
+ * for a half of a minor unit to be resolved. The Academy's readiness questionnaire at
+ * `../components/self-assessment` resolves a half by its own documented half-up rule too, over a
+ * percentage rather than an amount, which is why this ratio floors and must keep flooring. And
  * an empty supply is the ordinary `[]` the page explains, not an error.
  *
  * This suite writes no snapshot and no golden file: the unit configuration's snapshot update mode is

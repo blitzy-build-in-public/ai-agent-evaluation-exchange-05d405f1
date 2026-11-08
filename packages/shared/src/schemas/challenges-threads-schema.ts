@@ -9,9 +9,13 @@
  * and a single shared `idParamsSchema` would also collide with the other schema
  * modules that `packages/shared/src/index.ts` re-exports wholesale.
  *
- * The two board reads (`GET /challenges`, `GET /threads`) are public and the
- * contract fixes no query parameter for them, so they have no request input to
- * validate and deliberately have no schema here.
+ * The two board reads (`GET /challenges`, `GET /threads`) are public, and the one
+ * request input each takes is the shared `collectionPageQuerySchema` from
+ * `./pagination-schema` — the `?page` parameter, an integer of at least 1,
+ * defaulting to 1 and bounded by `PAGE_NUMBER_MAX` — which the routes attach
+ * themselves. This module still declares no query schema for them, and that is
+ * deliberate: its six exports are the boards' write contracts, so a second
+ * schema for those two reads would be a second statement of one paging contract.
  *
  * Nothing in this module holds a closed vocabulary: a challenge's status, a
  * row's author and every timestamp are server-owned columns, so no enum and no

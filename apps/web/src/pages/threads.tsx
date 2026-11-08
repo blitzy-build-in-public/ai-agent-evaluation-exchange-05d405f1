@@ -5,9 +5,10 @@
  * fixture set or a piece of evidence is discussed — so it is open to any demo account. Starting a
  * thread and posting a reply both accept whichever synthetic account the header's switcher has
  * selected, which is why this page renders no role gate: a `403` cannot occur on either write, and
- * a sentence explaining one would describe a refusal the contract does not have. The only write
- * failure a reader of this page can meet is a `401`, and that belongs to the form components, which
- * own their own field, their own explanation and their own polite announcement.
+ * a sentence explaining one would describe a refusal the contract does not have. The service's
+ * refusals are the `401` of a missing or unresolvable account, a `400` on the field, the reply's
+ * `404` for a thread that is gone and the `429` write rate limit — each explained by the form
+ * components, which own their own field, their own explanation and their own polite announcement.
  *
  * Four decisions shape this file.
  *

@@ -179,9 +179,12 @@ function compareOpportunityRows(left: OpportunityRow, right: OpportunityRow): nu
  * - **The ratio rounds down.** `ratio_basis_points` is `floor(demand * RATIO_BASIS_POINT_SCALE /
  *   supply)`, computed as exact integer division `(numerator - (numerator % supply)) / supply` over
  *   non-negative integers so the result can never be a fraction, `Infinity` or `NaN`. It rounds
- *   down rather than to nearest half because the product has exactly one documented half-up
- *   rounding point — the commerce simulation's founder allocation — and a second one here would be
- *   a second place for a half to be resolved.
+ *   down rather than to nearest half because the commerce simulation's founder allocation is the
+ *   half-up rounding point this product documents for a monetary amount, and a second one over money
+ *   would be a second place for a half of a minor unit to be resolved. The Academy's readiness
+ *   questionnaire at `../components/self-assessment` resolves a half by its own documented half-up
+ *   rule too, and a percentage of a questionnaire is a share rather than an amount — which is why
+ *   this ratio floors here and must keep flooring.
  * - **A listing whose category key is absent or empty is skipped.** It cannot be grouped, and it is
  *   neither a throw nor a row of its own.
  *
