@@ -173,17 +173,24 @@ export interface LedgerReadResult {
 }
 
 /**
- * The response of `GET /ledger/founder-allocation`, which additionally exposes the configured rate
- * its entries were computed from.
+ * The response of `GET /ledger/founder-allocation`, which additionally exposes the rate the entries
+ * of the page it carries state about themselves.
  *
  * The rate is an integer number of basis points — the default is 25, meaning 0.25 per cent — and
  * never a percentage expressed as a fraction of a whole, so the value read back is exactly the value
- * the allocation used, with no rounding and no precision lost on the way out. It is read from the commerce simulation's
- * configuration (`packages/commerce-sim/src/config.ts`), and it is exposed because an amount is only
- * interpretable beside the rate that produced it; the rows themselves stay the record of what was
- * actually computed.
+ * the allocation used, with no rounding and no precision lost on the way out. It is the rate the
+ * most recent entry of this page that states one carries in its own `description`, and
+ * `DEFAULT_FOUNDER_ALLOCATION_RATE_BASIS_POINTS` — the default the configuration resolves to,
+ * defined once in `packages/commerce-sim/src/config.ts` — answers only for a page holding no such
+ * entry, an empty ledger or a page past the last: today's configuration is never read as the rate a
+ * written row used. It is exposed because an amount is only interpretable beside the rate that
+ * produced it; the rows themselves stay the record of what was actually computed.
  */
 export interface FounderAllocationLedgerReadResult extends LedgerReadResult {
-  /** The configured allocation rate, in whole basis points. */
+  /**
+   * The rate the entries of the page this response carries state they were computed from, in whole
+   * basis points: the rate the most recent of them that states one carries in its own `description`,
+   * or `DEFAULT_FOUNDER_ALLOCATION_RATE_BASIS_POINTS` when the page holds no entry that states one.
+   */
   rate_basis_points: number;
 }

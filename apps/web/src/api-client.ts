@@ -98,6 +98,7 @@ import type {
   ModerationAction,
   OfferModel,
   PricingModel,
+  Refund,
   RefundCreateBody,
   ReportCaseResult,
   ReportLabel,
@@ -1580,28 +1581,53 @@ export async function createCheckoutSimulation(body: CheckoutSimulationBody): Pr
 }
 
 /**
+ * What a refund answers with: the reversal entries the refund appended, and the appended row
+ * of the `refunds` table itself.
+ *
+ * The entries are the ledger's record of the reversal. The row is the durable reference of the
+ * act: a refund is append-only, so its identifier is what an operator cites afterwards, which
+ * is why this call returns it rather than leaving the response's `refund` member unread.
+ * `refund` is `null` only when the response carried none.
+ */
+export interface RefundReversalResult {
+  /** The reversal entries the refund appended, in the order they were written. */
+  readonly entries: LedgerEntry[];
+  /** The `refunds` row the route appended, or `null` when the response carried none. */
+  readonly refund: Refund | null;
+}
+
+/**
  * `POST /transactions/{id}/refunds` (operator): refunds a simulated transaction, in whole or
  * in part.
  *
- * The answer is the reversal entries the refund appended, in the order they were written: a
- * refund appends to the ledger and edits nothing, so the transaction, its allocation and
- * every earlier entry stay exactly as they were and the net position is read from the
- * entries rather than stored.
+ * The answer is the reversal entries the refund appended, in the order they were written,
+ * beside the appended `refunds` row, which is the durable record of the act rather than a
+ * figure derived from it: a refund appends to the ledger and edits nothing, so the transaction,
+ * its allocation and every earlier entry stay exactly as they were and the net position is read
+ * from the entries rather than stored.
  *
- * Raises {@link ApiClientError} for `400` (`invalid_amount`, a negative or non-integer
- * amount), `404` (`transaction_not_found`), `409` (`already_fully_refunded`), `422`
- * (`exceeds_net_remaining`, an amount larger than the transaction's net remaining) and `403`
- * when the resolved account is not an operator.
+ * Raises {@link ApiClientError} for `400 validation_error` when the amount is missing, negative
+ * or fractional, which the shared refund body schema refuses at the edge before the route runs,
+ * and for `400 invalid_amount` when the amount is the `0` that schema deliberately admits and the
+ * domain refuses; `404` (`transaction_not_found`), `409` (`already_fully_refunded`), `422`
+ * (`exceeds_net_remaining`, an amount larger than the transaction's net remaining), `401`
+ * (`unauthorized`) when no demo account is selected — which this module raises before it sends
+ * anything — and `403` when the resolved account is not an operator.
  */
 export async function refundTransaction(
   transactionId: string,
   body: RefundCreateBody,
-): Promise<LedgerEntry[]> {
+): Promise<RefundReversalResult> {
   const response = await send("POST", `/transactions/${encodeURIComponent(transactionId)}/refunds`, {
     body,
     demoAccount: true,
   });
-  return requireArray(response, ["entries", "items"]) as LedgerEntry[];
+  const record = recordOrNull(response.payload);
+  const refund = record === null ? null : record["refund"];
+  return {
+    entries: requireArray(response, ["entries", "items"]) as LedgerEntry[],
+    refund: isRecord(refund) ? (refund as unknown as Refund) : null,
+  };
 }
 
 /**

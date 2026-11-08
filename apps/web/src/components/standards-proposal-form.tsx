@@ -21,6 +21,14 @@
  * the field it concerns; `429` the write limit with the whole seconds to wait. The typed text
  * survives every failure, and no failure renders a stack trace, a raw body or a bare status code.
  *
+ * **A refusal that concerns a field is retired when that field is corrected.** A sentence rendered
+ * beside a field describes the value that was submitted, so editing that field retires its own
+ * sentence and leaves the other field's, and the failure ends when no field sentence remains — a
+ * control holding text the reader has already corrected is never left announced as invalid. Only a
+ * refusal that concerns a field is retired this way: a form-level refusal, such as a standard the
+ * catalogue does not hold or a spent write limit, is kept, because typing in a field cannot resolve
+ * one.
+ *
  * **The copy claims no more than the product does.** The help line states that a maintainer reviews
  * the proposal and that a standard's thresholds change only by publishing a new version through that
  * review. Nothing here promises automatic acceptance, and nothing describes a standard, a report or
@@ -35,7 +43,7 @@ import type { ChangeEvent, FormEvent } from "react";
 import { DEMO_AUTHENTICATION_LABEL } from "@adem/shared";
 import type { StandardProposal } from "@adem/shared";
 import { submitProposal } from "../api-client";
-import { isRecord, readNumber, readText } from "../payload-reading";
+import { describeRetryWait, isRecord, readNumber, readText } from "../payload-reading";
 
 /** Props for {@link StandardsProposalForm}. */
 export interface StandardsProposalFormProps {
@@ -87,7 +95,9 @@ const NOT_A_CONTRIBUTOR_EXPLANATION =
 const UNKNOWN_STANDARD_EXPLANATION =
   "That standard is not in the catalogue, so nothing was created. Reload the standards page, choose a standard it lists, and propose again.";
 
-/** The opening sentence of a throttled write's explanation; the wait is appended from `Retry-After`. */
+/**
+ * This form's own refusal for a throttled write; the wait that follows is `../payload-reading`'s.
+ */
 const RATE_LIMIT_EXPLANATION =
   "This client has sent the maximum number of writes allowed in a minute, so the proposal was not sent.";
 
@@ -168,6 +178,27 @@ function explanationForFields(
 }
 
 /**
+ * The failure that remains once a field stops being refused: the other field's own sentence, or
+ * `null` when no field sentence is left and the failure is over.
+ *
+ * A sentence belongs to the field it concerns, so correcting one field retires that field's own
+ * sentence and keeps the other's until it is corrected in turn. Only a refusal that concerns a
+ * field reaches this function: a form-level refusal is never passed in, because no edit in either
+ * field can resolve one.
+ */
+function withoutFieldMessage(
+  corrected: ProposalField,
+  otherMessage: string | null,
+): FieldRefusal | null {
+  if (otherMessage === null) {
+    return null;
+  }
+  return corrected === "title"
+    ? { titleMessage: null, rationaleMessage: otherMessage }
+    : { titleMessage: otherMessage, rationaleMessage: null };
+}
+
+/**
  * A form-level explanation: the one sentence is both shown and announced. Every refusal except the
  * write rate limit renders in the error triple, which is why that is the variant a caller gets
  * unless it says otherwise.
@@ -185,17 +216,17 @@ function formExplanation(
   };
 }
 
-/** A throttled write's explanation, carrying the whole seconds the response asked the client to wait. */
+/**
+ * A throttled write's explanation: this form's own refusal, plus the wait the response stated.
+ *
+ * The wait has no branch here at all: `../payload-reading` states it once for the write forms of
+ * this share, and the seconds belong to the service, which sends them in a `Retry-After`. No delay
+ * is invented here — not even a floor of a second — so the wait a reader is told is the one the
+ * response asked for, and never longer than that.
+ */
 function throttledExplanation(retryAfterSeconds: number | null): FailureExplanation {
-  if (retryAfterSeconds === null) {
-    return formExplanation(`${RATE_LIMIT_EXPLANATION} Wait a moment, then try again.`, "notice--warning");
-  }
-  // The header holds whole seconds; a fraction is rounded up so the reader never retries too early.
-  const seconds = Math.max(1, Math.ceil(retryAfterSeconds));
-  return formExplanation(
-    `${RATE_LIMIT_EXPLANATION} Wait ${seconds} second${seconds === 1 ? "" : "s"}, then try again.`,
-    "notice--warning",
-  );
+  const wait = describeRetryWait(retryAfterSeconds, "then submit the proposal again.");
+  return formExplanation(`${RATE_LIMIT_EXPLANATION} ${wait}`, "notice--warning");
 }
 
 /**
@@ -305,12 +336,24 @@ export function StandardsProposalForm(props: StandardsProposalFormProps): JSX.El
       ? SUBMIT_HINT
       : null;
 
+  // A sentence beside a field describes the value that was submitted, so once that value changes
+  // the sentence describes text the field no longer holds and is retired here. Only that field's
+  // own sentence goes: the other field's stands until it is corrected in turn, and a form-level
+  // refusal — a standard the catalogue does not hold, a spent write limit, an unreadable failure
+  // — is kept, because no edit in either field can resolve one.
   const handleTitleChange = (event: ChangeEvent<HTMLInputElement>): void => {
     setTitle(event.target.value);
+    if (titleMessage !== null) {
+      setFailure(withoutFieldMessage("title", rationaleMessage));
+    }
   };
 
   const handleRationaleChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     setRationale(event.target.value);
+    // The rationale's own sentence is retired the same way, and the title's is left as it stands.
+    if (rationaleMessage !== null) {
+      setFailure(withoutFieldMessage("rationale", titleMessage));
+    }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {

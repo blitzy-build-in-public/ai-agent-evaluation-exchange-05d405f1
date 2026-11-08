@@ -107,7 +107,8 @@ that wants a limit names it and no read carries one.
 Every non-public row follows the same ordered sequence, and the order is what decides which status a
 caller is answered with when a request has more than one defect.
 
-1. **Write rate limit.** At most 60 write requests per minute per client. Beyond that the plugin answers
+1. **Write rate limit.** At most 60 write requests per minute per client, with one counter shared by
+   every write route, so that sixty is the client's total across all of them. Beyond it the plugin answers
    `429 rate_limited` with a `Retry-After` header, and the UI renders a visible retry message rather than
    an error trace.
 2. **JSON-schema validation.** The route's body, query and path schemas validate the request; a failure is

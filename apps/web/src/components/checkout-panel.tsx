@@ -25,12 +25,15 @@
  * confirmation after it, that the transaction is simulated and nonfunctional and that no money
  * moves.
  *
- * **Only the models the listing makes are offered.** The radios are built by taking the offer
- * vocabulary's own order and keeping the models the listing makes, so an offer model the listing
- * does not make cannot be selected through the interface at all and the contract's `422` stays
- * what it is meant to be — the guard for a page held open while a listing changed underneath it.
- * A listing that makes no offer renders an explanation in place of the radio group, never an
- * empty control.
+ * **Exactly the models the version being bought is priced at are offered.** The radios are built
+ * from that version's own claims, in the offer vocabulary's order, by the rule stated in
+ * `../listing-offers` — the set the checkout route prices that version at, so the set a buyer may
+ * select and the set `POST /checkout-simulations` accepts are one set: a radio the service would
+ * refuse with `422 not_offered` is not rendered at all, and the contract's `422` stays what it is
+ * meant to be — the guard for a page held open while a listing changed underneath it. A version
+ * that claims nothing is priced at the model its listing row declares, and a version whose offers
+ * the vocabulary does not know renders an explanation in place of the radio group, never an empty
+ * control.
  *
  * The panel is presentation and one request. It calls `createCheckoutSimulation` and nothing
  * else, writes nothing to storage, holds no state beyond the four it declares, and renders no
@@ -42,21 +45,31 @@ import type { FormEvent } from "react";
 import { createCheckoutSimulation } from "../api-client";
 import { readWriteFailure } from "../payload-reading";
 import type { WriteFailureFacts } from "../payload-reading";
-import { OFFER_MODELS, SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
-import type { OfferModel, Transaction } from "@adem/shared";
+import { offerModelsForVersion } from "../listing-offers";
+import { SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
+import type { ListingClaim, OfferModel, PricingModel, Transaction } from "@adem/shared";
 
 /**
- * Props for {@link CheckoutPanel}. The panel takes the identity it is buying against and the
- * offers the listing makes, and nothing else: it reads no price, because no price reaches the
- * client, and it owns no part of the page's state.
+ * Props for {@link CheckoutPanel}. The panel takes the identity it is buying against, the claims
+ * the version being bought makes and the pricing model the listing row itself declares, and nothing
+ * else: it reads no price, because no price reaches the client, and it owns no part of the page's
+ * state.
  */
 export interface CheckoutPanelProps {
   /** The listing being bought from. */
   readonly listingId: string;
   /** The listing version the simulated transaction is against. */
   readonly listingVersionId: string;
-  /** Exactly the offer models this listing makes — from ListingDetail.offer_models. */
-  readonly offerModels: readonly OfferModel[];
+  /**
+   * The claims the version being bought makes — `ListingDetail.claims` narrowed to that version —
+   * which are the offers the service prices that version at.
+   */
+  readonly versionClaims: readonly ListingClaim[];
+  /**
+   * The pricing model the listing row declares, which prices a version that states no claim of the
+   * offer vocabulary's own.
+   */
+  readonly listingModel: PricingModel;
 }
 
 /** The prefix of the radio group's `name`, which each panel instance completes for itself. */
@@ -157,11 +170,12 @@ function describeRefusalVariant(error: unknown): "notice--error" | "notice--warn
  * deciding which of the two describes the attempt they just made.
  */
 export function CheckoutPanel(props: CheckoutPanelProps): JSX.Element {
-  // The vocabulary's own order, filtered to the models this listing makes, so the same offers
-  // always read in the same order, a repeated model renders one radio rather than two controls
-  // sharing a name, and a value outside the vocabulary is dropped rather than rendered.
-  const offeredModels: readonly OfferModel[] = OFFER_MODELS.filter((model: OfferModel): boolean =>
-    props.offerModels.includes(model),
+  // The version's own offers, in the vocabulary's order: the same offers always read in the same
+  // order, a repeated model renders one radio rather than two controls sharing a name, and the set
+  // is exactly the one the service prices this version at, so a radio it would refuse is absent.
+  const offeredModels: readonly OfferModel[] = offerModelsForVersion(
+    props.versionClaims.map((claim: ListingClaim): PricingModel => claim.pricing_model),
+    props.listingModel,
   );
 
   const [selectedModel, setSelectedModel] = useState<OfferModel | "">(offeredModels[0] ?? "");
@@ -169,10 +183,11 @@ export function CheckoutPanel(props: CheckoutPanelProps): JSX.Element {
   const [error, setError] = useState<unknown | null>(null);
   const [transaction, setTransaction] = useState<Transaction | null>(null);
 
-  // A panel can outlive the listing it was mounted for when the router swaps one listing for
-  // another, so a selection is honoured only while the listing on screen still makes it. Falling
-  // back to the first offer the listing makes keeps the control and the submitted model in step
-  // without an effect and without a selection the service would refuse.
+  // A panel can outlive the set it was mounted for — the router swaps one listing for another, and
+  // the reader can choose another version of the same listing — so a selection is honoured only
+  // while the version on screen is priced at it. Falling back to the first offer that version is
+  // priced at keeps the control and the submitted model in step without an effect and without a
+  // selection the service would refuse.
   const effectiveModel: OfferModel | "" =
     selectedModel !== "" && offeredModels.includes(selectedModel)
       ? selectedModel
@@ -230,7 +245,7 @@ export function CheckoutPanel(props: CheckoutPanelProps): JSX.Element {
 
       {offeredModels.length === 0 ? (
         <p className="field__hint">
-          This listing makes no offer, so there is nothing to check out. The offer models a
+          This version makes no offer, so there is nothing to check out. The offer models a
           developer makes are listed on the listing page.
         </p>
       ) : (
@@ -238,7 +253,7 @@ export function CheckoutPanel(props: CheckoutPanelProps): JSX.Element {
           <fieldset className="field" aria-describedby={offerHintId}>
             <legend className="field__label">Select an offer</legend>
             <p className="field__hint" id={offerHintId}>
-              {`Only the offer models this listing makes are listed. Amounts are whole minor units of the synthetic currency ${SYNTHETIC_CURRENCY_LABEL}, and the amount of a transaction is set by the simulation rather than entered here.`}
+              {`Only the offer models this version is priced at are listed. Amounts are whole minor units of the synthetic currency ${SYNTHETIC_CURRENCY_LABEL}, and the amount of a transaction is set by the simulation rather than entered here.`}
             </p>
             <div className="field__group">
               {offeredModels.map((model: OfferModel) => (

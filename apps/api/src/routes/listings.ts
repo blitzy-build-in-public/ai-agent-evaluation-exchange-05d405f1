@@ -853,7 +853,7 @@ function toListingClaim(row: ListingClaimRow): ListingClaim {
 }
 
 /**
- * The offer models one listing makes, as the checkout panel reads them.
+ * The offer models one listing makes, which the listing page renders as the listing's offering.
  *
  * This is a read rather than a computation: the four-model vocabulary is `OFFER_MODELS`'s, the order
  * is that vocabulary's order, and membership is decided by what the listing and its claims state

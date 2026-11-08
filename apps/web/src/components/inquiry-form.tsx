@@ -48,7 +48,7 @@ import type { ChangeEvent, FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type { Inquiry } from "@adem/shared";
 import { createInquiry } from "../api-client";
-import { readWriteFailure } from "../payload-reading";
+import { describeRetryWait, readWriteFailure } from "../payload-reading";
 
 /**
  * Props for {@link InquiryForm}: the one listing the inquiry is about.
@@ -147,28 +147,19 @@ interface FailureExplanation {
 }
 
 /**
- * The wait a throttled write is advised to take, using the seconds the response stated.
+ * The sentence a throttled write is refused with: this form's own refusal, the wait the response
+ * itself stated, and what the refusal cost the reader.
  *
- * The limit belongs to the service and only the response knows when the window resets, so no wait
- * is invented: a response that stated none says the inquiry never went out and can be sent shortly,
- * and one whose wait has already passed says to send it now.
+ * The wait has no branch here at all: `../payload-reading` states it once for the write forms of
+ * this share, and the seconds belong to the service, which sends them in a `Retry-After`. No delay
+ * is invented here — not even a floor of a second — so the wait a reader is told is the one the
+ * response asked for.
  */
 function describeRetry(retryAfterSeconds: number | null): string {
   const refusal =
     "Too many requests: this client has sent the maximum number of writes allowed in a minute";
-  if (retryAfterSeconds === null) {
-    return `${refusal}, so this inquiry was not sent. It can be retried shortly.`;
-  }
-  if (retryAfterSeconds < 1) {
-    return `${refusal}, and the wait has passed, so send it again now.`;
-  }
-  return `${refusal}. Try again in ${describeSeconds(retryAfterSeconds)}. Nothing was recorded, so sending it again is safe.`;
-}
-
-/** Whole seconds as a reader says them, so a retry sentence never reads "1 seconds". */
-function describeSeconds(seconds: number): string {
-  const whole = Math.ceil(seconds);
-  return whole === 1 ? "1 second" : `${whole} seconds`;
+  const wait = describeRetryWait(retryAfterSeconds, "then send the inquiry again.");
+  return `${refusal}. ${wait} Nothing was recorded, so sending it again is safe.`;
 }
 
 /**

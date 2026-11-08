@@ -53,8 +53,10 @@
  * `PUT`, `PATCH` or `DELETE` handler is registered: `transactions` and `ledger_entries` are both among
  * the nine append-only tables of `packages/shared/migrations/0010_append_only_triggers.sql`, the only
  * write either accepts is the inserted row the domain package performs, and a `404` or a `422` leaves
- * both tables untouched — which `apps/api/test/integration/immutability.test.ts` and the route walk
- * assert by counting rows across a refused checkout.
+ * both tables untouched — `apps/api/test/integration/immutability.test.ts` compares every row of
+ * both with the snapshot it took before the refused mutations it attempts on every route exposing
+ * them, this one included, and `apps/api/test/integration/ledger-routes.test.ts` counts the ledger's
+ * rows across the refund it refuses.
  *
  * **Nothing here measures anything and nothing here names anyone.** The row records a simulated
  * checkout by a synthetic demo account, and no amount written on this path is read by an evaluation:

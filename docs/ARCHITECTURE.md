@@ -273,7 +273,9 @@ and nothing else in the workspace registers a plugin, a handler or a hook.
     domain refusal and a server fault leave by one route, and no handler formats its own error.
   - `@fastify/rate-limit` is registered with `global: false`: reads are unlimited, and each write route
     opts in to 60 requests per minute per client, answering `429` with a `Retry-After` header beyond that.
-    Both numbers are `packages/shared/src/constants.ts`'s.
+    One counter is shared by every write route (`apps/api/src/write-rate-limit-store.ts`), so the minute's
+    sixty is the client's total rather than a bucket per route. Both numbers are
+    `packages/shared/src/constants.ts`'s.
   - The versioned prefix is `API_PREFIX` in `apps/api/src/routes/register-routes.ts`, applied once inside
     one encapsulated scope, so no group file contains the literal and no group's path can be reached
     without it.

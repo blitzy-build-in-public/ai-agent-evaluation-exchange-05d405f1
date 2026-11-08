@@ -440,6 +440,13 @@ function ResponseForm(props: ResponseFormProps): JSX.Element {
 
   const handleResponseChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     setResponse(event.target.value);
+    // The sentence beside the field describes the value that was submitted, so once that value
+    // changes it describes text the field no longer holds and is retired here. A refusal about the
+    // selected account, the challenge or the rate limit is not the response's own and stays in the
+    // status region, because only a submit can resolve one.
+    if (fieldMessage !== null) {
+      setFailure(null);
+    }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {

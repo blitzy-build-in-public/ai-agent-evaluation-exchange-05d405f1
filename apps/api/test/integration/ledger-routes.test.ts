@@ -396,8 +396,9 @@ async function resolvePurchaseFixture(server: TestServer): Promise<PurchaseFixtu
     );
   }
 
-  // The detail payload's own offer set is what the checkout panel would validate a selection against,
-  // so it is asserted here as the second, independent statement that this version carries the offer.
+  // The payload's `offer_models` is the listing-level statement that this listing makes the offer this
+  // suite checks out — the second, independent statement beside the version's own claim found above,
+  // which is what the checkout route prices.
   expect(detail.offer_models).toContain("purchase");
 
   return { listingId: detail.id, listingVersionId: purchaseClaim.listing_version_id };

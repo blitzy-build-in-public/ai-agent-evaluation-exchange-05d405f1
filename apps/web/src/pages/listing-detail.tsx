@@ -41,8 +41,8 @@
  * **The buyer surfaces are components inside this page, not routes of their own.** The inquiry
  * form, the simulated checkout and the challenge form are rendered here below the evidence, which
  * keeps the thirteen route files the complete route set. The checkout panel receives the listing,
- * the version being bought and exactly the offer models the listing makes, and nothing else: it
- * names no price, computes no amount and reads no currency from this page.
+ * the version being bought, that version's claims and the pricing model the listing row declares —
+ * and nothing else: it names no price, computes no amount and reads no currency from this page.
  *
  * **The version being bought is derived, never stored as a second truth.** The version selector's
  * value is resolved on every render from the version the reader chose and the listing's own version
@@ -873,8 +873,9 @@ function OfferingSection(props: { readonly listing: ListingDetail }): JSX.Elemen
  *
  * The selector is rendered only when the listing has published more than one version, because a
  * control with a single option asks a reader to choose what there is no choice about. The panel
- * receives the listing, that version and exactly the offer models the listing makes, and nothing
- * else: it names no price, computes no amount and reads no currency from here.
+ * receives the listing, that version, the claims that version makes and the pricing model the
+ * listing row declares — the version's own offers, which are the ones the service prices it at — and
+ * nothing else: it names no price, computes no amount and reads no currency from here.
  */
 function CheckoutSection(props: {
   readonly listing: ListingDetail;
@@ -951,7 +952,8 @@ function CheckoutSection(props: {
           <CheckoutPanel
             listingId={props.listing.id}
             listingVersionId={chosenVersion.id}
-            offerModels={props.listing.offer_models}
+            versionClaims={claimsForVersion(props.listing.claims, chosenVersion.id)}
+            listingModel={props.listing.pricing_model}
           />
         </>
       )}

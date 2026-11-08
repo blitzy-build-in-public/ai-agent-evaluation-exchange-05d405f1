@@ -105,11 +105,13 @@ function regionFailure(
  * The throttled-write explanation: this form's own "the allowance is spent" sentence, and the
  * wait the response itself stated.
  *
- * The count of writes comes from the one definition the API contract uses. The wait no longer
- * has a branch here at all: `../payload-reading` states it once for every form, and this file's
- * own rule — a moment for an absent or spent count, one second in the singular, the seconds as
- * given otherwise — is that module's rule. No delay is invented here, because the wait belongs to
- * the service and arrives in a `Retry-After`.
+ * The count of writes comes from the one definition the API contract uses. The wait has no branch
+ * here at all: `../payload-reading` states it once for the write forms of this share — the
+ * challenge form, both thread forms, the inquiry form, the proposal form and the challenges page's
+ * response form all call `describeRetryWait` — and this file's own rule, a moment for an absent
+ * or spent count, one second in the singular and the seconds as given otherwise, is that module's
+ * rule. No delay is invented here, because the wait belongs to the service and arrives in a
+ * `Retry-After`.
  *
  * The module rounds a fractional wait up to the whole second a reader would count; a `Retry-After`
  * carries whole seconds, so no sentence a service can reach is changed by that — every whole wait

@@ -50,7 +50,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Database } from "better-sqlite3";
 
-import { DEMO_ACCOUNT_HEADER } from "@adem/shared";
+import { DEMO_ACCOUNT_HEADER, WRITE_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_WINDOW } from "@adem/shared";
 import type { AccountRole } from "@adem/shared";
 
 import { resolveConfig } from "../../src/config";
@@ -225,14 +225,20 @@ export interface RequestOptions {
 /**
  * What {@link startTestServer} may be configured with.
  *
- * Both configuration sections exist for one reason: a suite exercising all twenty contract rows, and
- * the immutability and trust-separation suites, writes far more than the sixty requests a minute the
- * product allows one client, and would observe `429` where the contract documents a status. A suite
- * that means to assert the limit starts its own server with a low one; no other suite should meet it
- * by accident.
+ * The write bound exists for one reason: a suite exercising all twenty contract rows, and the
+ * immutability and trust-separation suites, writes far more than the sixty requests a minute the
+ * product allows **one client** — and since the product counts every write route of a client in one
+ * window, a suite's own writes are all one client's writes. The harness therefore resolves a raised
+ * bound of its own unless the caller names one, so no suite meets the limit by accident and every
+ * documented status stays observable in it. A suite that means to assert the limit starts its own
+ * server with a low bound, which wins over this one.
  */
 export interface TestServerOptions {
-  /** The write rate-limit section to resolve a different value for. */
+  /**
+   * The write rate-limit section to resolve a different value for. Absent, the harness's own raised
+   * bound with the product's window is used, which is what keeps the throttle out of every suite that
+   * is not asserting it.
+   */
   readonly writeRateLimit?: WriteRateLimitOverrides;
 
   /** The commerce section to resolve a different value for — the gate fee and the allocation rate. */
@@ -726,8 +732,14 @@ interface ReportIdRow {
 }
 
 /**
- * The configuration {@link startTestServer} resolves, with each section added only when the caller
- * supplied one.
+ * The configuration {@link startTestServer} resolves, with the write bound raised and each further
+ * section added only when the caller supplied one.
+ *
+ * The raised bound is a hundred times the product's own — read from the module that declares it, not
+ * written as a literal — and it is the default because the product's bound is now the client's across
+ * every write route: a suite that exercises several suites' worth of writes as one client would
+ * otherwise meet `429` where the contract documents a status. A caller that passes a section of its own
+ * decides it — the bound the throttling case asserts with.
  *
  * `exactOptionalPropertyTypes` makes a member written as `undefined` a different thing from an absent
  * member, so the sections are spread conditionally rather than passed through: an explicitly
@@ -742,7 +754,10 @@ function configOverridesFor(options: TestServerOptions): ConfigOverrides {
   return {
     port: CONFIGURED_PORT,
     databasePath: IN_MEMORY_DATABASE,
-    ...(options.writeRateLimit === undefined ? {} : { writeRateLimit: options.writeRateLimit }),
+    writeRateLimit: options.writeRateLimit ?? {
+      max: WRITE_RATE_LIMIT_MAX * 100,
+      timeWindow: WRITE_RATE_LIMIT_WINDOW,
+    },
     ...(options.commerce === undefined ? {} : { commerce: options.commerce }),
   };
 }

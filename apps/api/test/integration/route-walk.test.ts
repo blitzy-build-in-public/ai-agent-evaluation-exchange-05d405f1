@@ -65,8 +65,9 @@
  * **This file owns the repository's only `429` assertion.** Every other suite starts a server whose
  * write bound is raised so that no documented status is displaced by the throttle — the harness
  * exists for that reason — and this file's shared server is one of those. The end of the file starts
- * a second server on the same in-memory, seeded basis with the smallest bound the configuration
- * accepts, and asserts the contract's `429` with its `Retry-After` header there and nowhere else.
+ * two further servers on the same in-memory, seeded basis — one with the smallest bound the
+ * configuration accepts, and one at the contract's own sixty writes a minute — and asserts the
+ * contract's `429` with its `Retry-After` header on those two and nowhere else.
  *
  * **Nothing is written to disk, no port is fixed and no environment variable is read.**
  * `startTestServer` opens one in-memory connection, applies the migrations, loads the seed and
@@ -161,11 +162,12 @@ const UNOFFERED_OFFER_MODEL: OfferModel = "rent";
 /**
  * The write bound the walk's shared server runs with: a hundred times the contract's own maximum.
  *
- * The walk exercises every write row of the table several times inside one window, and a bound of
- * the contract's sixty is measured per route per client — a margin this file does not want to depend
- * on. Raising it is what lets every documented status below be observed as documented, and the one
- * server that asserts the limit does so with a bound of its own. The product's own number is read
- * from the module that declares it rather than written here.
+ * The walk exercises every write row of the table several times inside one window, and the bound is
+ * measured per client across **every** write route — one counter covers them all — so a bound of the
+ * contract's sixty would throttle this walk's own writes as though one client had spent them, where the
+ * contract documents no such case on those rows. Raising it is what lets every documented status below
+ * be observed as documented, and the servers that assert the limit do so with bounds of their own.
+ * The product's own numbers are read from the module that declares them rather than written here.
  */
 const WALK_WRITE_LIMIT_MAX = WRITE_RATE_LIMIT_MAX * 100;
 
@@ -2393,9 +2395,11 @@ describe("route walk: every row of the API contract table", () => {
   describe("write throttling", () => {
     /**
      * The one server of this repository started with the contract's own write bound driven to its
-     * smallest value: the write bound is measured per route per client, and the walk's shared server
-     * runs it raised so that no documented status is displaced by a throttle. This server is the
-     * counter-example that proves the bound is real.
+     * smallest value: the bound is measured per client across every write route — one counter covers
+     * them all — and the walk's shared server runs it raised so that no documented status is displaced
+     * by a throttle. This server is the counter-example that proves the bound is real, and the two
+     * cases below that use it are the pair that proves it is the client's: a write on another route,
+     * and a write by another account from the same client, both meet the counter the first write spent.
      */
     let throttled: TestServer;
 
@@ -2407,6 +2411,31 @@ describe("route walk: every row of the API contract table", () => {
 
     afterAll(async () => {
       await throttled.close();
+    });
+
+    /**
+     * The block's second server: the same in-memory, migrated and seeded basis as every other harness
+     * here, started at the bound the product itself ships — `WRITE_RATE_LIMIT_MAX` over
+     * `WRITE_RATE_LIMIT_WINDOW`, both read from the module that declares them — rather than at a value
+     * this file lowered or raised.
+     *
+     * It exists because the other two servers of this file both run a bound of their own: the walk's
+     * shared server runs it raised, so no documented status is displaced, and the server above runs it
+     * at one write, so the counter is observable in two requests. Neither ever runs the contract's own
+     * numbers, and the last case of this block closes that gap with a server of its own: the bound is
+     * spent here, one write at a time and in one window, and the write after it is asked for on a
+     * route this client has not used.
+     */
+    let contractBound: TestServer;
+
+    beforeAll(async () => {
+      contractBound = await startTestServer({
+        writeRateLimit: { max: WRITE_RATE_LIMIT_MAX, timeWindow: WRITE_RATE_LIMIT_WINDOW },
+      });
+    });
+
+    afterAll(async () => {
+      await contractBound.close();
     });
 
     it("answers the second write inside the window with 429, a Retry-After header and the one envelope", async () => {
@@ -2435,6 +2464,66 @@ describe("route walk: every row of the API contract table", () => {
       expect(Number(retryAfter)).toBeGreaterThanOrEqual(1);
     });
 
+    it("counts one client's writes on every route, whichever account that client uses", async () => {
+      const asBuyer: RequestOptions = { account: throttled.accountForRole("buyer") };
+      const asContributor: RequestOptions = { account: throttled.accountForRole("contributor") };
+
+      // The seeded listing the inquiry row is posted against. The accessor resolves it, so the body is
+      // a valid one and no seeded identifier is written down here.
+      const listingId = throttled.candidateVersion("seed-alpha").listingId;
+
+      // Each property below is asserted on the **second** write of a pair rather than on the first. The
+      // bound is one write per minute, the case above has already spent this client's window, and a
+      // window that elapsed between the two cases must not turn a legitimately refused write into an
+      // expected `201` — so the first write of a pair opens or continues the window and is never
+      // asserted.
+      await throttled.post(
+        "/threads",
+        { title: "A write that opens or continues this client's window." },
+        asBuyer,
+      );
+
+      // The same client on a route it has not used in this window: the inquiry is refused on the
+      // counter the write above spent. That is the property the bound being measured per route lost —
+      // a fresh bucket here would answer `201`.
+      const onAnotherRoute = await throttled.post(
+        "/inquiries",
+        { listing_id: listingId, message: "A message sent on a route of its own." },
+        asBuyer,
+      );
+
+      expectRefusal(onAnotherRoute, 429, "rate_limited");
+
+      // The header the contract states, in whole seconds, on a refusal raised by another route's write.
+      const retryAfter = onAnotherRoute.headers.get("retry-after");
+
+      expect(retryAfter).not.toBeNull();
+      expect(Number.isInteger(Number(retryAfter))).toBe(true);
+      expect(Number(retryAfter)).toBeGreaterThanOrEqual(1);
+
+      // A read carries no limit, so the same client still reads while its writes are refused.
+      expect((await throttled.get("/listings")).status).toBe(200);
+
+      // The bound follows the client and not the account: the contributor writing the route the buyer's
+      // window was spent on meets the same counter. The report's reproduction sends one demo account to
+      // one route and another account to the next, all from one client.
+      await throttled.post(
+        "/threads",
+        { title: "The contributor's own write, from the same client." },
+        asContributor,
+      );
+
+      expectRefusal(
+        await throttled.post(
+          "/threads",
+          { title: "A second write by the contributor, from the same client." },
+          asContributor,
+        ),
+        429,
+        "rate_limited",
+      );
+    });
+
     it("leaves the walk's own server unthrottled", async () => {
       // The low bound belongs to the server above and to nothing else: in the same run, the walk's
       // shared server answers the same write with the documented `201`, which is what makes the two
@@ -2446,6 +2535,63 @@ describe("route walk: every row of the API contract table", () => {
       );
 
       expect(response.status).toBe(201);
+    });
+
+    it("refuses the sixty-first write of the contract's own window on a route the client has not used", async () => {
+      // **The contract's own bound, not a lowered one.** `contractBound` runs the numbers the product
+      // ships — `WRITE_RATE_LIMIT_MAX` writes per `WRITE_RATE_LIMIT_WINDOW`, read from the module that
+      // declares them — and the server above runs its bound driven down to one so that the counter is
+      // observable in two requests. This case spends the contract's own number instead, which is what
+      // puts the value a real client meets under test rather than a value chosen to make the refusal
+      // cheap.
+      //
+      // **The property it pins.** The sixty writes below are one client's whole minute's budget across
+      // every write route, and not sixty on each of them: the write that follows them is refused even
+      // though the route it is sent to is one this client has not written to in the window. A bound
+      // measured per route — each route answering from a bucket of its own — is exactly the behaviour
+      // the report recorded, and a fresh bucket here would answer `201`.
+      const asContributor: RequestOptions = { account: contractBound.accountForRole("contributor") };
+
+      // The window spent at the contract's own number of writes, on one route, one write at a time.
+      // Every one of them is an ordinary success stating the bound its route registers, so the refusal
+      // below is the bound rather than anything about the requests that spent it.
+      for (let write = 1; write <= WRITE_RATE_LIMIT_MAX; write += 1) {
+        const accepted = await contractBound.post(
+          "/threads",
+          { title: `A write of the contract's own window, number ${write}.` },
+          asContributor,
+        );
+
+        expect(accepted.status).toBe(201);
+        expect(accepted.headers.get("x-ratelimit-limit")).toBe(String(WRITE_RATE_LIMIT_MAX));
+      }
+
+      // The seeded listing the inquiry row is asked of. The accessor resolves it, so the body is a
+      // valid one and no seeded identifier is written down here.
+      const listingId = contractBound.candidateVersion("seed-alpha").listingId;
+
+      // The write after the sixty, on a route this client has not used in the window and from an
+      // account it has not written as: the counter follows the client, and both of those are what the
+      // report's reproduction varied while the bound stayed the client's.
+      const refused = await contractBound.post(
+        "/inquiries",
+        { listing_id: listingId, message: "A question asked once the window was spent." },
+        { account: contractBound.accountForRole("buyer") },
+      );
+
+      expectRefusal(refused, 429, "rate_limited");
+
+      // The headers the contract states on the refusal: the whole seconds to wait, which the plugin
+      // writes in whole seconds, and the bound the route that refused the write registers.
+      const retryAfter = refused.headers.get("retry-after");
+
+      expect(retryAfter).not.toBeNull();
+      expect(Number.isInteger(Number(retryAfter))).toBe(true);
+      expect(Number(retryAfter)).toBeGreaterThanOrEqual(1);
+      expect(refused.headers.get("x-ratelimit-limit")).toBe(String(WRITE_RATE_LIMIT_MAX));
+
+      // A read carries no limit, so the same client still reads at the contract's own bound.
+      expect((await contractBound.get("/listings")).status).toBe(200);
     });
   });
 });

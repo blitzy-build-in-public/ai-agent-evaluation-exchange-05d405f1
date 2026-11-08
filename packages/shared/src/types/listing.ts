@@ -366,8 +366,11 @@ export interface ListingSummary {
  *
  * It carries the listing's version history, its claims with their limitations, the linked
  * evidence — the report identifier, the outcome, the standard version and the label — and
- * the offer models the listing makes. `offer_models` is what the checkout panel validates
- * a selection against, and an offer model absent from it is the contract's `422`.
+ * the offer models the listing makes. `offer_models` is the listing-level statement of how
+ * the listing is offered — the model the listing row declares plus every model its
+ * versions claim — and it is what the listing page renders as the listing's offering. A
+ * checkout names one version and is priced from that version's own claims, falling back
+ * to the listing row's declared model when the version states none.
  *
  * The shape is **flat** rather than nesting the listing under a `listing` member: it
  * extends {@link Listing} and adds the resolved fields, so the detail payload and the

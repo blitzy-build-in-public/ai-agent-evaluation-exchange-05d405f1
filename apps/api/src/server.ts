@@ -25,10 +25,14 @@
  *    creates `schema_migrations` itself, so a caller that migrated a handle without recording the run
  *    sees a silent no-op rather than a second copy of the schema; no migration logic lives here.
  * 4. `@fastify/rate-limit` is registered with `global: false`, so reads are unlimited and a write
- *    route opts in through the route options each group declares from the resolved configuration. The
- *    plugin's `errorResponseBuilder` answers with the API's single envelope and status `429`, and the
- *    plugin writes the `Retry-After` header in whole seconds itself before it throws that value, so
- *    the builder does not set the header and cannot duplicate it.
+ *    route opts in through the route options each group declares from the resolved configuration, and
+ *    with `./write-rate-limit-store` as its store, so **one** counter covers every write route: the
+ *    bound is the client's for the whole API rather than a bucket per route. The window the store
+ *    counts in is the resolved one the routes register, so the counter and the routes cannot disagree
+ *    about the window they are measuring. The plugin's `errorResponseBuilder` answers with the API's
+ *    single envelope and status `429`, and the plugin writes the `Retry-After` header in whole seconds
+ *    itself before it throws that value, so the builder does not set the header and cannot duplicate
+ *    it.
  * 5. The fourteen route groups are mounted inside one encapsulated scope under `/api/v1` by the
  *    folder's own registrar, which is handed the handle and the configuration **by closure**. Neither
  *    is put on the instance: a group that read its database off the instance would depend on
@@ -82,6 +86,7 @@ import { runMigrations } from "./db/migrate";
 import { ERROR_STATUS, STATUS_DEFAULT_CODE } from "./errors/error-codes";
 import { ApiError, envelope, toApiError } from "./errors/error-envelope";
 import { API_PREFIX, registerRoutes } from "./routes/register-routes";
+import { WriteRateLimitStore } from "./write-rate-limit-store";
 
 /**
  * The versioned prefix every route of this API is served under, re-exported from the registrar that
@@ -232,6 +237,13 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
     // declares from the resolved configuration: the limit is the routes' policy, and this option is
     // what keeps the plugin from applying one of its own to every route.
     global: false,
+    // One counter for all of them. The plugin asks a registered store for a child once per
+    // rate-limited route and its own store answers with a fresh map each time, so without this the
+    // bound would be measured on every write route separately — sixty writes a minute on each rather
+    // than the client's sixty in total. `./write-rate-limit-store` hands the one instance back for
+    // every route, and the window it counts in is the same resolved one the routes register.
+    store: WriteRateLimitStore,
+    timeWindow: config.writeRateLimit.timeWindow,
     errorResponseBuilder: (_request, context) =>
       new ApiError(
         ERROR_STATUS.rate_limited,

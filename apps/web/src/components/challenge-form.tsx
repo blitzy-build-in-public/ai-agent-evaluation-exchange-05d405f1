@@ -218,6 +218,13 @@ export function ChallengeForm(props: ChallengeFormProps): JSX.Element {
 
   const handleQuestionChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     setQuestion(event.target.value);
+    // The sentence beside the field describes the value that was submitted, so once that value
+    // changes it describes text the field no longer holds and is retired here. A failure about
+    // the demo account, the listing or the rate limit is not the question's own and stays in the
+    // status region, because only a submit can resolve one.
+    if (questionMessage !== null) {
+      setError(null);
+    }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {

@@ -15,6 +15,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, RefObject } from "react";
 import { refundTransaction } from "../api-client";
+import type { RefundReversalResult } from "../api-client";
 import { Timestamp, isRecord, readCount, statusOf } from "../payload-reading";
 import { FOUNDER_ALLOCATION_CONTRACT_LABEL, SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
 import type {
@@ -65,6 +66,12 @@ const REFUND_NOTE =
   "A refund appends reversal entries and edits nothing: the transaction, its allocation and every earlier entry stay exactly as they were, and what remains refundable is read from the entries.";
 const REFUND_SUMMARY_PREFIX = "Refund transaction";
 const REFUND_BUTTON_LABEL = "Refund this transaction";
+/**
+ * The label of the identifier an accepted refund is cited by. The appended `refunds` row is
+ * append-only, so its identifier is the durable reference of the act rather than a figure the
+ * confirmation derives.
+ */
+const REFUND_REFERENCE_LABEL = "Refund reference";
 const AMOUNT_FIELD_LABEL = "Refund amount, in minor units of " + SYNTHETIC_CURRENCY_LABEL;
 const AMOUNT_FIELD_HINT =
   "A positive whole number of minor units of the synthetic currency " +
@@ -185,34 +192,51 @@ interface RefundFormProps {
 }
 
 /**
- * The refund form for one simulated transaction: the amount in minor units, the explanation of
- * whatever refused it, and a polite announcement of the outcome.
+ * The refund form for one simulated transaction: the amount in minor units, and the polite
+ * announcement of whatever the attempt produced — the appended reversal count with the refund row's
+ * durable reference, or the refusal that answered instead.
  *
  * Nothing here edits anything. The route appends reversal entries, and its refusals are rendered as
- * reasons a reader can act on rather than as a status code.
+ * reasons a reader can act on rather than as a status code, announced through the same status region
+ * the form announces an accepted refund on.
  */
 function RefundForm(props: RefundFormProps): JSX.Element {
   const fieldId = useId();
   const amountFieldId = fieldId + "-amount";
   const hintId = fieldId + "-hint";
   const errorId = fieldId + "-error";
+  const refusalId = fieldId + "-refusal";
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [amount, setAmount] = useState<string>("");
   const [inFlight, setInFlight] = useState<boolean>(false);
   const [amountError, setAmountError] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<unknown | null>(null);
-  const [outcome, setOutcome] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<RefundReversalResult | null>(null);
 
-  // A spent write rate limit is not the amount field's fault: the amount was never the problem, so the
-  // refusal is announced in the form's status region in the warning triple and the field stays valid. A
-  // refusal that concerns the amount itself — this form's own guard, the domain's `400` and the
-  // over-refund `422` — is still rendered beside the field it describes.
-  const throttledNotice =
-    refusal !== null && statusOf(refusal) === 429 ? describeRefundFailure(refusal) : null;
-  const errorText =
-    amountError ?? (refusal === null || throttledNotice !== null ? null : describeRefundFailure(refusal));
-  useReturnFocusOnError(inputRef, errorText);
+  // Every refusal the route answers with is announced through the form's status region, which is where
+  // this form publishes what an attempt produced: a spent write rate limit in the warning triple, and
+  // every other refusal in the error triple. A refusal that concerns the amount itself — the domain's
+  // `400` for the `0` the shared body schema admits, and the `422` for an amount beyond the net
+  // remaining — is tied to the field as well, by `aria-invalid` and by the notice's own id in the
+  // field's `aria-describedby`, so the sentence is rendered once and still describes the field it
+  // concerns. The form's own pre-send guard keeps the inline `.field__error`, and with it the focus
+  // return to the field that message is tied to.
+  const refusalNotice = refusal === null ? null : describeRefundNotice(refusal);
+  const refusalConcernsAmount = refusalNotice !== null && refusalNotice.concernsAmount;
+  const fieldHasError = amountError !== null || refusalConcernsAmount;
+  useReturnFocusOnError(inputRef, amountError);
+
+  const describedBy = [
+    hintId,
+    ...(amountError === null ? [] : [errorId]),
+    ...(refusalConcernsAmount ? [refusalId] : []),
+  ].join(" ");
+
+  // The identifier of the `refunds` row the accepted refund appended, when the route answered with
+  // one: it is the durable reference the confirmation cites. A response that carried no row leaves it
+  // `null`, and the confirmation then states the reversal count alone rather than an empty reference.
+  const refundId = outcome === null || outcome.refund === null ? null : outcome.refund.id;
 
   const handleAmountChange = (event: ChangeEvent<HTMLInputElement>): void => {
     setAmount(event.target.value);
@@ -234,11 +258,11 @@ function RefundForm(props: RefundFormProps): JSX.Element {
     setOutcome(null);
     setInFlight(true);
     try {
-      const reversals = await refundTransaction(props.transactionId, {
+      const refunded = await refundTransaction(props.transactionId, {
         amount_minor_units: minorUnits,
       });
       setAmount("");
-      setOutcome(describeRefundOutcome(reversals));
+      setOutcome(refunded);
       props.onRefunded?.();
     } catch (thrown: unknown) {
       setRefusal(thrown);
@@ -249,7 +273,7 @@ function RefundForm(props: RefundFormProps): JSX.Element {
 
   return (
     <form onSubmit={handleSubmit} noValidate>
-      <div className={errorText === null ? "field" : "field field--error"}>
+      <div className={fieldHasError ? "field field--error" : "field"}>
         <label className="field__label" htmlFor={amountFieldId}>
           {AMOUNT_FIELD_LABEL}
         </label>
@@ -272,12 +296,12 @@ function RefundForm(props: RefundFormProps): JSX.Element {
           step={1}
           value={amount}
           onChange={handleAmountChange}
-          aria-invalid={errorText === null ? undefined : true}
-          aria-describedby={errorText === null ? hintId : hintId + " " + errorId}
+          aria-invalid={fieldHasError ? true : undefined}
+          aria-describedby={describedBy}
         />
-        {errorText === null ? null : (
+        {amountError === null ? null : (
           <p className="field__error" id={errorId}>
-            {errorText}
+            {amountError}
           </p>
         )}
       </div>
@@ -291,11 +315,26 @@ function RefundForm(props: RefundFormProps): JSX.Element {
         {REFUND_BUTTON_LABEL}
       </button>
 
-      <div className="status-region" role="status">
-        {throttledNotice === null ? null : (
-          <p className="notice notice--warning">{throttledNotice}</p>
+      {/* role="status" is the polite live region, and aria-live states it plainly so the region a reader
+          is told about is the one the markup declares. The node exists from the first render and only
+          its content changes, which is what makes the announcement reliable. */}
+      <div className="status-region" role="status" aria-live="polite">
+        {refusalNotice === null ? null : (
+          <p className={`notice ${refusalNotice.variant}`} id={refusalId}>
+            {refusalNotice.text}
+          </p>
         )}
-        {outcome === null ? null : <p className="notice notice--success">{outcome}</p>}
+        {outcome === null ? null : (
+          <div className="notice notice--success">
+            <p>{describeRefundOutcome(outcome.entries)}</p>
+            {refundId === null ? null : (
+              <p>
+                {REFUND_REFERENCE_LABEL}:{" "}
+                <span className="ledger-table__identifier">{refundId}</span>
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </form>
   );
@@ -426,6 +465,39 @@ function describeRefundFailure(failure: unknown): string {
     default:
       return REFUND_FAILED_MESSAGE;
   }
+}
+
+/**
+ * A refused refund as the form renders it: the sentence a reader acts on, the notice triple it takes,
+ * and whether it concerns the amount field.
+ */
+interface RefundNotice {
+  /** The sentence explaining the refusal; `describeRefundFailure` words it. */
+  readonly text: string;
+  /** The notice triple the sentence renders in: the warning triple for a throttled write only. */
+  readonly variant: "notice--error" | "notice--warning";
+  /** Whether the refusal is about the amount the reader entered, and is therefore tied to that field. */
+  readonly concernsAmount: boolean;
+}
+
+/**
+ * A refused refund as the form announces it.
+ *
+ * The variant follows the status the service answered with: the warning triple for the write rate
+ * limit, which asks the reader to wait and send the same request again, and the error triple for every
+ * other refusal, a value carrying no status included. Only the domain's `400` for the `0` the shared
+ * body schema admits and the over-refund `422` concern the amount the reader entered; a missing
+ * operator account, an unknown transaction, an already refunded transaction and a throttled write
+ * concern the request rather than the field, so the field stays valid and the notice is announced on
+ * its own.
+ */
+function describeRefundNotice(failure: unknown): RefundNotice {
+  const status = statusOf(failure);
+  return {
+    text: describeRefundFailure(failure),
+    variant: status === 429 ? "notice--warning" : "notice--error",
+    concernsAmount: status === 400 || status === 422,
+  };
 }
 
 /** The announcement of an accepted refund: how many reversal entries the route appended. */
