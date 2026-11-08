@@ -21,11 +21,12 @@
  * did not, which case identifiers those were and how many of them are `critical` all come from the
  * report's own counts and its `case_results`; no fixture file is read, no case identifier is written
  * down here, and no outcome is derived — the outcome is the service's and this page explains it. The
- * rule it explains is the standard's own: a run passes when at least
- * {@link PASS_THRESHOLD_MATCHES} of the version's cases match and no `critical` case fails, and
- * anything else is a failure. Those thresholds are provisional for this release and versioned with
- * the standard version the report names — the report payload carries no threshold field, so the
- * number is stated in the explanation and is never used to decide anything.
+ * rule it explains is the standard's own: a run passes when at least as many cases match as the
+ * standard version publishes as its threshold, with no `critical` case failing, and anything else is
+ * a failure. Those thresholds are provisional for this release and versioned with the standard
+ * version the report names, and the report payload carries no threshold field: the summary therefore
+ * states the rule in the version's own terms and compiles in no figure of its own, so it follows a
+ * later version rather than pinning this one.
  *
  * **The canonical JSON strings are shown exactly as stored.** The `expected` and `actual` values are
  * the compared artefact: they are rendered as text in a `<code>` element, neither reformatted nor
@@ -72,18 +73,6 @@ import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { SampleBadge } from "../components/sample-badge";
 import { NotFound } from "./not-found";
-
-/**
- * The number of fixture cases the standard's provisional pass rule requires to match.
- *
- * It is a fact about `SGI-SO-1.0.0` as this release publishes it — at least 18 of the version's 20
- * cases match and no `critical` case fails — and it appears here for one purpose: to explain a
- * recorded outcome to a reader in one sentence. A report payload carries no threshold field, so the
- * sentence states it instead, and no branch of this page reads it: the outcome above every sentence
- * is the service's, and the thresholds themselves are versioned with the standard version the report
- * names, changing only by a reviewed proposal that publishes a new version.
- */
-const PASS_THRESHOLD_MATCHES = 18;
 
 /** The heading of the page, and the label of the section that carries the report's identity. */
 const PAGE_HEADING = "SGI report";
@@ -532,9 +521,9 @@ function CaseIdList(props: { readonly caseIds: readonly string[] }): JSX.Element
  *
  * Every number in it is the report's own — `matched_count`, `total_count`, `critical_failures` and the
  * per-case evidence — and the outcome is stated as the service recorded it rather than derived here.
- * The rule is stated in the standard's own terms, with the provisional thresholds the release
- * publishes, so a reader who is not a specialist can tell a pass from a failure without reading the
- * evidence table first.
+ * The rule is stated in the standard version's own terms — the threshold that version publishes,
+ * rather than a figure compiled in here — so a reader who is not a specialist can tell a pass from a
+ * failure without reading the evidence table first.
  */
 function OutcomeSummary(props: { readonly report: EvaluationReportDetail }): JSX.Element {
   const report = props.report;
@@ -573,8 +562,9 @@ function OutcomeSummary(props: { readonly report: EvaluationReportDetail }): JSX
           <CaseIdList caseIds={summary.criticalFailedCaseIds} />.
         </>
       )}{" "}
-      A pass needs at least {PASS_THRESHOLD_MATCHES} of the {report.total_count} cases to match with no
-      critical case failing, and anything else is a failure.
+      A pass needs at least as many matches as the standard version this report names publishes as
+      its threshold — the {report.total_count} cases recorded here are the set it applies to — with
+      no critical case failing; anything else is a failure.
     </p>
   );
 }
@@ -942,9 +932,12 @@ export function ReportPage(): JSX.Element {
           <ScopeSection report={state.report} />
           <EvidenceSection report={state.report} />
           {/* Both actions are keyed by the report they act on, so a draft, a success and a failure
-              belong to one report and are dropped when the reader opens another. */}
-          <AppealSection key={state.report.id} reportId={state.report.id} />
-          <RetestSection key={state.report.id} report={state.report} />
+              belong to one report and are dropped when the reader opens another. The two keys carry
+              the action's own prefix because they are siblings: one key for both would be the
+              duplicate React reconciles the two sections against, and a reader's appeal draft would
+              be the retest form's state. */}
+          <AppealSection key={`appeal-${state.report.id}`} reportId={state.report.id} />
+          <RetestSection key={`retest-${state.report.id}`} report={state.report} />
         </>
       ) : null}
     </main>

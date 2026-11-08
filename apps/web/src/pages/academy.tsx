@@ -9,10 +9,11 @@
  * Two boundaries this file holds on purpose, each of which a later reader could otherwise
  * "improve" into a bug:
  *
- *   - The pass rule is stated as the standard's own: at least 18 of its 20 cases match and no
- *     `critical` case fails. The threshold and the critical-case count are provisional for this
- *     release, are versioned with the standard version a report names, and change only through a
- *     reviewed proposal that publishes a new version. No wording here restates them any other way.
+ *   - The pass rule is stated as the standard's own: a candidate passes when at least as many
+ *     cases match as the standard version publishes as its threshold, and no `critical` case
+ *     fails. The threshold and the critical-case count are provisional for this release, are
+ *     versioned with the standard version a report names, and change only through a reviewed
+ *     proposal that publishes a new version. No wording here restates them any other way.
  *
  *   - Every link is an internal route. Fastify serves the built single-page app and no
  *     documentation directory, so a path into one would be answered by the SPA fallback with
@@ -56,7 +57,7 @@ const MODULES: readonly ReadinessModule[] = [
     guidance: [
       'The standard is SGI-SO-1.0.0, "Structured Output Conformance". It asks one narrow question: does the candidate produce the structured output its fixture set expects? It asks nothing about how the candidate is built, how quickly it responds or what else it can do.',
       "A candidate is a declarative submission: the identifier of the version being evaluated, plus one recorded output for each fixture case. The evaluator compares that recorded data and runs nothing — no candidate code is executed, imported or interpreted.",
-      "The fixture set holds 20 cases, five of which are critical. The cases, their expected outputs and their severities are fixed before the evaluation and belong to the versioned standard the report names.",
+      "The fixture set, the cases it holds, which of them are critical and the expected output of each are all fixed before the evaluation, and they belong to the versioned standard the report names rather than to this page.",
     ],
     checks: [
       "Every case needs its own recorded output. A submission that is missing one is refused before any report is written.",
@@ -68,12 +69,12 @@ const MODULES: readonly ReadinessModule[] = [
     id: "academy-pass-rule",
     heading: "How a pass is decided",
     guidance: [
-      "A candidate passes when at least 18 of the 20 cases match and no critical case fails. Anything else is FAIL, however many of the other cases matched.",
+      "A candidate passes when at least as many cases match as the standard version publishes as its threshold and no critical case fails. Anything else is FAIL, however many of the other cases matched.",
       "A match is decided on canonical JSON: property order is fixed and insignificant whitespace is removed before the comparison, so the recorded output is compared as a stable document rather than as text a formatter could change.",
       "The threshold and the critical-case count are provisional for this release and versioned with the standard. A later version changes them by being proposed, reviewed and published as a new version — never by an edit to the version a report was scored against.",
     ],
     checks: [
-      "One failed critical case is a FAIL even when 19 of the 20 cases matched.",
+      "One failed critical case is a FAIL even when every other case matched.",
       `A completed evaluation records a fictional gate-evaluation fee in the gate-fee ledger only, counted in minor units of the synthetic currency ${SYNTHETIC_CURRENCY_LABEL}, whether the outcome is PASS or FAIL.`,
       "The fee buys no influence over the outcome. An evaluation is decided by the recorded evidence alone, and paying for one never guarantees a pass.",
     ],
@@ -110,7 +111,7 @@ const MODULES: readonly ReadinessModule[] = [
     heading: "How to read a failing report",
     guidance: [
       "A failing report is evidence rather than a verdict on the project. It lists every case with the expected output, the recorded output and whether the two matched, so the failing cases are visible one by one.",
-      "Reading it in order is usually enough: one critical case that did not match fails the candidate on its own, and a run that matched fewer than 18 cases fails on the threshold even when every critical case matched.",
+      "Reading it in order is usually enough: one critical case that did not match fails the candidate on its own, and a run that matched fewer cases than the standard version publishes as its threshold fails on that threshold even when every critical case matched.",
       "If a report is wrong about the evidence a submission gave it, open an appeal against the report. A ruling is recorded as an appended governance event and leaves the report itself unchanged, so the evidence a ruling answers stays readable.",
     ],
     checks: [

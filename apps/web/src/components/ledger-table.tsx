@@ -15,7 +15,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, RefObject } from "react";
 import { refundTransaction } from "../api-client";
-import { FOUNDER_ALLOCATION_CONTRACT_LABEL } from "@adem/shared";
+import { FOUNDER_ALLOCATION_CONTRACT_LABEL, SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
 import type {
   FounderAllocationLedgerReadResult,
   LedgerEntry,
@@ -64,15 +64,21 @@ const REFUND_NOTE =
   "A refund appends reversal entries and edits nothing: the transaction, its allocation and every earlier entry stay exactly as they were, and what remains refundable is read from the entries.";
 const REFUND_SUMMARY_PREFIX = "Refund transaction";
 const REFUND_BUTTON_LABEL = "Refund this transaction";
-const AMOUNT_FIELD_LABEL = "Refund amount, in minor units of DEMO";
+const AMOUNT_FIELD_LABEL = "Refund amount, in minor units of " + SYNTHETIC_CURRENCY_LABEL;
 const AMOUNT_FIELD_HINT =
-  "A positive whole number of minor units of the synthetic currency DEMO — the transaction's own amount, for example. No currency symbol and no real currency code appears anywhere in this simulation.";
+  "A positive whole number of minor units of the synthetic currency " +
+  SYNTHETIC_CURRENCY_LABEL +
+  " — the transaction's own amount, for example. No currency symbol and no real currency code appears anywhere in this simulation.";
 
 /** The sentences a refused refund is explained with, one per way the refund route can answer. */
 const REFUND_AMOUNT_GUARD_MESSAGE =
-  "Enter a positive whole number of minor units of DEMO. A refund of zero leaves nothing to reverse, and a fractional amount cannot be expressed in minor units.";
+  "Enter a positive whole number of minor units of " +
+  SYNTHETIC_CURRENCY_LABEL +
+  ". A refund of zero leaves nothing to reverse, and a fractional amount cannot be expressed in minor units.";
 const REFUND_INVALID_AMOUNT_MESSAGE =
-  "The refund was refused as not a valid positive whole number of minor units of DEMO. Enter a positive whole number, for example the transaction's own amount.";
+  "The refund was refused as not a valid positive whole number of minor units of " +
+  SYNTHETIC_CURRENCY_LABEL +
+  ". Enter a positive whole number, for example the transaction's own amount.";
 const REFUND_UNAUTHORIZED_MESSAGE =
   "No demo account is selected, or the selected one could not be recognised, so the refund was not accepted. Choose the operator account in the demo-account switcher in the page header, then try again.";
 const REFUND_FORBIDDEN_MESSAGE =

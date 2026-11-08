@@ -333,7 +333,7 @@ export function Home(): JSX.Element {
         <p>
           The evidence comes from a community-governed Standard Gate Index. One provisional standard,{" "}
           <code>SGI-SO-1.0.0</code>, Structured Output Conformance, scores a candidate against a
-          fixed fixture set of 20 cases, five of them critical, using only the recorded output the
+          fixed fixture set that includes critical cases, using only the recorded output the
           candidate's developer submitted. Nothing is executed: the recorded data is compared, and
           the same submission scored again yields the same per-case results and the same outcome.
           Every report carries exactly one label, {REPORT_LABEL_SAMPLE} or{" "}

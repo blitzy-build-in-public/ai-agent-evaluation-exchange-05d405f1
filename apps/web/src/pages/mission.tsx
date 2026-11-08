@@ -60,11 +60,13 @@ export function Mission(): JSX.Element {
         </p>
         <p>
           This release carries one provisional standard, <code>SGI-SO-1.0.0</code> — Structured
-          Output Conformance. A candidate submits one recorded output for each case in a fixture
-          set of 20 cases, 5 of which are critical. The standard passes a candidate when at least
-          18 of the 20 cases match and no critical case fails, and fails it otherwise; the
-          thresholds are provisional and versioned with the standard rather than fixed in code.
-          Nothing is executed: a submission is data compared against fixed expected outputs.
+          Output Conformance. A candidate submits one recorded output for every case in the
+          standard version's fixture set, which includes critical cases. The standard passes a
+          candidate when at least as many cases match as the standard version publishes as its
+          threshold and no critical case fails, and fails it otherwise; that threshold, the case
+          count and the critical-case count are provisional and versioned with the standard rather
+          than fixed in code. Nothing is executed: a submission is data compared against fixed
+          expected outputs.
         </p>
         <p>
           This repository is the working first version of that foundation — one process, one
