@@ -8,13 +8,17 @@
  * card writes and what this page reads, so a comparison is an address a buyer can keep, send or
  * reopen, and no context provider, shared module or stored key is involved. Every control here
  * changes that parameter and nothing else: the page renders from the address, and removing a
- * listing rewrites it.
+ * listing rewrites it. The address is read as the set of listings it names, so an identifier it
+ * repeats names one listing and never a second one: the count this page states, the bounds it
+ * applies and the request it sends all describe that one selection.
  *
  * **A selection the contract refuses is answered without a request.** Fewer than
  * `COMPARE_MIN_IDS` identifiers is the row's own prompt to add a listing, and more than
  * `COMPARE_MAX_IDS` is explained before anything is sent: `GET /compare` answers `400` for both,
- * and this page can say what is wrong without asking a service that would refuse it. Neither state
- * depends on the service being reachable.
+ * and this page can say what is wrong without asking a service that would refuse it. Both bounds
+ * count the distinct identifiers the address names, which are the identifiers the request then
+ * carries, so an address that names one listing twice is the prompt to add a listing rather than a
+ * request the contract refuses. Neither state depends on the service being reachable.
  *
  * **An identifier that names no listing costs that column and nothing else.** The comparison route
  * answers for every identifier at once, so one identifier that names no listing — or one an
@@ -122,8 +126,16 @@ const LOADING_MESSAGE = "Loading the comparison.";
 const VALIDATION_ERROR_CODE = "validation_error";
 
 /**
- * The identifiers named by an `ids` parameter: split on the separator the contract joins them with,
- * trimmed, and with the empty tokens a stray or trailing separator produces dropped.
+ * The identifiers named by an `ids` parameter: the distinct listings the address names, in the
+ * order it first names them.
+ *
+ * The string is split on the separator the contract joins the identifiers with, each token is
+ * trimmed, and the empty tokens a stray or trailing separator produces are dropped. A repeated
+ * identifier is the same listing rather than a second one, so it is kept once — the rule
+ * `GET /compare` applies to the identifiers it is asked for before it counts them. Counting the
+ * tokens instead would have this page state a selection that its own notice contradicts, and would
+ * send for `?ids=a,a` a request the contract answers `400`, because one listing is a listing read
+ * rather than a comparison.
  *
  * A `null` parameter — no comparison asked for at all — yields the empty list. Nothing else is
  * repaired here: a single odd token is the reader's own address, and the page answers it with the
@@ -133,10 +145,14 @@ function parseCompareIds(value: string | null): string[] {
   if (value === null) {
     return [];
   }
-  return value
-    .split(COMPARE_ID_SEPARATOR)
-    .map((token: string): string => token.trim())
-    .filter((token: string): boolean => token !== "");
+  const identifiers: string[] = [];
+  for (const token of value.split(COMPARE_ID_SEPARATOR)) {
+    const identifier = token.trim();
+    if (identifier !== "" && !identifiers.includes(identifier)) {
+      identifiers.push(identifier);
+    }
+  }
+  return identifiers;
 }
 
 /**
@@ -414,7 +430,7 @@ function inquiryRoleExplanation(account: DemoAccount): string {
 
 /** Everything the rendered states read: the address's identifiers, the columns and the two actions. */
 interface ComparisonProps {
-  /** The identifiers the address names, in the order it names them. */
+  /** The distinct identifiers the address names, in the order it first names them. */
   readonly requestedIds: readonly string[];
   /** The columns that could be loaded, in the order the service returned them. */
   readonly entries: readonly CompareEntry[];
