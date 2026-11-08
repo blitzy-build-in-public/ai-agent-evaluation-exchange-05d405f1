@@ -15,12 +15,21 @@
  *
  * What it evidences: criterion 4's ruling half — an appeal ruling moves `appeals.status` and appends
  * exactly one `governance_events` row inside one transaction, while the appealed
- * `evaluation_reports` row stays byte-identical — together with the contract's `404` and `409`
- * orderings (an unknown id answers `not_found`, an appeal that already carries a terminal status
- * answers `already_ruled` *before* any write), the append-only trigger behind the ruling's event
- * row, and the documented absence of an emptiness rule on the operator's stated ground. The last
- * two are asserted structurally, by recording the SQL the module prepares, because the absence of a
- * write and the absence of a rule are not things a behavioural case can show.
+ * `evaluation_reports` row *and* its per-case evidence stay byte-identical — together with the
+ * contract's `404` and `409` orderings (an unknown id answers `not_found`, an appeal that already
+ * carries a terminal status answers `already_ruled` *before* any write), the append-only trigger
+ * behind the ruling's event row, and the documented absence of an emptiness rule on the operator's
+ * stated ground. The last two are asserted structurally, by recording the SQL the module prepares,
+ * because the absence of a write and the absence of a rule are not things a behavioural case can
+ * show.
+ *
+ * The ruling's record is read back the way the product reads it and not only through raw SQL: the
+ * appended event is fetched through `../events/list-events`, and the appealed report through
+ * `../reports/report-repository`'s `getReport`, so a case fails if the module writes a row the
+ * package's own readers cannot see. The stored payload is compared to `canonicalize`'s rendering of
+ * the object the module intends, which is the single canonicalisation point
+ * `../events/append-event` writes through — the reason that import belongs here rather than in
+ * `rule-appeal.ts`, and the assertion a double-encoded payload cannot pass.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -29,6 +38,9 @@ import { fileURLToPath } from "node:url";
 import { APPEAL_RULINGS, type AppealRuling } from "@adem/shared";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { listEvents } from "../events/list-events";
+import { getReport, type StoredReport } from "../reports/report-repository";
+import { canonicalize } from "../scoring/canonical-json";
 import { openAppeal, type Appeal } from "./open-appeal";
 import { AppealAlreadyRuledError, AppealNotFoundError, ruleAppeal } from "./rule-appeal";
 
@@ -46,6 +58,14 @@ const UNSEEDED_OPERATOR_ID = "operator-that-was-never-seeded";
 
 /** The report the appeals below are opened against. */
 const REPORT_ID = "report-seed-alpha-first-run";
+
+/**
+ * How many `report_case_results` rows the fixture writes for the report above: the per-case evidence
+ * criterion 4 requires to survive a ruling byte for byte. A fixture without evidence would let the
+ * immutability case pass over an empty set, so the count is declared and asserted rather than left to
+ * whatever the insert statements happen to add.
+ */
+const FIXTURE_CASE_RESULT_COUNT = 2;
 
 /** An id no `appeals` row carries. */
 const UNKNOWN_APPEAL_ID = "appeal-that-was-never-opened";
@@ -114,6 +134,20 @@ interface StoredEventRow {
   readonly reason: string | null;
   readonly payload_json: string | null;
   readonly created_at: string;
+}
+
+/**
+ * The stored shape of one `report_case_results` row, whole, so a case can compare the evidence of the
+ * appealed report — expected output, recorded output and match — byte for byte across a ruling.
+ */
+interface StoredCaseResultRow {
+  readonly id: string;
+  readonly report_id: string;
+  readonly case_id: string;
+  readonly severity: string;
+  readonly expected_json: string;
+  readonly actual_json: string;
+  readonly match: number;
 }
 
 /** How many rows one `COUNT(*)` query reports. */
@@ -220,6 +254,17 @@ function insertFixture(database: Database.Database): void {
       null,
       "2024-01-04T00:00:00.000Z",
     );
+
+  // Two case-result rows for that report: one case that matched and one critical case that did not,
+  // which is the evidence the report's FAIL rests on. Both carry fixed canonical JSON text rather
+  // than values rendered here, because the stored string is the artefact the evaluator compared and a
+  // re-rendering would prove nothing about the copy a ruling must leave alone.
+  const caseResult = database.prepare(
+    `INSERT INTO report_case_results (id, report_id, case_id, severity, expected_json, actual_json, match)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  caseResult.run("case-result-so-001", REPORT_ID, "so-001", "critical", '{"answer":"yes"}', '{"answer":"yes"}', 1);
+  caseResult.run("case-result-so-002", REPORT_ID, "so-002", "critical", '{"count":3}', '{"count":2}', 0);
 }
 
 /** Opens one appeal through the real opener, which is the row and the log a ruling starts from. */
@@ -270,6 +315,42 @@ function readReportRow(): StoredReportRow {
     throw new Error("expected the fixture to hold the report");
   }
   return row;
+}
+
+/**
+ * The appealed report's per-case evidence, whole, in `case_id` order.
+ *
+ * The order is the case's own rather than the order the rows were written in, so a change a ruling
+ * made to an evidence row reads as a changed value rather than as a shifted position, and two
+ * snapshots of an untouched table compare equal whichever order the engine would have returned them
+ * in.
+ */
+function readCaseResultRows(): StoredCaseResultRow[] {
+  return db
+    .prepare<[string], StoredCaseResultRow>(
+      `SELECT id, report_id, case_id, severity, expected_json, actual_json, match
+       FROM report_case_results
+       WHERE report_id = ?
+       ORDER BY case_id`,
+    )
+    .all(REPORT_ID);
+}
+
+/**
+ * The appealed report through the package's own reader, failing the case rather than the assertion
+ * when the reader answers nothing.
+ *
+ * The same report the raw read above returns, but as `GET /evaluations/{id}` serves it: the label the
+ * contract quotes resolved through the join, and the evidence mapped to its public shape. Asserting
+ * only through raw SQL would prove the columns are untouched while leaving a reader that could no
+ * longer see the row untested.
+ */
+function readStoredReport(): StoredReport {
+  const report = getReport(db, REPORT_ID);
+  if (report === null) {
+    throw new Error("expected the package's own reader to return the fixture's report");
+  }
+  return report;
 }
 
 /**
@@ -414,17 +495,55 @@ describe("ruleAppeal", () => {
 
     // The log holds the opening and the ruling, in that order: a ruling records a decision in the
     // same trail rather than moving the appeal out of it, and it appends a row of its own rather than
-    // rewriting the opening's.
+    // rewriting the opening's. The count is two rather than one because the fixture opens through the
+    // real `openAppeal`, which records the opening in this same log; what the ruling adds is the one
+    // row asserted here, so the delta is asserted rather than the total.
     expect(readEventRows()).toHaveLength(2);
     expect(readEventRows().map((row) => row.event_type)).toStrictEqual(["appeal_opened", "appeal_ruled"]);
+    expect(readEventsOfType("appeal_ruled")).toHaveLength(1);
     const event = firstRulingRow();
     expect(event.subject_type).toBe("appeal");
     expect(event.subject_id).toBe(appeal.id);
     expect(event.actor_account_id).toBe(OPERATOR_ID);
     expect(event.reason).toBe(RULING_REASON);
     expect(event.id).not.toBe(firstEventRow().id);
+    // The row's identity is generated rather than derived from the appeal: a version-4 UUID, as the
+    // package's only appender builds it, and an ISO-8601 UTC instant with milliseconds.
+    expect(event.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(event.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(Number.isNaN(Date.parse(event.created_at))).toBe(false);
+
+    // The same record read back the way the product reads it, through the package's own read path
+    // rather than by this suite's SQL: the filtered read returns exactly the ruling's event, and the
+    // subject read returns the appeal's whole trail, its opening first. A ruling that wrote a row
+    // `listEvents` could not return, or wrote it against another subject, fails here.
+    expect(
+      listEvents(db, { subjectType: "appeal", subjectId: appeal.id, eventType: "appeal_ruled" }),
+    ).toStrictEqual([
+      {
+        id: event.id,
+        subjectType: "appeal",
+        subjectId: appeal.id,
+        eventType: "appeal_ruled",
+        actorAccountId: OPERATOR_ID,
+        reason: RULING_REASON,
+        payload: { appealId: appeal.id, reportId: REPORT_ID, previousStatus: "open", status: ruling },
+        createdAt: event.created_at,
+      },
+    ]);
+    expect(
+      listEvents(db, { subjectType: "appeal", subjectId: appeal.id }).map((trail) => trail.eventType),
+    ).toStrictEqual(["appeal_opened", "appeal_ruled"]);
+
+    // One transaction, two writes: the row's new state and the event that records it are both present
+    // after the call and name the same outcome, which is the observable consequence of the two being
+    // written together — a reader can see neither the status moved without its record nor the record
+    // without the status. The rollback case below reads the same pair the other way round.
+    expect(JSON.parse(rulingPayloadText())).toMatchObject({
+      appealId: appeal.id,
+      previousStatus: "open",
+      status: readAppealRow(appeal.id).status,
+    });
   });
 
   it.each(RULINGS)("carries %s in the event's payload as a canonical object naming the prior status", (ruling) => {
@@ -437,9 +556,11 @@ describe("ruleAppeal", () => {
       reason: RULING_REASON,
     });
 
-    // Two assertions, deliberately: the parsed members name the member that is wrong, and the exact
-    // text pins the canonical rendering — sorted keys and no insignificant whitespace — which is
-    // what makes the stored payload byte-stable across runs.
+    // Two assertions, deliberately: the parsed members name the member that is wrong, and the stored
+    // text is compared to `canonicalize`'s own rendering of the object the module intends, which is
+    // the single canonicalisation point `../events/append-event` writes through. The second form is
+    // what a double-encoded payload — the JSON of a string rather than the JSON of the object — cannot
+    // pass, and it is why the oracle is imported here rather than written into `rule-appeal.ts`.
     expect(JSON.parse(rulingPayloadText())).toStrictEqual({
       appealId: appeal.id,
       reportId: REPORT_ID,
@@ -447,13 +568,16 @@ describe("ruleAppeal", () => {
       status: ruling,
     });
     expect(rulingPayloadText()).toBe(
-      `{"appealId":"${appeal.id}","previousStatus":"open","reportId":"${REPORT_ID}","status":"${ruling}"}`,
+      canonicalize({ appealId: appeal.id, reportId: REPORT_ID, previousStatus: "open", status: ruling }),
     );
   });
 
-  it.each(RULINGS)("leaves the appealed report byte-identical when it rules %s", (ruling) => {
+  it.each(RULINGS)("leaves the appealed report and its evidence byte-identical when it rules %s", (ruling) => {
     const appeal = openFixtureAppeal();
     const reportBefore = readReportRow();
+    const caseResultsBefore = readCaseResultRows();
+    const storedBefore = readStoredReport();
+    expect(caseResultsBefore).toHaveLength(FIXTURE_CASE_RESULT_COUNT);
 
     ruleAppeal(db, {
       appealId: appeal.id,
@@ -462,12 +586,20 @@ describe("ruleAppeal", () => {
       reason: RULING_REASON,
     });
 
-    // The immutability guarantee the appeal exists to demonstrate: the measurement is re-read whole
-    // and unchanged, in every column, while the appeal's own row has moved on.
+    // The immutability guarantee the appeal exists to demonstrate: the measurement, and the per-case
+    // evidence its outcome rests on, are re-read whole and unchanged in every column, while the
+    // appeal's own row has moved on.
     expect(readReportRow()).toStrictEqual(reportBefore);
+    expect(readCaseResultRows()).toStrictEqual(caseResultsBefore);
+    expect(countCaseResults()).toBe(FIXTURE_CASE_RESULT_COUNT);
+
+    // And unchanged through the package's own reader, which is the copy a buyer is served once the
+    // ruling has been recorded: a report the reader could no longer fetch, or one whose mapped
+    // evidence had moved, fails here rather than only in the API's own immutability suite.
+    expect(readStoredReport()).toStrictEqual(storedBefore);
+
     expect(readAppealRow(appeal.id).status).toBe(ruling);
     expect(readAppealRow(appeal.id).reason).toBe(DEVELOPER_REASON);
-    expect(countCaseResults()).toBe(0);
   });
 
   it("rules only the appeal it names, leaving a second appeal on the same report open", () => {
@@ -595,6 +727,13 @@ describe("the statements ruleAppeal prepares", () => {
     expect(recordedStatement(prepared, 0)).toMatch(/\bFROM appeals\b/);
     expect(recordedStatement(prepared, 1)).toMatch(/UPDATE appeals SET status = \? WHERE id = \?/);
     expect(recordedStatement(prepared, 2)).toMatch(/\bINSERT INTO governance_events\b/i);
+
+    // The one write an append-only table accepts is a new row: a `DELETE` would remove one, and a
+    // REPLACE-style conflict clause — which SQLite documents as bypassing a `BEFORE DELETE` trigger —
+    // would go through without either trigger running. Neither clause appears in what a ruling
+    // prepares, which is the assertion the row count alone cannot make.
+    expect(prepared.filter((source) => /\bDELETE\b/i.test(source))).toEqual([]);
+    expect(prepared.filter((source) => /INSERT\s+OR\s+REPLACE/i.test(source))).toEqual([]);
   });
 
   it("sets the status column and no other column of the appeals row", () => {
