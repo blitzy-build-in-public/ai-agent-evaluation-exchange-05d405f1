@@ -394,6 +394,10 @@ describe("reviewProposal", () => {
     expect(event.reason).toBe(REVIEW_REASON);
     expect(event.id).toMatch(UUID_V4_PATTERN);
     expect(event.created_at).toMatch(ISO_8601_UTC_PATTERN);
+    // The round-trip is what fixes the form, which a pattern match alone does not: a string that
+    // matched the pattern but did not return itself would still be an instant this contract does not
+    // accept, and the instant an appended row carries is never re-read or repaired afterwards.
+    expect(new Date(event.created_at).toISOString()).toBe(event.created_at);
     expect(Number.isNaN(Date.parse(event.created_at))).toBe(false);
     // The status change and its record are one unit of work, so the call leaves no transaction open.
     expect(db.inTransaction).toBe(false);
@@ -409,9 +413,10 @@ describe("reviewProposal", () => {
       reason: REVIEW_REASON,
     });
 
-    // Two assertions, deliberately: the parsed members name the member that is wrong, and the exact
+    // Three assertions, deliberately: the parsed members name the member that is wrong, the exact
     // text pins the canonical rendering — sorted keys and no insignificant whitespace — which is what
-    // makes the stored payload byte-stable across runs.
+    // makes the stored payload byte-stable across runs, and the round-trip is the same property read
+    // from the other side, so a renderer that left a byte the parser ignores fails here.
     expect(JSON.parse(reviewPayloadText())).toStrictEqual({
       proposalId: proposal.proposalId,
       standardId: STANDARD_ID,
@@ -421,6 +426,7 @@ describe("reviewProposal", () => {
     expect(reviewPayloadText()).toBe(
       `{"previousStatus":"submitted","proposalId":"${proposal.proposalId}","standardId":"${STANDARD_ID}","status":"${decision}"}`,
     );
+    expect(JSON.stringify(JSON.parse(reviewPayloadText()))).toBe(reviewPayloadText());
   });
 
   it("reviews only the proposal it names, leaving a second proposal on the same standard submitted", () => {
@@ -463,7 +469,6 @@ describe("reviewProposal", () => {
     expect(event.reason).not.toBe(REVIEW_REASON);
   });
 });
-
 
 describe("a second review of a proposal that already carries an outcome", () => {
   it.each(REVIEW_ATTEMPTS)(
