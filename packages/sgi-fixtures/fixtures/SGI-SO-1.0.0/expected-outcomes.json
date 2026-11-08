@@ -1,0 +1,32 @@
+{
+  "standard_version_id": "SGI-SO-1.0.0",
+  "candidates": [
+    {
+      "candidate_id": "seed-alpha",
+      "candidate_version_id": "00000000-0000-4000-8000-0000000000a1",
+      "outcome": "PASS",
+      "matched_count": 20,
+      "total_count": 20,
+      "critical_failures": 0,
+      "failing_case_ids": []
+    },
+    {
+      "candidate_id": "seed-beta",
+      "candidate_version_id": "00000000-0000-4000-8000-0000000000b2",
+      "outcome": "FAIL",
+      "matched_count": 19,
+      "total_count": 20,
+      "critical_failures": 1,
+      "failing_case_ids": ["so-003"]
+    },
+    {
+      "candidate_id": "seed-gamma",
+      "candidate_version_id": "00000000-0000-4000-8000-0000000000c3",
+      "outcome": "FAIL",
+      "matched_count": 17,
+      "total_count": 20,
+      "critical_failures": 0,
+      "failing_case_ids": ["so-014", "so-016", "so-018"]
+    }
+  ]
+}

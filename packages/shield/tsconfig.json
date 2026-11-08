@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    // Ambient types limited to the Node types the root manifest already provides. Without this key
+    // the @types packages npm hoists to the repository root (react, react-dom, better-sqlite3) leak
+    // their globals into this project, letting browser and React code type-check in a package that
+    // runs in Node and must assume no browser.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

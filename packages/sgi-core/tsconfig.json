@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    // Ambient types limited to Node. This key is load-bearing, not a restatement of the base config,
+    // which sets no types list: without it the @types packages npm hoists to the repository root
+    // (react, react-dom, better-sqlite3) are auto-included, so browser and React code would type-check
+    // inside a package that runs in Node and must assume no browser.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../shared" }, { "path": "../sgi-fixtures" }]
+}

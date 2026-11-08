@@ -1,0 +1,1123 @@
+/**
+ * Structural contract test for the seven JSON Schema request modules of this folder.
+ *
+ * It asserts what those modules guarantee rather than restating their text, and it does
+ * so **without a validation engine**: the dependency inventory is closed and names no
+ * schema library, so every expectation below is structural — `Object.keys`, `required`,
+ * `enum`, `default`, `minimum`, `minItems`/`maxItems`, `const`, `contains`, `pattern`
+ * and `additionalProperties` — plus one compiled `RegExp` for the compare bound.
+ *
+ * Four of those facts are traps a later reader could "fix" away, so each is asserted
+ * here by name:
+ *
+ * - The listing search query exposes exactly the seven keys of the contract and **no**
+ *   page-size parameter, which is what keeps `LISTING_PAGE_SIZE` (20) the single
+ *   definition of the fixed page size.
+ * - `GET /compare`'s `ids` is a patterned **string** and not an array: Fastify's query
+ *   parser hands `?ids=a,b,c` over as one string and its `coerceTypes: 'array'` does not
+ *   split on a separator, so an array declaration would silently swallow the
+ *   two-to-four bound. `COMPARE_IDS_PATTERN` stays a string so that JSON Schema's
+ *   `pattern` keyword and this test's `new RegExp(...)` consume the same value.
+ * - The evaluation submission body carries **no retest field**: `prior_report_id` is
+ *   server-derived from the newest report for the submitted candidate version, so a
+ *   client has no way to address a predecessor.
+ * - The fixture set is exactly 20 cases of which exactly 5 are `critical`.
+ *
+ * **What this module deliberately does not prove, and where that proof belongs.** It
+ * proves the schema side of the contract in-process — no HTTP server, no database, no
+ * fake timer, no snapshot, and one deliberate exception: the fixture-count group reads
+ * the delivered fixture pack, `packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/cases.json`,
+ * which is the one file this suite opens, because the exact `critical` count is not
+ * expressible in the schema dialect the product validates with — so the runtime outcomes
+ * belong elsewhere and must not be duplicated here. Each proof below is recorded as the
+ * assignment the plan makes, and belongs to the file it names rather than to this module:
+ *
+ * - The `400`/`401`/`403`/`404`/`409`/`422` outcomes of the real routes belong to the
+ *   integration suite — `apps/api/test/integration/route-walk.test.ts` and
+ *   `api-contract.test.ts` — which drives a real `createServer(options)` instance on an
+ *   ephemeral port.
+ * - Reproducibility of a re-run and the three seed outcomes belong to
+ *   `apps/api/test/integration/api-contract.test.ts` and
+ *   `packages/sgi-core/src/scoring/score-submission.test.ts`.
+ * - The absence of an import path from `sgi-core` to commercial or sponsored data
+ *   belongs to `apps/api/test/integration/boundary-check.ts`.
+ *
+ * No snapshot baseline is used for any of it: a snapshot would turn a genuine schema
+ * change into a failing byte comparison rather than a named expectation, and the
+ * determinism criterion needs the suite's `update: false` mode to stay meaningful.
+ */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+import { describe, expect, it } from 'vitest';
+
+import { DEMO_ACCOUNT_HEADER, demoAccountHeaderSchema } from './auth-header-schema';
+import {
+  challengeCreateBodySchema,
+  challengeIdParamsSchema,
+  challengeResponseBodySchema,
+  threadCreateBodySchema,
+  threadIdParamsSchema,
+  threadPostBodySchema,
+} from './challenges-threads-schema';
+import {
+  checkoutSimulationBodySchema,
+  inquiryCreateBodySchema,
+  refundCreateBodySchema,
+  transactionIdParamsSchema,
+} from './commerce-schema';
+import {
+  FIXTURE_CASE_COUNT,
+  FIXTURE_CRITICAL_CASE_COUNT,
+  appealCreateBodySchema,
+  appealIdParamsSchema,
+  appealRulingBodySchema,
+  evaluationIdParamsSchema,
+  evaluationSubmissionBodySchema,
+  fixtureCaseSchema,
+  fixtureCaseSetSchema,
+  recordedOutputItemSchema,
+} from './evaluations-schema';
+import {
+  COMPARE_IDS_PATTERN,
+  compareQuerySchema,
+  listingCreateBodySchema,
+  listingIdParamsSchema,
+  listingSearchQuerySchema,
+  listingVersionCreateBodySchema,
+} from './listings-schema';
+import {
+  MODERATION_ACTIONS,
+  moderationActionBodySchema,
+  moderationListingIdParamsSchema,
+  standardProposalCreateBodySchema,
+  standardProposalIdParamsSchema,
+  standardProposalReviewBodySchema,
+} from './moderation-schema';
+import { collectionPageQuerySchema } from './pagination-schema';
+
+import {
+  BADGE_SCOPE,
+  COLLECTION_PAGE_SIZE,
+  DEMO_AUTHENTICATION_LABEL,
+  FOUNDER_ALLOCATION_CONTRACT_LABEL,
+  FREE_TEXT_PATTERN,
+  LISTING_PAGE_SIZE,
+  NO_REPORT_LABEL,
+  PAGE_NUMBER_MAX,
+  REPORT_LABEL_SAMPLE,
+  REPORT_LABEL_VERIFIED_IN_DEMO,
+  SPONSORED_LABEL,
+  SUBSTANTIVE_FREE_TEXT_PATTERN,
+  SYNTHETIC_CURRENCY_LABEL,
+  WRITE_RATE_LIMIT_MAX,
+  WRITE_RATE_LIMIT_WINDOW,
+} from '../constants';
+import { ACCOUNT_ROLES } from '../types/account';
+import { APPEAL_RULINGS } from '../types/appeal';
+import { OFFER_MODELS } from '../types/commerce';
+import { LEDGER_ENTRY_TYPES, LEDGER_NAMES } from '../types/ledger';
+import {
+  COMPARE_MAX_IDS,
+  COMPARE_MIN_IDS,
+  DEFAULT_LISTING_SORT,
+  LISTING_SORTS,
+  LISTING_STATUSES,
+  PRICING_MODELS,
+} from '../types/listing';
+import { CASE_SEVERITIES, REPORT_LABELS, REPORT_OUTCOMES } from '../types/report';
+import { PROPOSAL_REVIEW_STATUSES, PROPOSAL_STATUSES } from '../types/standard';
+
+/**
+ * The four Fastify request-section keys a request schema can carry. Exactly one belongs
+ * on each schema object this folder exports — the folder's own contract, checked group
+ * by group below and once across the whole folder at the end. A `response` key would
+ * fail that check, which is how this file proves the folder holds no response schema.
+ */
+const SECTION_KEYS: readonly string[] = ['body', 'querystring', 'params', 'headers'];
+
+describe('listingSearchQuerySchema', () => {
+  it('exposes exactly the seven contract query keys and no page-size parameter', () => {
+    expect(Object.keys(listingSearchQuerySchema)).toEqual(['querystring']);
+
+    // The exact key list is the assertion: `limit`, `size`, `per_page`, `pageSize` and
+    // `page_size` are absent by construction, and the page size stays the single
+    // `LISTING_PAGE_SIZE` of `../constants`.
+    expect(Object.keys(listingSearchQuerySchema.querystring.properties)).toEqual([
+      'q',
+      'category',
+      'license',
+      'model',
+      'standard',
+      'sort',
+      'page',
+    ]);
+  });
+
+  it('resolves sort and page so the handler never re-defaults them', () => {
+    expect(DEFAULT_LISTING_SORT).toBe('relevance');
+    expect(listingSearchQuerySchema.querystring.properties.sort.default).toBe(
+      DEFAULT_LISTING_SORT,
+    );
+    expect(listingSearchQuerySchema.querystring.properties.page).toEqual({
+      type: 'integer',
+      minimum: 1,
+      default: 1,
+    });
+  });
+
+  it('bounds page above at the page size the offset arithmetic still states exactly', () => {
+    // The upper bound the bounded collection reads declare is not a taste: past it the
+    // product could not state where a page starts, because `page` times the page size
+    // would leave `Number.MAX_SAFE_INTEGER` and round, and a rounded offset is what the
+    // storage layer refuses. The bound is therefore the page at the edge of that range
+    // and the page after it is outside it, asserted here as the exactness the constant
+    // exists for rather than as a literal.
+    expect(PAGE_NUMBER_MAX).toBe(Math.floor(Number.MAX_SAFE_INTEGER / COLLECTION_PAGE_SIZE));
+    expect(COLLECTION_PAGE_SIZE * PAGE_NUMBER_MAX).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
+    expect(COLLECTION_PAGE_SIZE * (PAGE_NUMBER_MAX + 1)).toBeGreaterThan(
+      Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it('closes the query object, so an unexpected key is stripped rather than accepted', () => {
+    expect(listingSearchQuerySchema.querystring.additionalProperties).toBe(false);
+  });
+
+  it('bounds each free-text filter at the length its own kind needs', () => {
+    // A query value reaches work that grows with it: `q` becomes a `LIKE` pattern compared
+    // with every listing's title and summary, so a filter with no ceiling lets one client make
+    // a single read arbitrarily expensive. The bounds are this module's own choice, sized to
+    // a search phrase, a category slug, a licence code and a standard code.
+    const properties = listingSearchQuerySchema.querystring.properties;
+    expect(properties.q.maxLength).toBe(200);
+    expect(properties.category.maxLength).toBe(64);
+    expect(properties.license.maxLength).toBe(64);
+    expect(properties.standard.maxLength).toBe(64);
+  });
+});
+
+describe('listingIdParamsSchema', () => {
+  it('requires the listing identifier and nothing else', () => {
+    expect(Object.keys(listingIdParamsSchema)).toEqual(['params']);
+    expect(listingIdParamsSchema.params.required).toEqual(['id']);
+    expect(listingIdParamsSchema.params.additionalProperties).toBe(false);
+  });
+});
+
+describe('listingCreateBodySchema', () => {
+  it('accepts exactly the five fields a developer may write', () => {
+    // `slug` and `status` are absent by construction: the slug is derived server-side
+    // and a new listing is `active`, so neither is a client field.
+    expect(Object.keys(listingCreateBodySchema)).toEqual(['body']);
+    expect(listingCreateBodySchema.body.required).toEqual([
+      'title',
+      'summary',
+      'category_id',
+      'license_code',
+      'pricing_model',
+    ]);
+    expect(Object.keys(listingCreateBodySchema.body.properties)).toEqual([
+      'title',
+      'summary',
+      'category_id',
+      'license_code',
+      'pricing_model',
+    ]);
+    expect(listingCreateBodySchema.body.additionalProperties).toBe(false);
+  });
+
+  it('bounds the three text fields a collection read carries', () => {
+    // A stored value is served by every page that lists the listing, so a text field with no
+    // ceiling lets one client inflate every such payload and lengthen every search pattern the
+    // text matches. `category_id` carries no bound, and must not: it is an identifier resolved
+    // against the catalogue rather than text a reader is meant to read.
+    const properties = listingCreateBodySchema.body.properties;
+    expect(properties.title.maxLength).toBe(200);
+    expect(properties.summary.maxLength).toBe(2000);
+    expect(properties.license_code.maxLength).toBe(64);
+    expect(properties.category_id).not.toHaveProperty('maxLength');
+  });
+});
+
+describe('listingVersionCreateBodySchema', () => {
+  it('requires a version string and holds the version pattern to a token', () => {
+    expect(Object.keys(listingVersionCreateBodySchema)).toEqual(['body']);
+    expect(listingVersionCreateBodySchema.body.required).toEqual(['version_string']);
+    expect(listingVersionCreateBodySchema.body.additionalProperties).toBe(false);
+
+    const versionString = listingVersionCreateBodySchema.body.properties.version_string;
+    expect(versionString.type).toBe('string');
+    expect(versionString.maxLength).toBe(32);
+    expect(versionString.pattern).toBeTruthy();
+
+    // The pattern keeps a version a token rather than free text. The uniqueness that
+    // produces the contract's `409` is the stored `(listing_id, version_string)` pair in
+    // `packages/shared/migrations/0002_listings_and_versions.sql` and never this pattern.
+    const pattern = new RegExp(versionString.pattern);
+    expect(pattern.test('-bad')).toBe(false);
+  });
+
+  it.each(['1.0.0', '2024-05', 'v2_rc1', '1.0.0-beta.2'])(
+    'accepts the version label %s',
+    (versionLabel) => {
+      const versionString = listingVersionCreateBodySchema.body.properties.version_string;
+      expect(new RegExp(versionString.pattern).test(versionLabel)).toBe(true);
+    },
+  );
+
+  it('bounds the optional notes a version publishes', () => {
+    // The notes are served with the version history on every read of the listing, which is why this
+    // one free-text field of the row carries a maximum. The version string's own two bounds stay
+    // exactly as the group above asserts them.
+    expect(listingVersionCreateBodySchema.body.properties.notes.maxLength).toBe(2000);
+  });
+});
+
+describe('compareQuerySchema', () => {
+  it('declares the identifiers as one patterned string and not as an array', () => {
+    expect(Object.keys(compareQuerySchema)).toEqual(['querystring']);
+    expect(compareQuerySchema.querystring.required).toEqual(['ids']);
+    expect(compareQuerySchema.querystring.additionalProperties).toBe(false);
+
+    // Declared `string` on purpose: `coerceTypes: 'array'` would turn the joined
+    // `"a,b,c"` into a one-item array holding a bogus identifier, so the two-to-four
+    // bound would never be checked. An `items` key would be that array schema.
+    expect(compareQuerySchema.querystring.properties.ids.type).toBe('string');
+    expect(compareQuerySchema.querystring.properties.ids).not.toHaveProperty('items');
+    expect(compareQuerySchema.querystring.properties.ids.pattern).toBe(
+      COMPARE_IDS_PATTERN,
+    );
+  });
+
+  it('keeps the exported pattern a string for the schema keyword and for this test', () => {
+    expect(typeof COMPARE_IDS_PATTERN).toBe('string');
+    expect(COMPARE_MIN_IDS).toBe(2);
+    expect(COMPARE_MAX_IDS).toBe(4);
+  });
+
+  it.each<[string, boolean]>([
+    ['a', false],
+    ['a,b', true],
+    ['a,b,c', true],
+    ['a,b,c,d', true],
+    ['a,b,c,d,e', false],
+    [',', false],
+    ['a,', false],
+  ])('decides "%s" as %s', (ids, accepted) => {
+    const pattern = new RegExp(COMPARE_IDS_PATTERN);
+    expect(pattern.test(ids)).toBe(accepted);
+  });
+});
+
+describe('the SGI-SO-1.0.0 fixture envelope', () => {
+  it('states exactly 20 cases, exactly 5 of them critical', () => {
+    expect(FIXTURE_CASE_COUNT).toBe(20);
+    expect(FIXTURE_CRITICAL_CASE_COUNT).toBe(5);
+  });
+
+  it('fixes the case-set envelope with the two counts and the critical-case rule', () => {
+    // These two numbers are `SGI-SO-1.0.0`'s shape and never a pass threshold: the
+    // thresholds are versioned data on the stored standard version, so no consumer may
+    // derive an outcome from these constants.
+    expect(fixtureCaseSetSchema.type).toBe('array');
+    expect(fixtureCaseSetSchema.minItems).toBe(FIXTURE_CASE_COUNT);
+    expect(fixtureCaseSetSchema.maxItems).toBe(FIXTURE_CASE_COUNT);
+    expect(fixtureCaseSetSchema.items).toBe(fixtureCaseSchema);
+    expect(fixtureCaseSetSchema.contains.type).toBe('object');
+    expect(fixtureCaseSetSchema.contains.required).toContain('severity');
+    expect(fixtureCaseSetSchema.contains.properties.severity.const).toBe('critical');
+    // Asserted as absent so a later reader cannot "restore" keywords the product's
+    // validator cannot run: "exactly five of them are critical" is not expressible in
+    // draft-07 — the dialect that validator implements — so the fragment states only what
+    // it can enforce and the exact count is asserted over the delivered pack in the group
+    // below.
+    expect(fixtureCaseSetSchema).not.toHaveProperty('minContains');
+    expect(fixtureCaseSetSchema).not.toHaveProperty('maxContains');
+  });
+
+  it('holds a case to four fields, with input and expected_output as any JSON value', () => {
+    // The two payload fields are deliberately untyped — a fixture value may be a
+    // scalar, an array or an object — and `expected_output` is the spelling the
+    // delivered fixture pack uses for all 20 cases.
+    expect(fixtureCaseSchema.required).toEqual([
+      'id',
+      'input',
+      'expected_output',
+      'severity',
+    ]);
+    expect(fixtureCaseSchema.properties.input).toEqual({});
+    expect(fixtureCaseSchema.properties.expected_output).toEqual({});
+    expect(fixtureCaseSchema.additionalProperties).toBe(false);
+  });
+
+  it('holds a recorded output to its case identifier and an untyped output', () => {
+    expect(recordedOutputItemSchema.required).toEqual(['case_id', 'output']);
+    expect(recordedOutputItemSchema.properties.output).toEqual({});
+    expect(recordedOutputItemSchema.additionalProperties).toBe(false);
+  });
+
+  it('carries no Fastify section key on the three fragments', () => {
+    // These three are sub-schemas — an `items`, a `contains` or a directly applied
+    // fragment — so a section key on one of them would break the composition they exist
+    // for and would validate nothing where a route expects a section.
+    for (const fragment of [
+      fixtureCaseSchema,
+      fixtureCaseSetSchema,
+      recordedOutputItemSchema,
+    ]) {
+      expect(Object.keys(fragment).filter((key) => SECTION_KEYS.includes(key))).toEqual(
+        [],
+      );
+    }
+  });
+});
+
+/**
+ * The schema folder's own guard over the delivered fixture pack, and the reason it is
+ * data-side: "exactly five of them are critical" cannot be stated in the case-set
+ * fragment, because `minContains`/`maxContains` belong to a JSON Schema vocabulary the
+ * product's validator does not implement, so the count is asserted over the pack the
+ * fixture package's own loader test asserts — read from the file itself, so a pack whose
+ * `critical_cases` key disagreed with its own array fails this run.
+ */
+describe('the delivered SGI-SO-1.0.0 fixture pack', () => {
+  interface DeliveredCase {
+    readonly id: string;
+    readonly input: unknown;
+    readonly expected_output: unknown;
+    readonly severity: string;
+  }
+
+  interface DeliveredPack {
+    readonly total_cases: number;
+    readonly critical_cases: number;
+    readonly cases: readonly DeliveredCase[];
+  }
+
+  const packPath = fileURLToPath(
+    new URL(
+      '../../../../packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/cases.json',
+      import.meta.url,
+    ),
+  );
+
+  const pack = JSON.parse(readFileSync(packPath, 'utf8')) as DeliveredPack;
+
+  it('carries the two counts the case-set fragment cannot state', () => {
+    expect(pack.cases).toHaveLength(FIXTURE_CASE_COUNT);
+    expect(
+      pack.cases.filter((fixtureCase) => fixtureCase.severity === 'critical'),
+    ).toHaveLength(FIXTURE_CRITICAL_CASE_COUNT);
+    // The pack restates both counts as keys beside its array for a reader of the file, and
+    // a file whose key said 5 while its array held 4 is exactly the drift this group
+    // exists to catch, so the keys are held to the same two constants as the array.
+    expect(pack.total_cases).toBe(FIXTURE_CASE_COUNT);
+    expect(pack.critical_cases).toBe(FIXTURE_CRITICAL_CASE_COUNT);
+  });
+
+  it('gives every case a unique id and exactly the four fields the fragment declares', () => {
+    expect(new Set(pack.cases.map((fixtureCase) => fixtureCase.id)).size).toBe(
+      pack.cases.length,
+    );
+
+    for (const fixtureCase of pack.cases) {
+      expect(Object.keys(fixtureCase).sort()).toEqual([
+        'expected_output',
+        'id',
+        'input',
+        'severity',
+      ]);
+      expect(fixtureCase.id.length).toBeGreaterThan(0);
+      expect(CASE_SEVERITIES).toContain(fixtureCase.severity);
+    }
+  });
+});
+
+describe('evaluationSubmissionBodySchema', () => {
+  it('accepts exactly the three submission fields', () => {
+    expect(Object.keys(evaluationSubmissionBodySchema)).toEqual(['body']);
+    expect(evaluationSubmissionBodySchema.body.required).toEqual([
+      'candidate_version_id',
+      'standard_version_id',
+      'recorded_outputs',
+    ]);
+    expect(Object.keys(evaluationSubmissionBodySchema.body.properties)).toEqual([
+      'candidate_version_id',
+      'standard_version_id',
+      'recorded_outputs',
+    ]);
+    expect(evaluationSubmissionBodySchema.body.additionalProperties).toBe(false);
+  });
+
+  it('offers no field through which a retest link could be addressed', () => {
+    // The server derives `prior_report_id` from the newest existing report for the
+    // submitted candidate version and standard version, so the client has no way to
+    // point at a predecessor; an injected field is refused with `400 validation_error`
+    // before the handler runs, and no handler may rely on seeing one.
+    const serialised = JSON.stringify(evaluationSubmissionBodySchema);
+    expect(serialised).not.toMatch(/prior_report_id/i);
+    expect(serialised).not.toMatch(/priorReportId/i);
+    expect(serialised).not.toMatch(/retest/i);
+  });
+
+  it('bounds the recorded outputs by the fixture case count', () => {
+    const recordedOutputs = evaluationSubmissionBodySchema.body.properties.recorded_outputs;
+    expect(recordedOutputs.type).toBe('array');
+    expect(recordedOutputs.items).toBe(recordedOutputItemSchema);
+    expect(recordedOutputs.minItems).toBe(1);
+    expect(recordedOutputs.maxItems).toBe(FIXTURE_CASE_COUNT);
+    expect(recordedOutputs.uniqueItems).toBe(true);
+  });
+});
+
+describe('the evaluation and appeal parameter and body contracts', () => {
+  it('addresses a report and an appeal by path parameter alone', () => {
+    expect(evaluationIdParamsSchema.params.required).toEqual(['id']);
+    expect(appealIdParamsSchema.params.required).toEqual(['id']);
+  });
+
+  it('requires a stated reason to open an appeal', () => {
+    expect(Object.keys(appealCreateBodySchema)).toEqual(['body']);
+    expect(appealCreateBodySchema.body.required).toEqual(['reason']);
+    expect(appealCreateBodySchema.body.properties.reason.minLength).toBe(1);
+    expect(appealCreateBodySchema.body.additionalProperties).toBe(false);
+  });
+
+  it('rules an appeal with the ruling vocabulary and never reopens it', () => {
+    expect(Object.keys(appealRulingBodySchema)).toEqual(['body']);
+    expect(appealRulingBodySchema.body.required).toEqual(['status']);
+    expect(appealRulingBodySchema.body.additionalProperties).toBe(false);
+    // `open` is the initial state and not a ruling, which is what keeps the contract's
+    // `409` for an already-decided appeal coherent.
+    expect(APPEAL_RULINGS).not.toContain('open');
+  });
+
+  it('bounds the stated reason on an appeal and on the ruling that decides it', () => {
+    // The reason is served with the appeal and travels into the ruling's appended event, so an
+    // unbounded one would be carried by every payload that reads either.
+    expect(appealCreateBodySchema.body.properties.reason.maxLength).toBe(1000);
+    expect(appealRulingBodySchema.body.properties.reason.maxLength).toBe(1000);
+  });
+});
+
+describe('demoAccountHeaderSchema', () => {
+  it('names the demo-session header and requires it', () => {
+    expect(DEMO_ACCOUNT_HEADER).toBe('X-Demo-Account');
+    expect(Object.keys(demoAccountHeaderSchema)).toEqual(['headers']);
+    expect(demoAccountHeaderSchema.headers.type).toBe('object');
+    expect(demoAccountHeaderSchema.headers.required).toEqual([DEMO_ACCOUNT_HEADER]);
+    expect(demoAccountHeaderSchema.headers.required).toContain(DEMO_ACCOUNT_HEADER);
+  });
+
+  it('constrains the demo header only, and leaves the other headers alone', () => {
+    const properties = demoAccountHeaderSchema.headers.properties;
+    expect(Object.keys(properties)).toHaveLength(1);
+    expect(properties[DEMO_ACCOUNT_HEADER]).toEqual({ type: 'string', minLength: 1 });
+    // Left open on purpose: a real request carries `content-type`, `accept`, `host` and
+    // `user-agent`, and tightening this would fail every write.
+    expect(demoAccountHeaderSchema.headers.additionalProperties).toBe(true);
+  });
+
+  it('describes a synthetic role selector and never an authentication header', () => {
+    const properties = demoAccountHeaderSchema.headers.properties;
+    for (const authenticationHeader of [
+      'authorization',
+      'cookie',
+      'token',
+      'password',
+      'set-cookie',
+    ]) {
+      expect(properties).not.toHaveProperty(authenticationHeader);
+    }
+  });
+});
+
+describe('the buyer challenge and discussion-thread bodies', () => {
+  it('bounds each free-text field the two public boards carry', () => {
+    // Both boards are public reads that serve the rows they hold, so a field with no ceiling
+    // lets one client inflate every payload that carries the challenge, the response, the
+    // thread or the post.
+    // Each number is the module's own choice, large enough for the content of that kind.
+    expect(challengeCreateBodySchema.body.properties.question.maxLength).toBe(1000);
+    expect(challengeResponseBodySchema.body.properties.body.maxLength).toBe(4000);
+    expect(threadCreateBodySchema.body.properties.title.maxLength).toBe(200);
+    expect(threadPostBodySchema.body.properties.body.maxLength).toBe(4000);
+  });
+
+  it('leaves the identifiers unbounded, because an identifier is resolved rather than read', () => {
+    // A path parameter and a foreign key name a row; neither is text a reader is meant to read, so
+    // neither carries a length bound.
+    expect(challengeCreateBodySchema.body.properties.listing_id).not.toHaveProperty('maxLength');
+    expect(challengeIdParamsSchema.params.properties.id).not.toHaveProperty('maxLength');
+    expect(threadIdParamsSchema.params.properties.id).not.toHaveProperty('maxLength');
+  });
+});
+
+describe('inquiryCreateBodySchema', () => {
+  it('requires the listing and the message, and declares no other property', () => {
+    expect(Object.keys(inquiryCreateBodySchema)).toEqual(['body']);
+    expect(inquiryCreateBodySchema.body.required).toEqual(['listing_id', 'message']);
+    expect(Object.keys(inquiryCreateBodySchema.body.properties)).toEqual([
+      'listing_id',
+      'message',
+    ]);
+    expect(inquiryCreateBodySchema.body.properties.listing_id).toEqual({
+      type: 'string',
+      minLength: 1,
+    });
+    expect(inquiryCreateBodySchema.body.properties.message).toEqual({
+      type: 'string',
+      minLength: 1,
+      maxLength: 2000,
+      pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+    });
+    expect(inquiryCreateBodySchema.body.additionalProperties).toBe(false);
+  });
+
+  it('carries no buyer identity and no server-owned row column', () => {
+    // The buyer is the account the `X-Demo-Account` header resolves to, and the row's
+    // own columns are the server's, so neither may be a body field: a client-supplied
+    // `buyer_account_id` would let a caller write an inquiry as another account.
+    for (const serverOwnedField of [
+      'buyer_account_id',
+      'account_id',
+      'id',
+      'created_at',
+      'status',
+    ]) {
+      expect(inquiryCreateBodySchema.body.properties).not.toHaveProperty(serverOwnedField);
+    }
+  });
+});
+
+describe('the free-text write fields refuse a value that is only whitespace', () => {
+  /**
+   * The four fields the non-blank rule covers, each as the name a reader looks it up by, the
+   * pattern it declares and an ordinary value of its own kind.
+   *
+   * `minLength` counts characters, so it admits a value made only of whitespace — the empty heading,
+   * the results-card link with no accessible name and the compare control labelled
+   * `Add to compare: ` with nothing after it are what such a value renders as. The rule the four
+   * fields carry instead is {@link SUBSTANTIVE_FREE_TEXT_PATTERN}, the shared pattern declared in
+   * `../constants`, which JSON Schema searches rather than matches whole and which asks for
+   * substance as well as for characters. The ordinary value is what proves the rule is a floor
+   * rather than a filter: a value with text in it keeps its surrounding whitespace, which the
+   * routes store exactly as written.
+   */
+  const nonBlankFields: Array<[string, string, string]> = [
+    [
+      'listingCreateBodySchema.body.properties.title',
+      listingCreateBodySchema.body.properties.title.pattern,
+      '  Depot intake notes  ',
+    ],
+    [
+      'listingCreateBodySchema.body.properties.summary',
+      listingCreateBodySchema.body.properties.summary.pattern,
+      '  A summary the listing write contract accepts.  ',
+    ],
+    [
+      'listingCreateBodySchema.body.properties.license_code',
+      listingCreateBodySchema.body.properties.license_code.pattern,
+      ' MIT ',
+    ],
+    [
+      'inquiryCreateBodySchema.body.properties.message',
+      inquiryCreateBodySchema.body.properties.message.pattern,
+      '  Is this listed for a licensing trial?  ',
+    ],
+  ];
+
+  it.each(nonBlankFields)(
+    '%s refuses a whitespace-only value and accepts one with text in it',
+    (field, pattern, ordinaryValue) => {
+      // One spelling across the four fields: a divergent rule on any of them fails here rather
+      // than leaving three of them checked and the fourth a length check alone.
+      expect(pattern).toBe(SUBSTANTIVE_FREE_TEXT_PATTERN);
+
+      // The field declares the pattern at all. `new RegExp(undefined)` compiles to the empty
+      // pattern, which matches everything, so a `pattern` key that went missing fails the two
+      // assertions below instead of passing them quietly.
+      const accepted = new RegExp(pattern);
+
+      for (const blank of ['   ', ' \t\n ', '\u00a0']) {
+        expect(accepted.test(blank)).toBe(false);
+      }
+
+      expect(accepted.test(ordinaryValue)).toBe(true);
+    },
+  );
+});
+
+describe('the stored free-text rule', () => {
+  /**
+   * Every free-text field that declares a pattern, each as the name a reader looks it up by, the
+   * pattern it declares, the constant it must equal and whether that constant refuses a blank value
+   * as well as a control character.
+   *
+   * The two constants are the product's one character rule, declared in `../constants`: a stored
+   * value may carry no C0 control character except the line feed and no DEL, because those are
+   * invisible or device control in a field a reader reads. A field bound by length alone admits two
+   * values that are not sentences — a board write whose whole content is whitespace, which renders
+   * as a row, a heading and a link with no accessible name, and a value carrying a NUL or another
+   * control character, which reaches the listing card, the listing detail, the thread board and the
+   * thread heading as the code point itself. The fields below are the whole set the rule covers.
+   *
+   * Eight of them carry {@link SUBSTANTIVE_FREE_TEXT_PATTERN}, which asks for substance as well as
+   * characters. The other seven state the character rule alone, and deliberately: their blank value
+   * is judged one layer in or is an ordinary state — the moderation route's own trim guard, and
+   * `openAppeal` and `submitProposal` in `packages/sgi-core`, refuse an empty or whitespace-only
+   * reason, title or rationale with a `400`; `ruleAppeal` and `reviewProposal` hold an optional
+   * reason as stated; and a version with nothing to say beyond its own label is an ordinary state —
+   * so a pattern that refused a blank value as well would make those judgements unreachable rather
+   * than add one.
+   */
+  const freeTextFields: Array<[string, string, string, boolean]> = [
+    [
+      'listingCreateBodySchema.body.properties.title',
+      listingCreateBodySchema.body.properties.title.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'listingCreateBodySchema.body.properties.summary',
+      listingCreateBodySchema.body.properties.summary.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'listingCreateBodySchema.body.properties.license_code',
+      listingCreateBodySchema.body.properties.license_code.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'listingVersionCreateBodySchema.body.properties.notes',
+      listingVersionCreateBodySchema.body.properties.notes.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'inquiryCreateBodySchema.body.properties.message',
+      inquiryCreateBodySchema.body.properties.message.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'challengeCreateBodySchema.body.properties.question',
+      challengeCreateBodySchema.body.properties.question.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'challengeResponseBodySchema.body.properties.body',
+      challengeResponseBodySchema.body.properties.body.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'threadCreateBodySchema.body.properties.title',
+      threadCreateBodySchema.body.properties.title.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'threadPostBodySchema.body.properties.body',
+      threadPostBodySchema.body.properties.body.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'appealCreateBodySchema.body.properties.reason',
+      appealCreateBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'appealRulingBodySchema.body.properties.reason',
+      appealRulingBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'moderationActionBodySchema.body.properties.reason',
+      moderationActionBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'standardProposalCreateBodySchema.body.properties.title',
+      standardProposalCreateBodySchema.body.properties.title.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'standardProposalCreateBodySchema.body.properties.rationale',
+      standardProposalCreateBodySchema.body.properties.rationale.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'standardProposalReviewBodySchema.body.properties.reason',
+      standardProposalReviewBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+  ];
+
+  it.each(freeTextFields)(
+    '%s carries the shared pattern, which refuses a control character',
+    (field, pattern, expectedConstant, refusesBlankValue) => {
+      // The field declares the shared constant itself rather than a rule of its own, so no surface
+      // can drift into a second spelling of the one rule.
+      expect(pattern).toBe(expectedConstant);
+
+      const compiled = new RegExp(pattern);
+
+      // A NUL, two other C0 controls, a tab, a carriage return and DEL: each is refused, so a value
+      // that is not a sentence cannot be stored and rendered.
+      for (const controlBearing of ['a\u0000b', 'a\u0001b\u0007c', 'a\tb', 'a\rb', 'a\u007fb']) {
+        expect(compiled.test(controlBearing)).toBe(false);
+      }
+
+      // Plain text, text whose surrounding whitespace is kept as written, and a line feed, which is
+      // kept on purpose: the surfaces here render the line breaks an author types.
+      for (const written of ['Depot notes', '  Depot notes  ', 'line 1\nline 2']) {
+        expect(compiled.test(written)).toBe(true);
+      }
+
+      if (refusesBlankValue) {
+        // The empty value, a value made only of spaces, and one made only of the non-breaking space.
+        for (const noSubstance of ['', '   ', '\u00a0']) {
+          expect(compiled.test(noSubstance)).toBe(false);
+        }
+      }
+    },
+  );
+});
+
+describe('the simulated-commerce request contracts', () => {
+  it('accepts an offer selection and no amount, currency or provider field', () => {
+    expect(Object.keys(checkoutSimulationBodySchema)).toEqual(['body']);
+    expect(checkoutSimulationBodySchema.body.required).toEqual([
+      'listing_id',
+      'listing_version_id',
+      'offer_model',
+    ]);
+    expect(checkoutSimulationBodySchema.body.additionalProperties).toBe(false);
+
+    // The amount is computed from the selected offer and the listing version, and every
+    // monetary value in this product is an integer count of minor units of the synthetic
+    // currency `DEMO`, so no amount, currency or provider field may exist here.
+    for (const serverOwnedField of [
+      'amount_minor_units',
+      'currency',
+      'currency_label',
+      'currency_code',
+      'card',
+      'account',
+      'provider',
+    ]) {
+      expect(checkoutSimulationBodySchema.body.properties).not.toHaveProperty(
+        serverOwnedField,
+      );
+    }
+  });
+
+  it('requires a whole, non-negative refund amount in minor units', () => {
+    expect(Object.keys(refundCreateBodySchema)).toEqual(['body']);
+    expect(refundCreateBodySchema.body.required).toEqual(['amount_minor_units']);
+    // `integer` is the schema-side guard against floating-point money and `minimum: 0`
+    // permits a zero refund, leaving the domain's `409` and `422` as the meaningful
+    // rejections.
+    expect(refundCreateBodySchema.body.properties.amount_minor_units).toEqual({
+      type: 'integer',
+      minimum: 0,
+    });
+    expect(refundCreateBodySchema.body.additionalProperties).toBe(false);
+  });
+
+  it('takes the refunded transaction from the path', () => {
+    expect(transactionIdParamsSchema.params.required).toEqual(['id']);
+  });
+});
+
+describe('moderationActionBodySchema', () => {
+  it('requires both an action from the closed vocabulary and a stated reason', () => {
+    expect(Object.keys(moderationActionBodySchema)).toEqual(['body']);
+    // The missing-reason `400` is this row's own contract case, so `reason` is asserted
+    // as a required member in its own right.
+    expect(moderationActionBodySchema.body.required).toContain('action');
+    expect(moderationActionBodySchema.body.required).toContain('reason');
+    expect(moderationActionBodySchema.body.properties.reason).toEqual({
+      type: 'string',
+      minLength: 1,
+      maxLength: 1000,
+      pattern: FREE_TEXT_PATTERN,
+    });
+    expect(moderationActionBodySchema.body.additionalProperties).toBe(false);
+    expect(MODERATION_ACTIONS).toEqual(['flag', 'hide', 'restore']);
+  });
+
+  it('addresses the moderated listing by path parameter', () => {
+    expect(moderationListingIdParamsSchema.params.required).toEqual(['id']);
+  });
+});
+
+describe('the standards proposal and review bodies', () => {
+  it('creates a proposal with no status field', () => {
+    // The row is created `submitted` and the review route is the only route that moves
+    // it, so `status` is not a client field of the creation body.
+    expect(Object.keys(standardProposalCreateBodySchema)).toEqual(['body']);
+    expect(standardProposalCreateBodySchema.body.required).toEqual([
+      'standard_id',
+      'title',
+      'rationale',
+    ]);
+    expect(standardProposalCreateBodySchema.body.properties).not.toHaveProperty('status');
+    expect(standardProposalCreateBodySchema.body.additionalProperties).toBe(false);
+  });
+
+  it('reviews a proposal through the narrowed review vocabulary', () => {
+    expect(standardProposalIdParamsSchema.params.required).toEqual(['id']);
+    expect(Object.keys(standardProposalReviewBodySchema)).toEqual(['body']);
+    expect(standardProposalReviewBodySchema.body.required).toEqual(['status']);
+    expect(standardProposalReviewBodySchema.body.additionalProperties).toBe(false);
+    // `submitted` is the initial state and not a review outcome, which is what keeps the
+    // contract's `409` for an already-decided proposal coherent.
+    expect(standardProposalReviewBodySchema.body.properties.status.enum).not.toEqual(
+      PROPOSAL_STATUSES,
+    );
+    expect(standardProposalReviewBodySchema.body.properties.status.enum).not.toContain(
+      'submitted',
+    );
+  });
+
+  it('bounds the proposal text and the review reason', () => {
+    // A proposal is read back by the governance trail that decides it and by the page that
+    // lists it, and a review's reason travels into the event that trail appends.
+    expect(standardProposalCreateBodySchema.body.properties.title.maxLength).toBe(200);
+    expect(standardProposalCreateBodySchema.body.properties.rationale.maxLength).toBe(4000);
+    expect(standardProposalCreateBodySchema.body.properties.standard_id).not.toHaveProperty(
+      'maxLength',
+    );
+    expect(standardProposalReviewBodySchema.body.properties.reason.maxLength).toBe(1000);
+  });
+});
+
+
+/**
+ * Anti-drift check on every closed vocabulary: it is declared once, in its `../types`
+ * module, and must not drift between the type, the wire contract and the JSON Schema.
+ * Half 1 compares each schema `enum` with its tuple; half 2 asserts the vocabularies that
+ * no schema in this folder carries.
+ *
+ * Plan reconciliation, recorded so nobody restores an assertion that cannot hold: the
+ * folder's specification lists `LISTING_STATUSES`, `REPORT_OUTCOMES`, `REPORT_LABELS`,
+ * `LEDGER_NAMES` and `LEDGER_ENTRY_TYPES` among the vocabularies whose schema `enum`
+ * arrays equal the corresponding `../types` tuples exactly. **No schema among the seven
+ * modules in this folder carries an enum for any of those five.** There is no
+ * listing-status request field, no report-outcome request field and no label request
+ * field — the outcome and the label are derived by the domain and are never submitted —
+ * and the three operator ledger reads take no request input at all. An equality against
+ * a schema enum for them is therefore unsatisfiable without inventing a schema module
+ * for them that the plan's file map does not name, which would be a second definition of
+ * a vocabulary whose point is that it has one. They are asserted by their exact literal
+ * members and order in half 2 instead, which preserves the anti-drift purpose.
+ */
+describe('anti-drift: each closed vocabulary has exactly one definition', () => {
+  it('carries every schema enum with its own types tuple', () => {
+    expect(listingSearchQuerySchema.querystring.properties.model.enum).toEqual(
+      PRICING_MODELS,
+    );
+    expect(listingSearchQuerySchema.querystring.properties.sort.enum).toEqual(
+      LISTING_SORTS,
+    );
+    expect(listingCreateBodySchema.body.properties.pricing_model.enum).toEqual(
+      PRICING_MODELS,
+    );
+    expect(fixtureCaseSchema.properties.severity.enum).toEqual(CASE_SEVERITIES);
+    expect(checkoutSimulationBodySchema.body.properties.offer_model.enum).toEqual(
+      OFFER_MODELS,
+    );
+    expect(appealRulingBodySchema.body.properties.status.enum).toEqual(APPEAL_RULINGS);
+    expect(moderationActionBodySchema.body.properties.action.enum).toEqual(
+      MODERATION_ACTIONS,
+    );
+    expect(standardProposalReviewBodySchema.body.properties.status.enum).toEqual(
+      PROPOSAL_REVIEW_STATUSES,
+    );
+  });
+
+  it('keeps a listing status distinct from the moderation action that moves it', () => {
+    // `flag|hide|restore` are *actions*; `active|flagged|hidden` are the *statuses* they
+    // leave behind. No schema in this folder constrains a listing status, so the two
+    // vocabularies are asserted here by value.
+    expect(LISTING_STATUSES).toEqual(['active', 'flagged', 'hidden']);
+  });
+
+  it('closes the report vocabulary to its two outcomes and its two labels', () => {
+    // Neither is a request field: the outcome and the label are derived by the domain,
+    // so no schema enum carries them.
+    expect(REPORT_OUTCOMES).toEqual(['PASS', 'FAIL']);
+    expect(REPORT_LABELS).toEqual([REPORT_LABEL_SAMPLE, REPORT_LABEL_VERIFIED_IN_DEMO]);
+    expect(REPORT_LABELS).toEqual(['SAMPLE', 'VERIFIED-IN-DEMO']);
+  });
+
+  it('names the three ledgers and the three entry types they carry', () => {
+    // The three ledger reads are operator-only `GET`s with no request input, which is
+    // why no schema in this folder carries these enums.
+    expect(LEDGER_NAMES).toEqual(['marketplace', 'gate_fees', 'founder_allocation']);
+    expect(LEDGER_ENTRY_TYPES).toEqual(['charge', 'allocation', 'reversal']);
+  });
+
+  it('lists the proposal statuses and the four demo roles', () => {
+    // A proposal's creation body carries no status, and no route accepts a role as input,
+    // so both vocabularies live only in `../types` and in the seed.
+    expect(PROPOSAL_STATUSES).toEqual(['submitted', 'accepted', 'rejected']);
+    expect(ACCOUNT_ROLES).toEqual(['developer', 'buyer', 'contributor', 'operator']);
+  });
+});
+
+describe('the rendered copy equals its exact literal', () => {
+  // This copy is rendered by the UI and asserted by `e2e/**`, and a paraphrase would be a
+  // labelling defect rather than a wording choice: the report label vocabulary, the badge
+  // scope, the demo-session label, the empty-evaluation copy, the founder-ledger note and
+  // the sponsored label are the product's closed vocabulary.
+  const copyLiterals: Array<[string, string, string]> = [
+    ['SYNTHETIC_CURRENCY_LABEL', SYNTHETIC_CURRENCY_LABEL, 'DEMO'],
+    ['REPORT_LABEL_SAMPLE', REPORT_LABEL_SAMPLE, 'SAMPLE'],
+    ['REPORT_LABEL_VERIFIED_IN_DEMO', REPORT_LABEL_VERIFIED_IN_DEMO, 'VERIFIED-IN-DEMO'],
+    ['BADGE_SCOPE', BADGE_SCOPE, 'structured output on fixture set only'],
+    [
+      'DEMO_AUTHENTICATION_LABEL',
+      DEMO_AUTHENTICATION_LABEL,
+      'demo only, no production authentication',
+    ],
+    ['NO_REPORT_LABEL', NO_REPORT_LABEL, 'No SGI report yet'],
+    ['FOUNDER_ALLOCATION_CONTRACT_LABEL', FOUNDER_ALLOCATION_CONTRACT_LABEL, 'to be determined'],
+    ['SPONSORED_LABEL', SPONSORED_LABEL, 'Sponsored'],
+    ['WRITE_RATE_LIMIT_WINDOW', WRITE_RATE_LIMIT_WINDOW, '1 minute'],
+  ];
+
+  const numericConstants: Array<[string, number, number]> = [
+    ['LISTING_PAGE_SIZE', LISTING_PAGE_SIZE, 20],
+    ['WRITE_RATE_LIMIT_MAX', WRITE_RATE_LIMIT_MAX, 60],
+  ];
+
+  it.each(copyLiterals)('%s equals its exact literal', (_name, actual, expected) => {
+    expect(actual).toBe(expected);
+  });
+
+  it.each(numericConstants)('%s equals its exact literal', (_name, actual, expected) => {
+    expect(actual).toBe(expected);
+  });
+});
+
+/**
+ * A folder schema's section, reduced to the one keyword this group checks across every
+ * schema at once.
+ */
+interface ClosedSection {
+  readonly additionalProperties: unknown;
+}
+
+/** A schema object that carries a `body` section. */
+interface BodyBearingSchema {
+  readonly body: ClosedSection;
+}
+
+/** A schema object that carries a `querystring` section. */
+interface QueryBearingSchema {
+  readonly querystring: ClosedSection;
+}
+
+describe('the folder contract: exactly one Fastify section key per schema object', () => {
+  it('carries one section key on each of the 27 request schemas and no response schema', () => {
+    // The 27 section objects of the seven modules. The three fragments —
+    // `fixtureCaseSchema`, `fixtureCaseSetSchema` and `recordedOutputItemSchema` — are
+    // deliberately absent: they are sub-schemas and carry no section key, which the
+    // fixture-envelope group above asserts. `collectionPageQuerySchema` is listed with
+    // the rest because it is a schema object of this folder like any other: it is the
+    // shared `?page` contract the bounded collection reads attach themselves, so the one
+    // definition of that parameter answers all eight of those rows.
+    const requestSchemas = [
+      listingSearchQuerySchema,
+      listingIdParamsSchema,
+      listingCreateBodySchema,
+      listingVersionCreateBodySchema,
+      compareQuerySchema,
+      evaluationSubmissionBodySchema,
+      evaluationIdParamsSchema,
+      appealIdParamsSchema,
+      appealCreateBodySchema,
+      appealRulingBodySchema,
+      inquiryCreateBodySchema,
+      checkoutSimulationBodySchema,
+      refundCreateBodySchema,
+      transactionIdParamsSchema,
+      demoAccountHeaderSchema,
+      challengeCreateBodySchema,
+      challengeIdParamsSchema,
+      challengeResponseBodySchema,
+      threadCreateBodySchema,
+      threadIdParamsSchema,
+      threadPostBodySchema,
+      moderationActionBodySchema,
+      moderationListingIdParamsSchema,
+      standardProposalCreateBodySchema,
+      standardProposalIdParamsSchema,
+      standardProposalReviewBodySchema,
+      collectionPageQuerySchema,
+    ];
+
+    expect(requestSchemas).toHaveLength(27);
+
+    for (const requestSchema of requestSchemas) {
+      const keys = Object.keys(requestSchema);
+      // One key in total, and it is one of the four sections: a `response` key or a
+      // second section would fail both halves of this pair.
+      expect(keys).toHaveLength(1);
+      expect(keys.filter((key) => SECTION_KEYS.includes(key))).toHaveLength(1);
+    }
+  });
+
+  it('closes every body and query schema to its declared fields', () => {
+    const bodyBearingSchemas: readonly BodyBearingSchema[] = [
+      listingCreateBodySchema,
+      listingVersionCreateBodySchema,
+      evaluationSubmissionBodySchema,
+      appealCreateBodySchema,
+      appealRulingBodySchema,
+      inquiryCreateBodySchema,
+      checkoutSimulationBodySchema,
+      refundCreateBodySchema,
+      challengeCreateBodySchema,
+      challengeResponseBodySchema,
+      threadCreateBodySchema,
+      threadPostBodySchema,
+      moderationActionBodySchema,
+      standardProposalCreateBodySchema,
+      standardProposalReviewBodySchema,
+    ];
+
+    const queryBearingSchemas: readonly QueryBearingSchema[] = [
+      listingSearchQuerySchema,
+      compareQuerySchema,
+      collectionPageQuerySchema,
+    ];
+
+    expect(bodyBearingSchemas).toHaveLength(15);
+    expect(queryBearingSchemas).toHaveLength(3);
+
+    for (const requestSchema of bodyBearingSchemas) {
+      expect(requestSchema.body.additionalProperties).toBe(false);
+    }
+
+    for (const requestSchema of queryBearingSchemas) {
+      expect(requestSchema.querystring.additionalProperties).toBe(false);
+    }
+  });
+});
+

@@ -1,0 +1,46 @@
+{
+  "name": "adem",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ADEM \u2014 Agent Development Exchange and Marketplace",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "examples/*"
+  ],
+  "engines": {
+    "node": ">=20.0.0 <21"
+  },
+  "scripts": {
+    "build": "tsc --build && npm run build --workspace @adem/web",
+    "typecheck": "tsc --build",
+    "start": "tsx apps/api/src/index.ts",
+    "dev": "npm run dev --workspace @adem/web",
+    "seed": "npm run seed --workspace @adem/api",
+    "test": "npm run test:unit && npm run test:integration && npm run test:scan",
+    "test:unit": "vitest run --config vitest.unit.config.ts --exclude scripts/scan-exclusions.test.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:scan": "vitest run --config vitest.unit.config.ts scripts/scan-exclusions.test.ts",
+    "test:e2e": "playwright test --project=loop",
+    "test:a11y": "playwright test --project=a11y-desktop --project=a11y-mobile",
+    "test:all": "npm test && npm run test:e2e && npm run test:a11y",
+    "scan:exclusions": "tsx scripts/scan-exclusions.ts",
+    "deps:report": "tsx scripts/deps-report.ts"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.9.1",
+    "@playwright/test": "1.45.3",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "20.19.43",
+    "license-checker-rseidelsohn": "4.3.1",
+    "tsx": "4.16.5",
+    "typescript": "5.4.5",
+    "vitest": "1.6.1"
+  },
+  "allowScripts": {
+    "better-sqlite3@9.6.0": true,
+    "esbuild@0.21.5": true
+  }
+}

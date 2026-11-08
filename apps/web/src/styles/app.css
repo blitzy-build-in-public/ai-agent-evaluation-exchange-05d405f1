@@ -1,0 +1,1932 @@
+/*
+ * ADEM — the layout and component stylesheet of the public UI.
+ *
+ * tokens.css holds every colour, space, radius, border, type and motion value this file uses,
+ * plus the three layout constants the shell and the page column share; there is not one colour
+ * literal here, so a contrast fix anywhere in the UI is a one-line edit in that file. A
+ * dimension that belongs to one component's own box — such as the absent state's prose
+ * measure, the comparison table's grid tracks, a checkbox or radio control's box, a search
+ * filter's field basis — stays with that component's rule below, because it is that
+ * component's geometry rather than a value of the set. This file owns what values alone cannot
+ * express — the reset, the page shell, the navigation, and a rule for every component and
+ * every route the UI renders.
+ *
+ * Four facts a later reader would otherwise break:
+ *
+ *   - One breakpoint, mobile-first. The only media condition below is (min-width: 48rem), the
+ *     literal form of --breakpoint-narrow, which cannot parameterise a media condition and is
+ *     therefore repeated. Everything above the breakpoint is the narrow layout: nothing here
+ *     sets a fixed width above 100%, uses 100vw, or puts overflow-x on html or body, so a
+ *     360px viewport reflows rather than scrolling sideways.
+ *
+ *   - Nothing that discloses something is ever hidden. No rule below sets display: none,
+ *     visibility: hidden, clipping, an ellipsis or a fixed narrow width on the demonstration
+ *     banner, the "Sponsored" label, the sample badge's scope text, a form label, a live
+ *     region, or the bypass link while it has focus. The two deliberate collapses — the
+ *     navigation menu and a card's limitation excerpt — are stated at their own rule.
+ *
+ *   - Hover is never the only way to reach anything. Each hover rule below restates a cue the
+ *     reader already has from the resting appearance, the visible label, or the focus ring
+ *     tokens.css draws, so no meaning is carried on hover alone.
+ *
+ *   - The ledger and item tables here are read layouts. No rule in this file is a control over
+ *     stored history, and the amount, entry type and reference columns are styled to wrap
+ *     rather than to scroll.
+ *
+ * Class names follow one convention, which is what lets this file and the components agree: a
+ * block class is the component's kebab-case file stem (nav.tsx styles .nav), an element is
+ * block__element, and state is .is-open or an ARIA attribute selector. Layout, spacing, border
+ * and background sit on the block itself, so a block still renders correctly when its
+ * component omits an inner element class; the block__element rules refine that rather than
+ * carry it.
+ */
+
+/* ==========================================================================
+   1. Reset and base text
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  /* A long identifier — a report id, a version string, a case id — wraps rather than widening
+     the page. Rules below repeat this where the value is machine data. */
+  overflow-wrap: break-word;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  font-size: var(--font-size-3xl);
+}
+
+h2 {
+  font-size: var(--font-size-2xl);
+}
+
+h3 {
+  font-size: var(--font-size-xl);
+}
+
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-lg);
+}
+
+p {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+}
+
+a {
+  color: var(--color-accent);
+  /* The underline stays in place: inside a sentence, colour is never the only thing that
+     marks a link. */
+  text-decoration: underline;
+}
+
+a:hover {
+  color: var(--color-accent-strong);
+}
+
+ul,
+ol {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+  padding-inline-start: var(--space-5);
+}
+
+ul ul,
+ul ol,
+ol ul,
+ol ol {
+  margin-block: var(--space-2) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin-block: 0 var(--space-4);
+  margin-inline: 0;
+  white-space: pre-wrap;
+}
+
+strong,
+b {
+  font-weight: var(--font-weight-bold);
+}
+
+hr {
+  margin-block: var(--space-6);
+  margin-inline: 0;
+  border: 0;
+  border-block-start: var(--border-width-thin) solid var(--color-divider);
+}
+
+img,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* ==========================================================================
+   2. Shell, page column and the bypass link
+   ========================================================================== */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-4);
+  background-color: var(--color-surface-elevated);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+}
+
+/* The routed page owns the document's single <main> landmark: .app-main is only the plain
+   container the shell wraps a page in, never a landmark itself. Container and page share one
+   centred column, so a page renders identically whether the shell wraps it or it is mounted
+   directly by the router. */
+.app-main,
+.page {
+  width: 100%;
+  max-width: var(--layout-max-width);
+  min-width: 0;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A page inside the shell's content wrapper inherits the wrapper's centring and inline padding
+   instead of adding a second copy of it. */
+.app-main .page {
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: 0;
+}
+
+/* The thirteen route roots. Each one separates its own top-level sections and leaves room at
+   the foot of the page, so a page mounted directly by the shell is spaced exactly like one
+   inside it. */
+.page-home,
+.page-mission,
+.page-listings,
+.page-listing-detail,
+.page-compare,
+.page-developer,
+.page-challenges,
+.page-threads,
+.page-standards,
+.page-report,
+.page-academy,
+.page-opportunity-index,
+.page-not-found {
+  gap: var(--space-7);
+  padding-block: var(--space-6) var(--space-8);
+}
+
+/* The bypass link is this plan's own choice rather than a requirement of the request: the
+   shell's markup is not fixed, and WCAG 2.4.1 "Bypass Blocks" is a Level A criterion of the
+   target, so the link is styled here. It sits above the viewport until focus reaches it and is
+   then fully visible with tokens.css's ring — it is never permanently hidden, and it is never
+   an unstyled block in the middle of the header. It is a control rather than a link inside a
+   sentence — accent fill, border and radius — so it holds --touch-target-min like every
+   other control, which its padding and its line box alone do not reach. */
+.app-skip-link {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: var(--space-4);
+  z-index: 1;
+  transform: translateY(-200%);
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-accent-strong);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background-color: var(--color-accent);
+  color: var(--color-accent-text);
+  font-size: var(--font-size-sm);
+  /* Regular weight rather than the medium every other control takes: the bypass control is
+     revealed only while it has focus and is carried by its accent fill and by the focus ring
+     tokens.css draws, so its weight carries nothing a reader needs. */
+  font-weight: var(--font-weight-regular);
+  text-decoration: none;
+  transition: transform var(--motion-duration-fast) ease-out;
+}
+
+.app-skip-link:focus {
+  transform: translateY(0);
+}
+
+.app-skip-link:hover {
+  background-color: var(--color-accent-strong);
+}
+
+/* Revealed, the chip occupies the header's own top band, and the header gives that band up while
+   the chip holds focus: its first padding grows by the chip's own height, so the navigation row
+   moves clear of the chip instead of under it. Both values are the ones the two rules above and
+   below already use — the header's padding and the chip's minimum — so nothing here is a literal.
+   Its own rule, for the reason the nav's :has() rule further down is isolated: a browser that
+   cannot parse :has() drops only this rule and still moves the chip into view. */
+.app-header:has(.app-skip-link:focus) {
+  padding-block-start: calc(var(--space-3) + var(--touch-target-min));
+}
+
+/* The absent state's elements. The route root above owns this page's gap and block padding. */
+.not-found__heading {
+  margin-block: 0;
+}
+
+.not-found__message {
+  margin-block: 0;
+  max-width: 40rem;
+}
+
+.not-found__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin-block: var(--space-2) 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+.not-found__links li {
+  margin: 0;
+}
+
+.not-found__links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
+}
+
+/* Pressed on a way back into the app: the sunken fill marks the press without a second
+   vocabulary, and the corner takes the smallest radius so the fill reads as a control rather
+   than as a band across the list. */
+.not-found__links a:active {
+  background-color: var(--color-surface-sunken);
+  color: var(--color-accent-strong);
+  border-radius: var(--radius-sm);
+}
+
+/* A link that IS the control of what it sits in holds --touch-target-min, because the row around it
+   is not clickable: a list item's own link, a link that is its paragraph's whole content, a card's
+   "Open the comparison", a comparison column's heading link and an empty state's next step. The
+   class marks that role wherever the markup can express it; the three structural selectors cover the
+   contexts whose own structure already makes the role unambiguous, and they are deliberately narrow,
+   because an <a> inside a sentence cannot be told apart from one that is its paragraph's whole
+   content: sizing the former to this minimum would push the text around it apart. */
+.standalone-link,
+.listing-card__actions > a,
+.compare-table__listing > h3 > a,
+.empty-state > div a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
+}
+
+/* ==========================================================================
+   3. Navigation, collapsing on narrow screens
+   ========================================================================== */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nav__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  /* The expanded state this disclosure moves to changes the boundary width and the label colour,
+     so those two properties take the base duration; background and border colour are the hover
+     cue and take the fast one. Both durations come from the tokens, so tokens.css's
+     prefers-reduced-motion guard collapses them and this file needs no second copy of it. */
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    border-color var(--motion-duration-fast) ease-out,
+    border-width var(--motion-duration-base) ease-out,
+    color var(--motion-duration-base) ease-out;
+}
+
+.nav__toggle:hover {
+  background-color: var(--color-surface-sunken);
+}
+
+.nav__toggle:active {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent-strong);
+  border-width: var(--border-width-thick);
+}
+
+/* The disclosure states which way it will move by more than colour: the boundary thickens and
+   the label darkens, so the open state survives a reader who cannot see the tint. */
+.nav__toggle[aria-expanded="true"] {
+  border-width: var(--border-width-thick);
+  border-color: var(--color-accent);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-accent-strong);
+}
+
+.nav__menu {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-block: 0;
+  margin-inline: 0;
+  padding-inline-start: 0;
+  min-width: 0;
+  max-width: 100%;
+  list-style: none;
+}
+
+/* The menu opens when the component says it is open, by either mechanism the shell may use:
+   the class on the list, the class on the navigation, or the disclosure button's own state.
+   The list can therefore stay mounted, so aria-controls always resolves. */
+.nav__menu.is-open,
+.nav.is-open .nav__menu,
+.nav__toggle[aria-expanded="true"] + .nav__menu {
+  display: flex;
+}
+
+/* Kept in its own rule on purpose: a browser that cannot parse :has() drops only this rule,
+   leaving the three selectors above intact. It covers a menu shown by removing the hidden
+   attribute rather than by a class, which the state on the disclosure button still announces. */
+.nav:has(.nav__toggle[aria-expanded="true"]) .nav__menu {
+  display: flex;
+}
+
+.nav__item {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nav__link {
+  display: flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-3);
+  border-block-end: var(--border-width-thick) solid var(--color-divider);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--color-accent);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+.nav__link:hover {
+  background-color: var(--color-surface-sunken);
+  color: var(--color-accent-strong);
+}
+
+/* The current destination is marked without colour alone: the rule under it takes the accent,
+   the weight rises to bold and the underline gives way to that rule. */
+.nav__link[aria-current="page"] {
+  border-block-end-color: var(--color-accent);
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+  text-decoration: none;
+}
+
+/* Pressed on a destination: the same sunken fill the hover cue uses, with the rule under the
+   label and the label itself deepening to the strong accent. */
+.nav__link:active {
+  background-color: var(--color-surface-sunken);
+  border-block-end-color: var(--color-accent-strong);
+  color: var(--color-accent-strong);
+}
+
+@media (min-width: 48rem) {
+  .app-header {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3) var(--space-6);
+    padding-inline: var(--space-6);
+  }
+
+  .nav {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  /* At this width every destination is visible at once, so the disclosure has nothing left to
+     disclose and the collapsed state it expressed is unreachable. */
+  .nav__toggle {
+    display: none;
+  }
+
+  /* Author styles beat the user agent's [hidden] rule, which is what keeps the menu visible
+     when the component left the attribute on it as the viewport grew. */
+  .nav__menu,
+  .nav__menu[hidden] {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-4);
+  }
+}
+
+/* ==========================================================================
+   4. Demonstration identity: the banner and the account switcher
+   ========================================================================== */
+
+/* The persistent demonstration label. It stays visible and legible at every width: no rule
+   here hides it, truncates it or pins it to a narrow width, and its text wraps on the surface
+   it is drawn on. */
+.demo-banner {
+  margin-block: 0;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-banner-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-banner-surface);
+  color: var(--color-banner-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+/* Rendered directly under the shell, the band carries its own inset so its rounded edge never
+   meets the viewport. */
+.app-shell > .demo-banner {
+  margin-block: var(--space-3) 0;
+  margin-inline: var(--space-4);
+}
+
+.demo-account-switcher {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.demo-account-switcher label {
+  color: var(--color-heading);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.demo-account-switcher select {
+  width: auto;
+  min-height: var(--touch-target-min);
+  max-width: 100%;
+}
+
+.demo-account-switcher optgroup,
+.demo-account-switcher option {
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+}
+
+.demo-account-switcher__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (min-width: 48rem) {
+  /* The banner takes its own line inside the header row rather than sharing it with the
+     navigation, so the disclosure reads as a band across the shell. */
+  .demo-banner {
+    flex-basis: 100%;
+  }
+}
+
+/* ==========================================================================
+   5. Disclosures: the sponsored block, its label and the sample badge
+   ========================================================================== */
+
+/* The sponsored collection: its own labelled block on its own surface, separated from what is
+   above it by a rule, and rendered after the organic results on the home and listings pages.
+   Nothing here can move it above them — no flex order, no absolute positioning, no grid
+   placement — and the page renders nothing at all when the collection is empty, so this file
+   adds no empty box. It takes the top of the radius scale, because it is a panel in its own
+   right rather than a card inside one. */
+.sponsored-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-block: var(--space-7) 0;
+  padding-block: var(--space-5);
+  padding-inline: var(--space-4);
+  border-width: var(--border-width-thin);
+  border-style: solid;
+  border-color: var(--color-sponsor-border);
+  border-block-start-width: var(--border-width-thick);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-sponsor-surface);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sponsored-block > h2,
+.sponsored-block > h3 {
+  margin-block: 0;
+}
+
+.sponsored-block ul,
+.sponsored-block ol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-block: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+/* The label itself. Criterion 7 asserts that this text is rendered inside each sponsored item,
+   so nothing here hides, truncates, clips or repositions it, and it stays legible at 360px. */
+.sponsored-label {
+  display: inline-block;
+  align-self: flex-start;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2);
+  border: var(--border-width-thin) solid var(--color-sponsor-border);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-sponsor-surface);
+  color: var(--color-sponsor-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+/* The badge names the standard version, the scope of what was measured and the report id. Each
+   of those is part of a disclosure, so the text wraps at 360px rather than truncating, and the
+   border stays visible around it. */
+.sample-badge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  align-self: flex-start;
+  min-width: 0;
+  max-width: 100%;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-badge-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-badge-surface);
+  color: var(--color-badge-text);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-base);
+  overflow-wrap: anywhere;
+}
+
+.sample-badge__scope {
+  font-weight: var(--font-weight-medium);
+}
+
+.sample-badge__version,
+.sample-badge__report-id {
+  font-family: var(--font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   6. Explanatory states: empty, absent, malformed and throttled
+   ========================================================================== */
+
+/* An empty search, an empty board and a listing with no evaluation yet are states of the
+   product rather than failures: each renders as a heading, a sentence and an optional next
+   step. Nothing in this section is monospace, a stack trace or an error banner. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding-block: var(--space-5);
+  padding-inline: var(--space-5);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.empty-state h2,
+.empty-state h3,
+.empty-state h4 {
+  margin-block: 0;
+}
+
+/* The explanation names the filters that produced it, so it echoes the search text verbatim and a
+   long query is one unbreakable token. The paragraph is a flex item of the column-flex box above
+   and is not stretched, so its width is its fit-content width, whose floor is its min-content
+   width; `anywhere` is the value whose soft-wrap opportunities count toward that minimum, which is
+   what the machine-data rules below and above use, and it is why the body's `break-word` is not
+   enough here. Without it the echoed query measures its own 3777px and the page scrolls sideways. */
+.empty-state p {
+  margin-block: 0;
+  overflow-wrap: anywhere;
+}
+
+.empty-state > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* A write that failed, and a write that was throttled and may be repeated. The message has
+   room to wrap, and the retry instruction is part of the text rather than a tooltip. */
+.error-notice,
+.notice {
+  display: block;
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border-width: var(--border-width-thin);
+  border-style: solid;
+  border-color: var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.error-notice > :first-child,
+.notice > :first-child {
+  margin-block-start: 0;
+}
+
+.error-notice > :last-child,
+.notice > :last-child {
+  margin-block-end: 0;
+}
+
+.error-notice,
+.notice--error {
+  background-color: var(--color-notice-error-surface);
+  border-color: var(--color-notice-error-border);
+  color: var(--color-notice-error-text);
+}
+
+.notice--warning {
+  background-color: var(--color-notice-warning-surface);
+  border-color: var(--color-notice-warning-border);
+  color: var(--color-notice-warning-text);
+}
+
+.notice--success {
+  background-color: var(--color-notice-success-surface);
+  border-color: var(--color-notice-success-border);
+  color: var(--color-notice-success-text);
+}
+
+.notice--info {
+  background-color: var(--color-notice-info-surface);
+  border-color: var(--color-notice-info-border);
+  color: var(--color-notice-info-text);
+}
+
+/* Status changes the app announces politely — an evaluation result, a throttled-write retry
+   notice, a posted reply. The region is visible in the layout and wraps; it is never
+   display: none, never clipped, and never collapsed to no height. */
+.status-region,
+[aria-live] {
+  display: block;
+  margin-block: var(--space-4) 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.status-region > :first-child {
+  margin-block-start: 0;
+}
+
+.status-region > :last-child {
+  margin-block-end: 0;
+}
+
+
+/* ==========================================================================
+   7. Cards and lists
+   ========================================================================== */
+
+/* One listing: its identity, the outcome that was measured, the standard version and label it
+   carries, the license and pricing model it is offered under, an excerpt of its stated
+   limitations, and the control that adds it to a comparison. Layout, surface and border sit on
+   the card itself, so it reads correctly whichever inner element classes the component renders. */
+.listing-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block: var(--space-5);
+  padding-inline: var(--space-5);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.listing-card > * {
+  min-width: 0;
+}
+
+.listing-card h2,
+.listing-card h3,
+.listing-card p {
+  margin-block: 0;
+}
+
+.listing-card ul {
+  margin-block: 0;
+}
+
+.listing-card__title {
+  font-size: var(--font-size-xl);
+}
+
+/* The chip a report's own values render in, and one chip serves every consumer of them: the
+   listing card, the listing detail page, the report page and a comparison column, which render the
+   same datum and so carry the same chip rather than a second treatment of it. Only the tint changes
+   with the meaning. The outcome's two directions come from the outcome tokens, which alias the
+   notice triples rather than restating them, so an outcome and its notice can never drift apart.
+   The label's neutral tint comes from the badge triples — the tokens for a disclosure that says
+   what an artefact is — so a label never reads as a pass or a failure. The word itself carries the
+   meaning in every case, so every chip reads without its tint. */
+.chip {
+  display: inline-block;
+  align-self: flex-start;
+  /* In a card the chip is a flex item, where this has no effect; in a comparison it is a grid item,
+     where it keeps the pill the width of its word rather than the width of the row. */
+  justify-self: start;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+.chip--pass {
+  background-color: var(--color-outcome-pass-surface);
+  border-color: var(--color-outcome-pass-border);
+  color: var(--color-outcome-pass-text);
+}
+
+.chip--fail {
+  background-color: var(--color-outcome-fail-surface);
+  border-color: var(--color-outcome-fail-border);
+  color: var(--color-outcome-fail-text);
+}
+
+.chip--label {
+  background-color: var(--color-badge-surface);
+  border-color: var(--color-badge-border);
+  color: var(--color-badge-text);
+}
+
+/* The version that was measured and the standard version it was measured against: machine
+   data, so monospaced and always wrapping. */
+.listing-card__version,
+.listing-card__standard {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.listing-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* A fact in that row is a flex item, and a flex item's automatic minimum size is its min-content
+   size — so a value with no break opportunity in it, such as a license code, cannot shrink below
+   its own width and escapes the card, widening the document and giving a 360px viewport a
+   horizontal scroll that no other element on the page produces. `min-width: 0` lets the item
+   shrink and `anywhere` lets the token break: `break-word` breaks the line but still leaves the
+   min-content size at the whole token, which is why the version, the standard and the report id
+   already carry `anywhere` above. */
+.listing-card__meta > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The one text this file clamps, and only here: the excerpt of a card's stated limitations. The
+   whole sentence stays in the document, so assistive technology reads it in full, and the
+   listing page renders the limitations unclamped. The label, the outcome and the version are
+   never clamped. */
+.listing-card__limitations {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin-block: 0;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+/* A version with no report yet is explained rather than flagged: it is a state of the product,
+   not a failure of it. */
+.listing-card__no-report {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.listing-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-block-start: var(--space-1);
+}
+
+/* The control that adds a listing to a comparison, and the checkbox behind it, are a real
+   target rather than a bare box. */
+.listing-card__compare,
+.listing-card__actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding-inline: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+/* The pressed state of the compare toggle, in the treatment the navigation's disclosure already
+   uses for its expanded state (`.nav__toggle[aria-expanded="true"]`): the fill sinks, the boundary
+   thickens and takes the accent, and the text darkens, so a control that is on reads the same way
+   wherever it appears. The control's own label changes with its state as well, so the pressed
+   state never rests on colour alone. */
+.listing-card__compare[aria-pressed="true"] {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent);
+  border-width: var(--border-width-thick);
+  color: var(--color-accent-strong);
+}
+
+/* The boards and catalogues the pages render directly: the challenges board, the thread board
+   and the standards catalogue. Separators come from --color-divider, the value intended for a
+   rule that is not a control boundary. */
+.item-list,
+.standards-catalogue {
+  display: flex;
+  flex-direction: column;
+  margin-block: 0;
+  padding-inline-start: 0;
+  min-width: 0;
+  max-width: 100%;
+  list-style: none;
+}
+
+.item-list__item,
+.standards-catalogue > * {
+  padding-block: var(--space-4);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.standards-catalogue > * + * {
+  border-block-start: var(--border-width-thin) solid var(--color-divider);
+}
+
+/* No separator after the last item, so a board reads the same with one item, with none, and
+   with many. */
+.item-list__item {
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+}
+
+.item-list__item:last-child {
+  border-block-end: 0;
+}
+
+.item-list__item > :last-child,
+.standards-catalogue > * > :last-child {
+  margin-block-end: 0;
+}
+
+/* ==========================================================================
+   8. Tables: the shared table, the ledger reads and the illustrative index
+   ========================================================================== */
+
+/* Tables wrap instead of scrolling. The layout is fixed — every column takes an equal share of
+   the table's width — and the cells wrap, so a long case id, version string or amount stays
+   inside a 360px viewport whatever the column count, and no sideways scroll container is
+   created, which would itself have to be reachable by keyboard to stay usable. Measured against
+   an auto layout on the dense tables at 360px, equal shares also keep more short words on one
+   line, because an auto layout lets a column holding a long identifier take the width a short
+   header word needed; neither layout overflowed. */
+.table__wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.table {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--font-size-sm);
+}
+
+.table caption {
+  padding-block-end: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  text-align: start;
+}
+
+/* The inline padding is the narrowest value of the two below on purpose: a dense table at 360px
+   has little width per column, and every pixel given back to the text is a word that stays
+   whole. The breakpoint above restores the roomier value. */
+.table th,
+.table td {
+  padding-block: var(--space-2);
+  padding-inline: var(--space-2);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.table th {
+  background-color: var(--color-surface-elevated);
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+/* Amounts, entry types and the references tying an entry to its transaction or its report:
+   machine data, monospaced, and always wrapping rather than widening the table. */
+.ledger-table__amount,
+.opportunity-index-table__amount {
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.table--ledger .table__identifier,
+.ledger-table__identifier,
+.opportunity-index-table__identifier {
+  font-family: var(--font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+/* The dense reads — the report's per-case evidence and the operator's audit feed — stack as
+   label/value blocks below the breakpoint instead of holding equal columns. An equal share of a
+   360px viewport is about 65px for the evidence read's five columns and about 47px for the audit
+   feed's seven, and that is narrower than the machine data those columns carry: a 36-character case
+   id or uuid breaks across a dozen lines and a canonical JSON output at almost every character,
+   with the column labels breaking mid-word themselves. A sideways scroll is not the alternative —
+   this file's invariant forbids one — so every row becomes a block and every cell prints the label
+   of the column it is in, from the cell's own data-label, above its value. The ledger reads and the
+   comparison table are already stacked this way, for the same reason. */
+.table--dense,
+.table--dense thead,
+.table--dense tbody,
+.table--dense tr,
+.table--dense th,
+.table--dense td {
+  display: block;
+}
+
+/* Each cell prints its own column label below, so the header row is not repeated above every block
+   in the stacked form; the breakpoint below is where it comes back, and there it is stated once for
+   the whole table rather than at every cell. */
+.table--dense thead {
+  display: none;
+}
+
+/* Left as a table's own caption inside a block-level table, the caption is sized to its own content
+   and becomes a narrow column of its own — measured at 360px, a 68px column holding a sentence over
+   ten lines. As a block it takes the read's whole width, so the sentence naming the report and the
+   order its cases are in is read the same way the blocks under it are. */
+.table--dense caption {
+  display: block;
+}
+
+/* One row is one block, divided from the next, and the cells inside it carry neither the table's
+   cell borders nor its inline padding. */
+.table--dense tr {
+  padding-block: var(--space-2);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+}
+
+.table--dense tbody tr:last-child {
+  border-block-end: 0;
+}
+
+.table--dense th,
+.table--dense td {
+  padding-block: var(--space-1);
+  padding-inline: 0;
+  border-block-end: 0;
+}
+
+/* The label is muted so the value under it reads as the answer, and a row header keeps the heading
+   colour and the bold weight the shared table rules above give every `th`, so the line opening a
+   block is the line a reader finds first. */
+.table--dense td::before,
+.table--dense th[scope="row"]::before {
+  content: attr(data-label);
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Above the breakpoint the table is the table it was, because at that width its columns hold the
+   machine data comfortably: every one of those elements returns to its user-agent display — the
+   table, its header group, its row group, a row and a cell — and takes the shared table's geometry
+   back, while the per-cell labels go because the header row carries the same labels once. */
+@media (min-width: 48rem) {
+  .table--dense,
+  .table--dense thead,
+  .table--dense tbody,
+  .table--dense tr,
+  .table--dense th,
+  .table--dense td {
+    display: revert;
+  }
+
+  .table--dense tr {
+    padding-block: 0;
+    border-block-end: 0;
+  }
+
+  /* The caption is the table's own caption again at the width where the table is the table again. */
+  .table--dense caption {
+    display: revert;
+  }
+
+  .table--dense th,
+  .table--dense td {
+    padding-block: var(--space-2);
+    padding-inline: var(--space-3);
+    border-block-end: var(--border-width-thin) solid var(--color-divider);
+  }
+
+  .table--dense tbody tr:last-child th,
+  .table--dense tbody tr:last-child td {
+    border-block-end: 0;
+  }
+
+  .table--dense td::before,
+  .table--dense th[scope="row"]::before {
+    content: none;
+  }
+}
+
+/* The audit feed's Reason cell. The contract permits a reason of 1000 characters
+   (`packages/shared/src/schemas/moderation-schema.ts`) and the cell holds one equal share of the
+   feed's seven-column width, so a reason the cell cannot present whole is disclosed rather than
+   stretched across the row: printed inline it would run to dozens of lines and stretch one row
+   until the page around it was distorted. The geometry mirrors the ledger's refund disclosure,
+   `.ledger-table summary`, so a disclosure reads and behaves the same wherever it appears. */
+.table__reason summary {
+  display: inline-flex;
+  align-items: center;
+  /* The inline-flex box is what holds the touch target every control here takes, and the label it
+     wraps is the control. */
+  min-height: var(--touch-target-min);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    color var(--motion-duration-fast) ease-out;
+}
+
+/* Hover and pressed: the surface under the disclosure sinks, so the control is marked before it is
+   taken and while it is held. Nothing a reader needs is reachable through the cue alone — the label
+   states what opening it gives, and the ring tokens.css draws marks the focused one. */
+.table__reason summary:hover,
+.table__reason summary:active {
+  background-color: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+/* Pressed: the label deepens to the strong accent, the second cue marking the moment the whole
+   reason is disclosed. */
+.table__reason summary:active {
+  color: var(--color-accent-strong);
+}
+
+/* The disclosed reason sits under the label that opened it, set apart by that label's own block
+   padding rather than by a paragraph margin the cell's own alignment would take over. */
+.table__reason p {
+  margin-block: 0;
+  padding-block-start: var(--space-2);
+}
+
+/* The ledger panels read an append-only store; nothing here is a control over it. The note on
+   the founder-allocation view about the contract structure being undecided is legible and is
+   never truncated. */
+.ledger-table,
+.opportunity-index-table {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ledger-table__note,
+.opportunity-index-table__note {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.ledger-table summary {
+  display: inline-flex;
+  align-items: center;
+  /* The label and the identifier are two flex items of this container, and the whitespace between
+     them in the markup is not rendered as an anonymous flex item, so this gap is what separates
+     them. The inline-flex box is what holds the disclosure's --touch-target-min height. */
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    color var(--motion-duration-fast) ease-out;
+}
+
+/* Hover: the surface under the disclosure sinks, so the control is marked before it is taken.
+   Nothing a reader needs is reachable on hover alone — the label, the geometry and the touch
+   target are the same either way. */
+.ledger-table summary:hover {
+  background-color: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+/* Pressed: the same sunken fill, with the label deepening to the strong accent, which is the cue
+   that marks the moment the refund form under it is disclosed. */
+.ledger-table summary:active {
+  background-color: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent-strong);
+}
+
+/* ==========================================================================
+   9. The comparison table and its mobile reflow
+   ========================================================================== */
+
+/* Two to four listings compared side by side. Below the breakpoint the listings stack, one
+   readable block each, so no column has to be reached by scrolling sideways; at the breakpoint
+   the same blocks sit in a row and wrap when a fourth does not fit. Inside a block, a muted label
+   reads as the caption above its value in a single stack, because no two-track pairing can hold a
+   value's own floor width inside a four-column comparison: the value's track measured 92px there,
+   a 36-character identifier wrapped over three lines and a claim wrapped a word or two per line,
+   while a stack gives the value the block's whole width at every width. It is also the shape the
+   ledger views read a label and its value in, for the same reason.
+
+   At the breakpoint the groups of every column lie on one set of row tracks, because a comparison
+   is worth reading only where the same fact can be read across: while each column was an
+   independent flow, "Measured evidence" sat at y=954.5 in one column and y=930.5 in the other, and
+   at four columns the four positions differed by up to 209px. Every column therefore renders the
+   same six children — its title and five group wrappers, the fifth of which a caller may omit only
+   for every column at once — on the section's six tracks, and `grid-row: span 6` with an automatic
+   row position keeps a fourth column that does not fit in a new band of its own rather than
+   creating an implicit column that would widen the document.
+
+   A component that renders a real <table class="compare-table"> instead is supported by the
+   element-qualified rules below, which keep that table inside the viewport: fixed layout,
+   wrapping cells, no minimum width above the content box. Criterion 9 asserts that /compare has
+   no page-level horizontal scroll at 360px, and either shape satisfies it. */
+.compare-table {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  margin-block: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.compare-table__listing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.compare-table__listing > * {
+  min-width: 0;
+}
+
+.compare-table__listing > h3 {
+  margin-block: 0;
+}
+
+/* One group of a column: the heading that names a fact, and the facts under it. It is a flex
+   column so the heading sits directly above what it heads whatever the track heights are, and
+   `min-width: 0` keeps a long value from widening the column it lies in. */
+.compare-table__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* A group heading labels what follows rather than being a block of its own, so it adds no margin
+   of its own to the group's own gap. */
+.compare-table__group > h4 {
+  margin-block: 0;
+}
+
+.compare-table__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.compare-table__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.compare-table__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A listing named in the comparison that cannot be shown states which one is missing, rather
+   than failing the whole page. */
+.compare-table__absent {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* A real table inside this block keeps its own layout and still stays inside the viewport. */
+table.compare-table {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--font-size-sm);
+}
+
+table.compare-table th,
+table.compare-table td {
+  padding-block: var(--space-2);
+  /* The same narrow inline padding as the shared table, and for the same measured reason: a
+     comparison table at 360px has one column per listing and little width for each. */
+  padding-inline: var(--space-2);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+table.compare-table th {
+  background-color: var(--color-surface-elevated);
+  color: var(--color-heading);
+  font-weight: var(--font-weight-bold);
+}
+
+@media (min-width: 48rem) {
+  /* Six shared row tracks: one for the title of a column and one per group, so the groups of every
+     column begin on the same line and a fact can be read across the comparison as a row. */
+  .compare-table {
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    grid-template-rows: repeat(6, auto);
+    row-gap: var(--space-3);
+  }
+
+  /* Each column lays its six children on those tracks instead of flowing to its own heights. The
+     padding is the same in every column, so the contents of one track still line up across them. */
+  .compare-table__listing {
+    display: grid;
+    grid-row: span 6;
+    grid-template-rows: subgrid;
+    align-content: start;
+  }
+}
+
+
+/* ==========================================================================
+   10. Fields, controls and buttons
+   ========================================================================== */
+
+/* A field is a real label above its control, an optional hint, and — when the control is
+   invalid — a sentence beside it explaining what to change. The label is never hidden with
+   display: none, clipping or any other technique that removes it from the layout or from the
+   accessibility tree; where a label has to be reduced visually, .visually-hidden is the only
+   mechanism this file offers. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-block: 0 var(--space-5);
+  margin-inline: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* A fieldset groups controls rather than being one, so its own frame and padding are reset and
+   its legend aligns with every other field's label above it. */
+fieldset.field {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+fieldset.field > legend {
+  padding-inline: 0;
+  margin-block-end: var(--space-2);
+}
+
+.field > * {
+  min-width: 0;
+}
+
+.field__label {
+  display: block;
+  color: var(--color-heading);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.field__hint {
+  margin-block: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The error sentence belongs beside its own control, and the state it describes is carried by
+   this text and by the boundary below — never by colour alone. */
+.field__error {
+  margin-block: 0;
+  color: var(--color-notice-error-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+/* Text controls, selects and textareas share one appearance, drawn with --color-border — the
+   custom property that holds 3:1 against every surface a control can sit on, so the boundary of
+   each control is perceivable on its own. */
+select,
+textarea,
+input[type="text"],
+input[type="search"],
+input[type="number"],
+input[type="url"],
+.field__input {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    border-color var(--motion-duration-fast) ease-out;
+}
+
+select:hover,
+textarea:hover,
+input[type="text"]:hover,
+input[type="search"]:hover,
+input[type="number"]:hover,
+input[type="url"]:hover,
+.field__input:hover {
+  border-color: var(--color-accent);
+}
+
+/* An invalid control is marked by a thicker boundary as well as by the colour of that boundary,
+   and the sentence beside it says what is wrong. */
+select[aria-invalid="true"],
+textarea[aria-invalid="true"],
+input[aria-invalid="true"],
+.field--error select,
+.field--error textarea,
+.field--error .field__input {
+  border-width: var(--border-width-thick);
+  border-color: var(--color-notice-error-border);
+}
+
+/* Multiline text grows downward only, at least three touch targets tall, and a long case id
+   wraps inside it rather than widening the page. */
+textarea {
+  min-height: calc(var(--touch-target-min) * 3);
+  resize: vertical;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The evaluation submission is an array of recorded outputs: machine data, monospaced, wrapping. */
+.field__input--mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A disabled control is marked by its fill, by dimmed text and by the cursor, so the state does
+   not rest on the colour shift alone. */
+select:disabled,
+textarea:disabled,
+input:disabled {
+  background-color: var(--color-disabled-surface);
+  border-color: var(--color-divider);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+}
+
+/* The option groups: the checkout panel's offers and the Academy's answers. Each option is a
+   real label with a hit area of at least one touch target, and the options wrap rather than
+   compressing into one line. */
+.field__group {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.field__group label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-1);
+  color: var(--color-text);
+  font-size: var(--font-size-base);
+  cursor: pointer;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+/* The platform draws the control's own box, so the accent is the property that can carry a state
+   cue, and on hover and on press it deepens to the strong accent — the value tokens.css names as
+   the hover and active fill. The label around the control keeps the whole touch target, so the
+   control stays as easy to hit as it was. */
+input[type="checkbox"]:hover,
+input[type="radio"]:hover {
+  accent-color: var(--color-accent-strong);
+}
+
+input[type="checkbox"]:active,
+input[type="radio"]:active {
+  accent-color: var(--color-accent-strong);
+}
+
+/* One button, three named variants. Every state carries a cue other than colour: disabled dims
+   the fill and the text and changes the cursor, focus is the outline tokens.css draws, and each
+   variant is named by its own label in the component. Hover only ever repeats the resting
+   appearance, so nothing a reader needs is reachable on hover alone. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-5);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-base);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    border-color var(--motion-duration-fast) ease-out,
+    color var(--motion-duration-fast) ease-out;
+}
+
+.button:hover {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent);
+}
+
+/* Pressed: the fill sinks to the sunken surface, the boundary thickens to the thick width and
+   the accent deepens to its strong value — every one of them a token that already exists, so the
+   press adds no literal and no second vocabulary. Each :active rule sits directly under the
+   :hover rule it follows, above the disabled rule, which keeps its own tokens and cursor. */
+.button:active {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent-strong);
+  border-width: var(--border-width-thick);
+}
+
+.button--primary {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-text);
+}
+
+.button--primary:hover {
+  background-color: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+}
+
+/* The primary button's text sits on the strong accent fill, so the pressed rule restates the
+   colour that fill carries rather than letting the base variant's accent text go. */
+.button--primary:active {
+  background-color: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+  color: var(--color-accent-text);
+  border-width: var(--border-width-thick);
+}
+
+.button--secondary {
+  background-color: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.button--secondary:hover {
+  background-color: var(--color-surface-sunken);
+}
+
+.button--secondary:active {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent-strong);
+  border-width: var(--border-width-thick);
+}
+
+.button--destructive {
+  background-color: var(--color-danger-surface);
+  border-color: var(--color-danger-surface);
+  color: var(--color-danger-text);
+}
+
+/* The destructive variant's text is laid on the danger fill, so its hover rule restates that
+   fill: .button:hover's light surface would otherwise leave white text on a near-white
+   background, at roughly 1:1. The primary variant restates its fill above for the same reason. */
+.button--destructive:hover {
+  background-color: var(--color-danger-surface);
+  border-color: var(--color-heading);
+}
+
+.button--destructive:active {
+  background-color: var(--color-danger-surface);
+  border-color: var(--color-heading);
+  border-width: var(--border-width-thick);
+}
+
+/* Disabled: the dimmed fill, the dimmed text and the not-allowed cursor say the control cannot
+   act, and the boundary stays the thin one the :active rules above thicken, so a held press
+   cannot change the size of a control that cannot be activated. */
+.button[disabled],
+.button:disabled {
+  background-color: var(--color-disabled-surface);
+  border-color: var(--color-disabled-surface);
+  border-width: var(--border-width-thin);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+}
+
+.button[aria-busy="true"] {
+  cursor: progress;
+}
+
+/* ==========================================================================
+   11. Form and panel blocks
+   ========================================================================== */
+
+/* The filter bar above the listings: one column of fields on a narrow screen, a wrapping row of
+   them above the breakpoint where the fields share the width instead of each taking a line. */
+.search-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.search-filters .field {
+  margin-block-end: 0;
+}
+
+/* The panels that carry a form: the buyer's inquiry, the buyer's challenge, a reply on a
+   thread, a standards proposal. Each is its own surface, so it reads as one block beside the
+   content it acts on. */
+.inquiry-form,
+.challenge-form,
+.thread-reply-form,
+.standards-proposal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.inquiry-form > .field,
+.challenge-form > .field,
+.thread-reply-form > .field,
+.standards-proposal-form > .field {
+  margin-block-end: 0;
+}
+
+.inquiry-form .button,
+.challenge-form .button,
+.thread-reply-form .button,
+.standards-proposal-form .button {
+  align-self: flex-start;
+}
+
+/* Offer selection and the simulated transaction. Every amount here is integer minor units of
+   the synthetic currency, monospaced and never truncated, and the disclosure beside it is plain
+   text in the layout rather than a title attribute. */
+.checkout-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.checkout-panel__disclosure {
+  margin-block: 0;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-notice-warning-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-notice-warning-surface);
+  color: var(--color-notice-warning-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.checkout-panel__amount {
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+/* The operator's listing actions. Each is a named variant with its own label, so the action
+   reads without its fill. */
+.moderation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-3);
+  border: var(--border-width-thin) solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-sunken);
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (min-width: 48rem) {
+  .search-filters {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .search-filters .field {
+    flex: 1 1 12rem;
+    min-width: 0;
+  }
+
+  /* Roomier cells once the table has the width for them. */
+  .table th,
+  .table td {
+    padding-inline: var(--space-3);
+  }
+
+  table.compare-table th,
+  table.compare-table td {
+    padding-inline: var(--space-3);
+  }
+}
+
+/* The Academy's questionnaire. Its result appears in the visible status region below it rather
+   than in a dialog or a tooltip, and nothing about it is persisted. */
+.self-assessment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.self-assessment__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.self-assessment__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.self-assessment__result {
+  margin-block: 0;
+}
+
+.self-assessment__gaps {
+  margin-block: var(--space-2) 0;
+}
+
+
+/* ==========================================================================
+   12. Utilities and shrink guards
+   ========================================================================== */
+
+/* The one way text is reduced visually, and a last resort: the text stays in the document and in
+   the accessibility tree. It is never applied to the demonstration banner, the sponsored label,
+   the sample badge, a form label, a live region or any other disclosure.
+
+   The three 1px values below — the width, the height and the negative margin — are this
+   utility's own geometry, deliberately literal rather than values of the token set: tokens.css
+   holds the UI's colours, space, radius, border widths, type and motion, and its own header
+   leaves a dimension that belongs to one element's own box with that element's rule. A box that
+   has to stay sub-perceivable is not a scale value, so the literals here are a decision and not
+   a slip. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The one way a stored body of text is rendered, and every element that carries one uses it: a
+   thread reply, a challenge question or response, a proposal's rationale, a recorded reason. The
+   value arrives with the line breaks its author typed, so `pre-wrap` renders them instead of
+   collapsing each run of whitespace to the single space `normal` produces, and still wraps a long
+   unbroken run inside the column the element sits in. It is a utility rather than a block class —
+   the header above names a block after the component that owns it — because several page modules
+   apply it and no one component does. It sets no colour and no dimension, so it takes no value
+   from the token set. */
+.stored-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* An element with intrinsic content — a table, a textarea, an inline SVG — is capped at the
+   column it sits in, and the flex and grid children that could otherwise refuse to shrink are
+   allowed to. Together with the wrapping rules above, this is what keeps a 360px viewport free
+   of horizontal scrolling. */
+table,
+pre,
+textarea,
+input,
+select,
+button,
+fieldset,
+figure {
+  max-width: 100%;
+}
+
+.app-shell > *,
+.app-header > *,
+.app-main > *,
+.page > *,
+.item-list > *,
+.compare-table > *,
+.checkout-panel > *,
+.ledger-table > *,
+.opportunity-index-table > * {
+  min-width: 0;
+}
+

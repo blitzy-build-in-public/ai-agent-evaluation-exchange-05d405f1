@@ -1,0 +1,17 @@
+{
+  "name": "@adem/extension-fixture-pack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@adem/sgi-core": "0.1.0",
+    "@adem/sgi-fixtures": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5"
+  }
+}

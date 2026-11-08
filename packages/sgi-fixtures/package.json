@@ -1,0 +1,16 @@
+{
+  "name": "@adem/sgi-fixtures",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only deterministic fixture pack for the SGI-SO-1.0.0 standard, with a typed loader.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@adem/shared": "0.1.0",
+    "typescript": "5.4.5"
+  }
+}
