@@ -1,3 +1,5 @@
+import { renderReceived } from "../config";
+
 /**
  * The single rounding point of the entire product.
  *
@@ -55,18 +57,4 @@ export function allocate(amountMinorUnits: number, rateBasisPoints: number): num
   const frac = product % 10000;
 
   return whole / 10000 + (frac >= 5000 ? 1 : 0);
-}
-
-/**
- * Renders a received value for a refusal message. A refusal must be the documented
- * `RangeError` whatever an untyped caller passes, which interpolating the value into the
- * message cannot promise: `String` is defined for a symbol, and a value whose own text
- * conversion raises is answered with text read from its type, which no value can influence.
- */
-function renderReceived(value: unknown): string {
-  try {
-    return String(value);
-  } catch {
-    return `a value of type ${typeof value}`;
-  }
 }

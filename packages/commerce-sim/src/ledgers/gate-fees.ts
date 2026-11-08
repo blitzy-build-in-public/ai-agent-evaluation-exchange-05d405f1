@@ -53,17 +53,11 @@
  * reads no environment variable, resolves no path and touches no file.
  */
 
-import type Database from "better-sqlite3";
+import type { Database } from "better-sqlite3";
 
 import type { CommerceConfig } from "../config";
 import type { LedgerEntry, LedgerEntryInput } from "./ledger-types";
 import { insertLedgerEntry } from "./ledger-repository";
-
-/**
- * The caller's database handle, taken from the driver's own declaration so every module of this
- * package speaks about the same connection type.
- */
-type SqliteDatabase = Database.Database;
 
 /**
  * What one gate-evaluation fee is recorded from: the report of the completed evaluation, and the
@@ -122,7 +116,7 @@ export interface RecordGateFeeChargeInput {
  * @returns The appended entry, or `null` when the configured fee is zero and nothing was appended.
  */
 export function recordGateFeeCharge(
-  db: SqliteDatabase,
+  db: Database,
   input: RecordGateFeeChargeInput,
 ): LedgerEntry | null {
   if (input.config.gateFeeMinorUnits === 0) {

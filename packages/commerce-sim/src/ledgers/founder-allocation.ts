@@ -48,18 +48,12 @@
  * to what it corrects — and it is not built here: this module only ever allocates.
  */
 
-import type Database from "better-sqlite3";
+import type { Database } from "better-sqlite3";
 
 import type { CommerceConfig } from "../config";
 import { allocate } from "./allocate";
 import type { LedgerEntry, LedgerEntryInput } from "./ledger-types";
 import { insertLedgerEntry } from "./ledger-repository";
-
-/**
- * The caller's database handle, taken from the driver's own declaration so every module of this
- * package speaks about the same connection type.
- */
-type SqliteDatabase = Database.Database;
 
 /**
  * What one founder-allocation append is computed from: the transaction the allocation belongs to,
@@ -122,7 +116,7 @@ export interface RecordFounderAllocationInput {
  *   non-negative safe integer, or if their product is not one.
  */
 export function recordFounderAllocation(
-  db: SqliteDatabase,
+  db: Database,
   input: RecordFounderAllocationInput,
 ): LedgerEntry {
   // The one call to the product's single rounding point, made once so the amount the entry carries

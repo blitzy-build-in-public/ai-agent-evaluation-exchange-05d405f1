@@ -18,7 +18,7 @@
  * rounding point is the half-up allocation in `./ledgers/allocate.ts`, and a second one here would
  * be a second place for a fraction to be resolved differently.
  *
- * **A currency label cannot be configured.** See {@link CommerceConfigOverrides}.
+ * **Neither label can be configured.** See {@link CommerceConfigOverrides}.
  *
  * The resolved configuration is a pure function of the overrides a caller passes: nothing here
  * reads a clock, a random source or a file, which is what lets a test reproduce a fee or an
@@ -111,16 +111,20 @@ export interface CommerceConfig {
 /**
  * The configuration overrides {@link resolveCommerceConfig} accepts.
  *
- * `currencyLabel` is omitted deliberately, and that omission is the reason this type exists instead
- * of a bare `Partial<CommerceConfig>`: with no way to pass another currency label, the
- * `CHECK (currency_label = <the product's one label>)` constraint the migrations place on every
- * monetary table is unreachable by any code path rather than merely improbable, and the type system
- * refuses the mistake at the call site instead of the database refusing it at the insert.
+ * Two members are omitted deliberately, and those omissions are the reason this type exists instead
+ * of a bare `Partial<CommerceConfig>`.
  *
- * A `disclosureLabel` member is admitted by the type — only the currency label is omitted — but
- * resolution always returns {@link COMMERCE_DISCLOSURE_LABEL}: the product renders one disclosure
- * sentence, and a caller free to substitute another would be free to weaken a labelling obligation.
- * The member carries the default's shape for that reason and nothing more.
+ * `currencyLabel` is omitted because the product's currency label has one spelling: with no way to
+ * pass another, the `CHECK (currency_label = <the product's one label>)` constraint the migrations
+ * place on every monetary table is unreachable by any code path rather than merely improbable, and
+ * the type system refuses the mistake at the call site instead of the database refusing it at the
+ * insert.
+ *
+ * `disclosureLabel` is omitted for the same reason at the labelling duty rather than at the schema:
+ * the disclosure sentence is what the product owes every simulated amount, not an option a caller
+ * may set, so a substituted sentence is refused at the call site — where the caller can see why —
+ * rather than admitted and then quietly overruled by resolution. A caller free to substitute a
+ * weaker sentence would be free to weaken the obligation.
  *
  * Every member is optional, and `exactOptionalPropertyTypes` makes optionality exact: a member may
  * be absent, but a member that is present may not be `undefined`. A caller that means "use the
@@ -128,7 +132,9 @@ export interface CommerceConfig {
  * refuses — a distinction worth knowing at the call site, since an omitted member and one written
  * as `undefined` would otherwise look interchangeable.
  */
-export type CommerceConfigOverrides = Partial<Omit<CommerceConfig, "currencyLabel">>;
+export type CommerceConfigOverrides = Partial<
+  Omit<CommerceConfig, "currencyLabel" | "disclosureLabel">
+>;
 
 /**
  * The default configuration, for a caller that needs the product's resolved values without
@@ -210,8 +216,11 @@ function requireNonNegativeSafeInteger(memberName: string, value: number): numbe
  * whatever an untyped caller passes, which interpolating the value into the message cannot promise:
  * `String` is defined for a symbol, and a value whose own text conversion raises is answered with
  * text read from its type, which no value can influence.
+ *
+ * It is exported for this package's own modules only: the package's public entry must not re-export
+ * it, so nothing outside `packages/commerce-sim` reaches it.
  */
-function renderReceived(value: unknown): string {
+export function renderReceived(value: unknown): string {
   try {
     return String(value);
   } catch {

@@ -42,17 +42,11 @@
  * took in, and no field of it can hold a real currency code, a payment instrument or a person.
  */
 
-import type Database from "better-sqlite3";
+import type { Database } from "better-sqlite3";
 
 import type { CommerceConfig } from "../config";
 import type { LedgerEntry, LedgerEntryInput } from "./ledger-types";
 import { insertLedgerEntry } from "./ledger-repository";
-
-/**
- * The caller's database handle, taken from the driver's own declaration so every module of this
- * package speaks about the same connection type.
- */
-type SqliteDatabase = Database.Database;
 
 /**
  * The one thing a marketplace charge says. The text is fixed rather than composed from the
@@ -115,7 +109,7 @@ export interface RecordMarketplaceChargeInput {
  * @returns The appended entry, carrying the generated identifier and insertion instant.
  */
 export function recordMarketplaceCharge(
-  db: SqliteDatabase,
+  db: Database,
   input: RecordMarketplaceChargeInput,
 ): LedgerEntry {
   const entry: LedgerEntryInput = {

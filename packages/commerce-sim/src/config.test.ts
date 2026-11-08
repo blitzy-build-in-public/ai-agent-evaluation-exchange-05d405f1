@@ -151,12 +151,26 @@ describe("resolveCommerceConfig", () => {
   });
 
   it("returns the product's currency label and disclosure label however a caller asks", () => {
-    // `CommerceConfigOverrides` omits `currencyLabel`, so this call site passes only the member the
-    // type admits; resolution answers with the product's own two labels either way.
-    const resolved = resolveCommerceConfig({ disclosureLabel: COMMERCE_DISCLOSURE_LABEL });
+    // `CommerceConfigOverrides` omits both labels, so this call site passes only a member the type
+    // admits; resolution answers with the product's own two labels either way.
+    const resolved = resolveCommerceConfig({ gateFeeMinorUnits: DEFAULT_GATE_FEE_MINOR_UNITS });
 
     expect(resolved.currencyLabel).toBe(SYNTHETIC_CURRENCY_LABEL);
     expect(resolved.disclosureLabel).toBe(COMMERCE_DISCLOSURE_LABEL);
+  });
+
+  it("refuses both labels at the override type, and ignores either one that reaches resolution", () => {
+    // A directive that suppresses nothing is a compile error in its turn, so these two hold the
+    // refusal in place: `CommerceConfigOverrides` omits both labels, and a call passing either one
+    // does not compile. The refusal is what protects the labelling obligation, since a caller free to
+    // substitute a currency label or a weaker disclosure sentence would be free to weaken what the
+    // product publishes. Resolution reads neither member, so a substitution that reaches it through a
+    // caller the types do not cover is neither refused nor honoured — it is ignored, which the
+    // cast-based test beside this one proves against the resolved values.
+    // @ts-expect-error `CommerceConfigOverrides` omits `currencyLabel`, so this call does not compile
+    expect(() => resolveCommerceConfig({ currencyLabel: SYNTHETIC_CURRENCY_LABEL })).not.toThrow();
+    // @ts-expect-error `CommerceConfigOverrides` omits `disclosureLabel`, so this call does not compile
+    expect(() => resolveCommerceConfig({ disclosureLabel: COMMERCE_DISCLOSURE_LABEL })).not.toThrow();
   });
 
   it("ignores a currency label and a disclosure label smuggled past the override type", () => {

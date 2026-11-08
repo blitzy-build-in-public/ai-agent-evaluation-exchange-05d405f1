@@ -2,23 +2,29 @@
  * Unit tests for the founder-allocation writer: the one row an eligible completed simulated
  * marketplace transaction appends to the founder-allocation ledger.
  *
- * Every case runs in process against a real SQLite database held in memory and built from the
- * `ledger_entries` DDL of `packages/shared/migrations/0008_commerce_ledgers_and_refunds.sql`, column
- * for column and `CHECK` for `CHECK`: the ledger discriminator, the entry kinds, the two directions,
- * the non-negative amount guard, the synthetic-currency guard and the table-level pair constraint
- * that keeps a transaction reference and a report reference from co-occurring are properties of the
- * table rather than of the function alone, so a vocabulary drift has to fail a case here instead of
- * passing silently. The foreign keys are deliberately not carried over — `transactions` and
- * `evaluation_reports` are not part of this unit fixture, and a transaction identifier is a plain
- * string here whose referential truth belongs to the API's integration suite — and the append-only
- * abort triggers of `0010_append_only_triggers.sql` are deliberately not stood in for either: what
- * this file asserts is the property the writer holds, that repeated calls only append rows and leave
- * the rows already appended as they were written. The proof that no route rewrites an append-only
- * row belongs to that integration suite, which owns the routes and the triggers together.
+ * Every case runs in process against a real SQLite database held in memory and built from the ordered
+ * migrations in `packages/shared/migrations/`, applied in filename order exactly as the server's
+ * runner applies them: the ledger discriminator, the entry kinds, the two directions, the non-negative
+ * amount guard, the synthetic-currency guard and the table-level pair constraint that keeps a
+ * transaction reference and a report reference from co-occurring are properties of the delivered
+ * schema rather than of the function alone, so a schema drift has to fail a case here instead of
+ * passing silently. The connection enables `foreign_keys`, and the fixture seeds every row an
+ * allocation references — the buyer and the developer with their category, listing and version, and
+ * the two transactions this file's own two identifiers name — so the transaction an allocation is
+ * computed from is a row of the delivered tables and the delivered reference holds. The append-only
+ * abort triggers of `0010_append_only_triggers.sql` arrive with those migrations, as they do in the
+ * delivered schema: what this file asserts is the property the writer holds, that repeated calls only
+ * append rows and leave the rows already appended as they were written. The proof that no route
+ * rewrites an append-only row belongs to the API's integration suite in `apps/api/test/integration/`,
+ * which owns the routes.
  *
  * No HTTP server, no database file and no per-package runner configuration: the file is discovered
  * by the root unit configuration's `packages/ * /src/**` glob.
  */
+
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -32,25 +38,20 @@ import { recordFounderAllocation } from "./founder-allocation";
 import type { RecordFounderAllocationInput } from "./founder-allocation";
 import { listLedgerEntries } from "./ledger-repository";
 
+/** The ordered migrations, resolved from this module's location rather than the working directory. */
+const migrationsDir = fileURLToPath(new URL("../../../shared/migrations/", import.meta.url));
+
 /**
- * The `ledger_entries` DDL of migration 0008, with its column names, its three closed vocabularies,
- * its non-negative amount guard, its synthetic-currency guard and its table-level pair constraint
- * reproduced as the migration states them.
+ * The rows every fixture allocation hangs from: the buyer whose transactions are journalled, the
+ * developer who owns the listing, the category that listing sits in, the listing itself and its first
+ * version. All five are fixed and invented, and they are the same demonstration identities this
+ * workspace's sibling fixtures store.
  */
-const CREATE_LEDGER_ENTRIES_SQL = `CREATE TABLE ledger_entries (
-  id                 TEXT PRIMARY KEY,
-  ledger             TEXT NOT NULL CHECK (ledger IN ('marketplace', 'gate_fees', 'founder_allocation')),
-  entry_type         TEXT NOT NULL CHECK (entry_type IN ('charge', 'allocation', 'reversal')),
-  direction          TEXT NOT NULL CHECK (direction IN ('debit', 'credit')),
-  amount_minor_units INTEGER NOT NULL CHECK (amount_minor_units >= 0),
-  transaction_id     TEXT,
-  report_id          TEXT,
-  currency_label     TEXT NOT NULL CHECK (currency_label = 'DEMO'),
-  disclosure_label   TEXT NOT NULL,
-  description        TEXT NOT NULL,
-  created_at         TEXT NOT NULL,
-  CHECK ((transaction_id IS NULL) <> (report_id IS NULL))
-)`;
+const BUYER_ACCOUNT_ID = "b2c7d1e9-4f60-4a83-9e57-1c8b3d0f6a24";
+const DEVELOPER_ACCOUNT_ID = "5d3a9c07-2e81-4f6b-9a40-8c1f6d27b3e9";
+const CATEGORY_ID = "e41b8d76-9c02-4a35-8f61-7d0e5b94c218";
+const LISTING_ID = "c5e9a27b-1d34-4f80-b65c-2a7e9d1f4b38";
+const LISTING_VERSION_ID = "7a3d8f51-6c20-4b97-8e14-d9f2a5c30b6e";
 
 /** The columns a stored row is read through, in the table's own order. */
 const SELECT_STORED_ENTRY_SQL = `SELECT
@@ -80,8 +81,9 @@ const LEDGER_ENTRY_COLUMNS: readonly string[] = [
 ];
 
 /**
- * The fiction this file stores: two fixed, invented transaction identifiers, neither corresponding
- * to a row anywhere — this fixture holds no parent tables, so a reference is an opaque string here.
+ * The fiction this file stores: two fixed, invented transaction identifiers, each naming a seeded
+ * transaction row that {@link seedReferencedRows} writes, so the reference an allocation carries is a
+ * real reference rather than an opaque string.
  */
 const TRANSACTION_ID = "1f2b6d84-9a30-4c57-8e12-6b4d7c05a9f3";
 const SECOND_TRANSACTION_ID = "5d8e3c17-2b64-4a09-8f51-3c7a0e9b6d24";
@@ -145,6 +147,88 @@ interface StoredLedgerEntryRow {
 
 let db: Database.Database;
 
+/** Applies every migration in filename order, which is the order the server's runner applies them. */
+function applyMigrations(database: Database.Database): void {
+  for (const file of readdirSync(migrationsDir)
+    .filter((name) => name.endsWith(".sql"))
+    .sort()) {
+    database.exec(readFileSync(join(migrationsDir, file), "utf8"));
+  }
+}
+
+/**
+ * Seeds every row the fixture's allocations reference, in the order the delivered references require:
+ * the two accounts, the category, the listing the developer owns and its first version, and the two
+ * transactions this file's own two identifiers name.
+ */
+function seedReferencedRows(): void {
+  const insertAccount =
+    db.prepare("INSERT INTO accounts (id, handle, role, display_label) VALUES (?, ?, ?, ?)");
+
+  insertAccount.run(BUYER_ACCOUNT_ID, "demo-buyer-handle", "buyer", "Demo buyer account");
+  insertAccount.run(
+    DEVELOPER_ACCOUNT_ID,
+    "demo-developer-handle",
+    "developer",
+    "Demo developer account",
+  );
+
+  db.prepare("INSERT INTO categories (id, slug, name) VALUES (?, ?, ?)").run(
+    CATEGORY_ID,
+    "demo-category",
+    "Demo category",
+  );
+
+  db.prepare(
+    `INSERT INTO listings
+       (id, developer_account_id, slug, title, summary, category_id, license_code, pricing_model, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    LISTING_ID,
+    DEVELOPER_ACCOUNT_ID,
+    "demo-listing",
+    "Demo listing",
+    "A seeded listing used to reference a real row.",
+    CATEGORY_ID,
+    "MIT",
+    "purchase",
+    "active",
+    FIXTURE_INSTANT,
+    FIXTURE_INSTANT,
+  );
+
+  db.prepare(
+    `INSERT INTO listing_versions
+       (id, listing_id, version_string, notes, is_fixture_candidate, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(LISTING_VERSION_ID, LISTING_ID, "1.0.0", "The first version.", 0, FIXTURE_INSTANT);
+
+  const insertTransaction = db.prepare(
+    `INSERT INTO transactions
+       (id, buyer_account_id, listing_id, listing_version_id, offer_model,
+        amount_minor_units, currency_label, simulated, disclosure_label, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  // One row per identifier this file computes an allocation from, so each allocation's reference is a
+  // row the transactions table holds. The two labels are the table's own: the synthetic currency
+  // label its `CHECK` admits and the resolved configuration's disclosure label.
+  for (const transactionId of [TRANSACTION_ID, SECOND_TRANSACTION_ID]) {
+    insertTransaction.run(
+      transactionId,
+      BUYER_ACCOUNT_ID,
+      LISTING_ID,
+      LISTING_VERSION_ID,
+      "purchase",
+      INPUT_MEMBERS.netAmountMinorUnits,
+      SYNTHETIC_CURRENCY_LABEL,
+      1,
+      CONFIG.disclosureLabel,
+      FIXTURE_INSTANT,
+    );
+  }
+}
+
 /** An input for one append, with no clock supplied. */
 function inputFor(
   netAmountMinorUnits: number,
@@ -178,7 +262,9 @@ function storedRowCount(): number {
 
 beforeEach(() => {
   db = new Database(":memory:");
-  db.exec(CREATE_LEDGER_ENTRIES_SQL);
+  db.pragma("foreign_keys = ON");
+  applyMigrations(db);
+  seedReferencedRows();
 });
 
 afterEach(() => {

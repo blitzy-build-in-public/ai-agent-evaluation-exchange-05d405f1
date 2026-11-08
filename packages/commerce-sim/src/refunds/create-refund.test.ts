@@ -3,17 +3,19 @@
  * and the atomic write that appends it with the pair of reversal entries it rules.
  *
  * Every case runs in process against a real SQLite database held in memory and built from the ordered
- * migrations in `packages/shared/migrations/`, because this module's contract is a set of statements
- * executed against the real schema: the column shapes of `transactions`, `refunds` and
- * `ledger_entries`, their `CHECK` constraints, the foreign keys and the append-only behaviour are
- * properties of the tables rather than of the functions alone. The connection enables `foreign_keys`
- * and the fixture seeds the accounts, category, listing and version a transaction references, so an
- * append here succeeds against the real relationships rather than because a constraint was switched
- * off. The abort triggers of `0010_append_only_triggers.sql` are deliberately not stood in for: what
- * this file asserts is that repeated refunds only append rows and leave the rows already written
- * exactly as they were, which is the property the module holds. The proof that no route rewrites an
- * append-only row belongs to the API's integration suite, which owns the routes and the triggers
- * together.
+ * migrations in `packages/shared/migrations/`, applied in filename order exactly as the server's runner
+ * applies them, because this module's contract is a set of statements executed against the real
+ * schema: the column shapes of `transactions`, `refunds` and `ledger_entries`, their `CHECK`
+ * constraints, the foreign keys and the append-only behaviour are properties of the delivered tables
+ * rather than of the functions alone. The connection enables `foreign_keys` and the fixture seeds the
+ * accounts, category, listing and version a transaction references, so an append here succeeds against
+ * the real relationships rather than because a constraint was switched off. The abort triggers of
+ * `0010_append_only_triggers.sql` arrive with those migrations, as they do in the delivered schema:
+ * what this file asserts is that repeated refunds only append rows and leave the rows already written
+ * exactly as they were, which is the property the module holds, and its atomicity case stands a
+ * temporary refusal of its own in front of the delivered table rather than a second schema beside it.
+ * The proof that no route rewrites an append-only row belongs to the API's integration suite in
+ * `apps/api/test/integration/`, which owns the routes.
  *
  * No HTTP server, no database file and no per-package runner configuration: the file is discovered by
  * the root unit configuration's `packages/ * /src/**` glob.
@@ -83,49 +85,6 @@ const DEFAULT_CONFIG = resolveCommerceConfig();
 
 /** The clock a case appends under, so an inserted instant is a known value rather than a reading. */
 const pinnedNow = (): string => FIXTURE_INSTANT;
-
-/**
- * The three commerce tables of `packages/shared/migrations/0008_commerce_ledgers_and_refunds.sql`,
- * reproduced for the atomicity case with the `ledger_entries` vocabulary narrowed to the marketplace
- * ledger alone. The narrowing is what stands in for an append the table refuses, so that a case can
- * observe the refund write as one act; it is a fixture for that observation and deliberately not a
- * second schema the product runs against.
- */
-const RESTRICTED_COMMERCE_SCHEMA_SQL = `
-CREATE TABLE transactions (
-  id                 TEXT PRIMARY KEY NOT NULL,
-  buyer_account_id   TEXT NOT NULL,
-  listing_id         TEXT NOT NULL,
-  listing_version_id TEXT NOT NULL,
-  offer_model        TEXT NOT NULL CHECK (offer_model IN ('rent', 'purchase', 'license', 'subscription')),
-  amount_minor_units INTEGER NOT NULL CHECK (amount_minor_units >= 0),
-  currency_label     TEXT NOT NULL CHECK (currency_label = 'DEMO'),
-  simulated          INTEGER NOT NULL DEFAULT 1 CHECK (simulated = 1),
-  disclosure_label   TEXT NOT NULL,
-  created_at         TEXT NOT NULL
-);
-CREATE TABLE refunds (
-  id                  TEXT PRIMARY KEY NOT NULL,
-  transaction_id      TEXT NOT NULL REFERENCES transactions (id),
-  amount_minor_units  INTEGER NOT NULL CHECK (amount_minor_units >= 0),
-  operator_account_id TEXT NOT NULL,
-  created_at          TEXT NOT NULL
-);
-CREATE TABLE ledger_entries (
-  id                 TEXT PRIMARY KEY NOT NULL,
-  ledger             TEXT NOT NULL CHECK (ledger = 'marketplace'),
-  entry_type         TEXT NOT NULL CHECK (entry_type IN ('charge', 'allocation', 'reversal')),
-  direction          TEXT NOT NULL CHECK (direction IN ('debit', 'credit')),
-  amount_minor_units INTEGER NOT NULL CHECK (amount_minor_units >= 0),
-  transaction_id     TEXT,
-  report_id          TEXT,
-  currency_label     TEXT NOT NULL CHECK (currency_label = 'DEMO'),
-  disclosure_label   TEXT NOT NULL,
-  description        TEXT NOT NULL,
-  created_at         TEXT NOT NULL,
-  CHECK ((transaction_id IS NULL) <> (report_id IS NULL))
-)`;
-
 
 /**
  * The stored shape of a `refunds` row, read through this file's own statement rather than through the
@@ -711,39 +670,32 @@ describe('createRefund — the append it holds to', () => {
   });
 
   it('appends nothing at all when a reversal cannot be written', () => {
-    // The narrowed vocabulary stands in for an append the table refuses, so that the refund row and
-    // its pair are shown to be one act: the founder-allocation reversal of a refund is not a row this
-    // table admits, and the refund that ruled it therefore leaves nothing behind.
-    const restricted = new Database(':memory:');
-    restricted.exec(RESTRICTED_COMMERCE_SCHEMA_SQL);
-    restricted
-      .prepare(
-        `INSERT INTO transactions
-           (id, buyer_account_id, listing_id, listing_version_id, offer_model,
-            amount_minor_units, currency_label, simulated, disclosure_label, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        TRANSACTION_ID,
-        BUYER_ACCOUNT_ID,
-        LISTING_ID,
-        LISTING_VERSION_ID,
-        'purchase',
-        TRANSACTION_AMOUNT_MINOR_UNITS,
-        SYNTHETIC_CURRENCY_LABEL,
-        1,
-        COMMERCE_DISCLOSURE_LABEL,
-        FIXTURE_INSTANT,
-      );
+    // A temporary refusal on the delivered table stands in for an append the schema refuses, so that
+    // the refund row and its pair are shown to be one act. `createRefund` appends the refund row, then
+    // the marketplace reversal and then the founder-allocation reversal, so the refusal lands on the
+    // last of the three writes and takes the two before it with it. The trigger is created for this
+    // one case and nothing else in the suite meets it.
+    const refundsBefore = countRows(db, 'refunds');
+    const ledgerEntriesBefore = countRows(db, 'ledger_entries');
 
-    try {
-      expect(() => createRefund(restricted, refundInput(PARTIAL_REFUND_MINOR_UNITS))).toThrow();
-      expect(countRows(restricted, 'refunds')).toBe(0);
-      expect(countRows(restricted, 'ledger_entries')).toBe(0);
-      expect(computeNetRemaining(restricted, TRANSACTION_ID)).toBe(TRANSACTION_AMOUNT_MINOR_UNITS);
-    } finally {
-      restricted.close();
-    }
+    // The anchor: the fixture has already appended the transaction's charge and its allocation, so the
+    // two counts this case holds constant are the fixture's own and not an empty database's.
+    expect(refundsBefore).toBe(0);
+    expect(ledgerEntriesBefore).toBe(2);
+
+    db.exec(
+      `CREATE TRIGGER refuse_founder_allocation_append
+         BEFORE INSERT ON ledger_entries
+         WHEN NEW.ledger = 'founder_allocation'
+       BEGIN
+         SELECT RAISE(ABORT, 'the founder-allocation ledger refuses this append');
+       END`,
+    );
+
+    expect(() => createRefund(db, refundInput(PARTIAL_REFUND_MINOR_UNITS))).toThrow();
+    expect(countRows(db, 'refunds')).toBe(refundsBefore);
+    expect(countRows(db, 'ledger_entries')).toBe(ledgerEntriesBefore);
+    expect(computeNetRemaining(db, TRANSACTION_ID)).toBe(TRANSACTION_AMOUNT_MINOR_UNITS);
   });
 });
 

@@ -59,7 +59,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { Refund, Transaction } from "@adem/shared";
-import type Database from "better-sqlite3";
+import type { Database } from "better-sqlite3";
 
 import type { CommerceConfig } from "../config";
 import { insertLedgerEntries } from "../ledgers/ledger-repository";
@@ -223,7 +223,7 @@ const defaultNow = (): string => new Date().toISOString();
  * @param transactionId Identifier of the transaction to read.
  * @returns The stored transaction, or `undefined` when the table holds no row for that identifier.
  */
-function readTransaction(db: Database.Database, transactionId: string): Transaction | undefined {
+function readTransaction(db: Database, transactionId: string): Transaction | undefined {
   const row = db.prepare<[string], TransactionRow>(SELECT_TRANSACTION_SQL).get(transactionId);
 
   return row === undefined ? undefined : { ...row, simulated: true };
@@ -251,7 +251,7 @@ function readTransaction(db: Database.Database, transactionId: string): Transact
  * @param transactionId Identifier of the transaction to measure.
  * @returns The net remaining in whole minor units, or `0` when no transaction carries the identifier.
  */
-export function computeNetRemaining(db: Database.Database, transactionId: string): number {
+export function computeNetRemaining(db: Database, transactionId: string): number {
   const transaction = readTransaction(db, transactionId);
 
   if (transaction === undefined) {
@@ -298,7 +298,7 @@ export function computeNetRemaining(db: Database.Database, transactionId: string
  *   transaction is rolled back and nothing remains appended.
  */
 export function createRefund(
-  db: Database.Database,
+  db: Database,
   input: CreateRefundInput,
 ): RefundResult | RefundRefusal {
   // An amount that is not a whole count of at least one minor unit is refused before anything is

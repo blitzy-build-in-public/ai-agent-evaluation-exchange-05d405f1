@@ -41,7 +41,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import type Database from "better-sqlite3";
+import type { Database } from "better-sqlite3";
 
 import type {
   LedgerDirection,
@@ -50,12 +50,6 @@ import type {
   LedgerEntryType,
   LedgerName,
 } from "./ledger-types";
-
-/**
- * The caller's database handle, taken from the driver's own declaration so every module of this
- * package speaks about the same connection type.
- */
-type SqliteDatabase = Database.Database;
 
 /**
  * The one statement that appends a `ledger_entries` row: an explicit column list in the migration's
@@ -177,7 +171,7 @@ function toLedgerEntry(row: LedgerEntryRow): LedgerEntry {
  * @returns The appended entry: the caller's nine values with the generated identifier and instant.
  */
 export function insertLedgerEntry(
-  db: SqliteDatabase,
+  db: Database,
   input: LedgerEntryInput & { readonly now?: () => string },
 ): LedgerEntry {
   const now = input.now ?? defaultNow;
@@ -241,7 +235,7 @@ export function insertLedgerEntry(
  *   insertion instant. An empty input returns an empty array.
  */
 export function insertLedgerEntries(
-  db: SqliteDatabase,
+  db: Database,
   inputs: readonly (LedgerEntryInput & { readonly now?: () => string })[],
 ): LedgerEntry[] {
   const appendBatch = db.transaction(
@@ -279,7 +273,7 @@ export function insertLedgerEntries(
  * @param ledger The ledger to read, one of the three names.
  * @returns The ledger's entries in insertion order, oldest first, each an appended row.
  */
-export function listLedgerEntries(db: SqliteDatabase, ledger: LedgerName): LedgerEntry[] {
+export function listLedgerEntries(db: Database, ledger: LedgerName): LedgerEntry[] {
   const rows = db.prepare<[LedgerName], LedgerEntryRow>(SELECT_LEDGER_ENTRIES_SQL).all(ledger);
 
   return rows.map((row) => toLedgerEntry(row));
