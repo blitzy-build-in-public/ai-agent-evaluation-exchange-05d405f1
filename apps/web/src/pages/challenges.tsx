@@ -1169,7 +1169,13 @@ export function Challenges(): JSX.Element {
                   className="item-list__item"
                   key={challengeId === "" ? `challenge-row-${index}` : challengeId}
                 >
-                  <p>
+                  {/* A question keeps the line breaks its author typed: the stylesheet's
+                      `.stored-text` renders the stored whitespace as written rather than collapsing
+                      each run of it to a single space, so a question written over two lines reads as
+                      two. The response below the selected challenge carries the same class, because
+                      it is the same kind of stored body and the reader loses the same thing without
+                      it. */}
+                  <p className="stored-text">
                     {challengeId === "" ? (
                       readQuestion(challenge.question)
                     ) : (
@@ -1224,7 +1230,7 @@ export function Challenges(): JSX.Element {
 
         {selectedChallenge === null ? null : (
           <>
-            <h3>{readQuestion(selectedChallenge.question)}</h3>
+            <h3 className="stored-text">{readQuestion(selectedChallenge.question)}</h3>
             <p>
               Status: <strong>{describeStatus(selectedChallenge.status)}</strong>. Asked{" "}
               <Timestamp value={selectedChallenge.created_at} />{" "}
@@ -1263,7 +1269,7 @@ export function Challenges(): JSX.Element {
                         className="item-list__item"
                         key={responseId === "" ? `response-row-${index}` : responseId}
                       >
-                        <p>{readResponseBody(response.body)}</p>
+                        <p className="stored-text">{readResponseBody(response.body)}</p>
                         <p>
                           Answered by{" "}
                           <strong>{describeResponder(response.account_id)}</strong>,{" "}

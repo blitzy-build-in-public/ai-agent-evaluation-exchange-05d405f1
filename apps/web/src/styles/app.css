@@ -1132,6 +1132,46 @@ canvas {
   }
 }
 
+/* The audit feed's Reason cell. The contract permits a reason of 1000 characters
+   (`packages/shared/src/schemas/moderation-schema.ts`) and the cell holds one equal share of the
+   feed's seven-column width, so a reason the cell cannot present whole is disclosed rather than
+   stretched across the row: printed inline it would run to dozens of lines and stretch one row
+   until the page around it was distorted. The geometry mirrors the ledger's refund disclosure,
+   `.ledger-table summary`, so a disclosure reads and behaves the same wherever it appears. */
+.table__reason summary {
+  display: inline-flex;
+  align-items: center;
+  /* The inline-flex box is what holds the touch target every control here takes, and the label it
+     wraps is the control. */
+  min-height: var(--touch-target-min);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    color var(--motion-duration-fast) ease-out;
+}
+
+/* Hover and pressed: the surface under the disclosure sinks, so the control is marked before it is
+   taken and while it is held. Nothing a reader needs is reachable through the cue alone — the label
+   states what opening it gives, and the ring tokens.css draws marks the focused one. */
+.table__reason summary:hover,
+.table__reason summary:active {
+  background-color: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+/* Pressed: the label deepens to the strong accent, the second cue marking the moment the whole
+   reason is disclosed. */
+.table__reason summary:active {
+  color: var(--color-accent-strong);
+}
+
+/* The disclosed reason sits under the label that opened it, set apart by that label's own block
+   padding rather than by a paragraph margin the cell's own alignment would take over. */
+.table__reason p {
+  margin-block: 0;
+  padding-block-start: var(--space-2);
+}
+
 /* The ledger panels read an append-only store; nothing here is a control over it. The note on
    the founder-allocation view about the contract structure being undecided is legible and is
    never truncated. */
@@ -1822,6 +1862,19 @@ input[type="radio"]:active {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* The one way a stored body of text is rendered, and every element that carries one uses it: a
+   thread reply, a challenge question or response, a proposal's rationale, a recorded reason. The
+   value arrives with the line breaks its author typed, so `pre-wrap` renders them instead of
+   collapsing each run of whitespace to the single space `normal` produces, and still wraps a long
+   unbroken run inside the column the element sits in. It is a utility rather than a block class —
+   the header above names a block after the component that owns it — because several page modules
+   apply it and no one component does. It sets no colour and no dimension, so it takes no value
+   from the token set. */
+.stored-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* An element with intrinsic content — a table, a textarea, an inline SVG — is capped at the

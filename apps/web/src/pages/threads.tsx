@@ -267,17 +267,18 @@ function describeAuthor(accountId: string): string {
 /**
  * A reply's body as the paragraphs its author wrote.
  *
- * A stored body keeps the blank lines the reply field submitted, and wrapping the whole of it in one
- * paragraph would keep those newlines in the markup while a reader sees a single block of text,
- * because no stylesheet rule here preserves them. Splitting on a blank line — a line break, then any
- * run of spaces, tabs or further line breaks, then another line break — and rendering one paragraph
- * per non-empty piece is what makes the structure the author typed reach the reader, and it is the
- * whole of the formatting this page adds: each piece is still text, escaped by the renderer, and
- * never markup.
+ * A stored body keeps the blank lines the reply field submitted, and a blank line is the only
+ * paragraph break a reply can carry, so splitting on one — a line break, then any run of spaces, tabs
+ * or further line breaks, then another line break — and rendering one paragraph per non-empty piece
+ * is what turns that blank line into a real paragraph carrying the product's paragraph spacing. Each
+ * paragraph then carries the stylesheet's `.stored-text` utility, so a single line break inside one
+ * reaches the reader as the author wrote it rather than as the one space a collapsed run of
+ * whitespace becomes. That is the whole of the formatting this page adds: each piece is still text,
+ * escaped by the renderer, and never markup.
  *
- * A body with no blank line in it is a single piece and renders exactly as it did before, and a body
- * whose pieces are all blank still renders one paragraph rather than disappearing, so a reply is
- * never invisible.
+ * A body with no blank line in it is a single piece, so the split leaves it whole, and a body whose
+ * pieces are all blank still renders one paragraph rather than disappearing, so a reply is never
+ * invisible.
  */
 function readPostParagraphs(body: unknown): readonly string[] {
   const paragraphs = readString(body)
@@ -757,7 +758,12 @@ export function Threads(): JSX.Element {
                         is the paragraph break the author wrote. */}
                     {readPostParagraphs(post.body).map(
                       (paragraph: string, paragraphIndex: number): JSX.Element => (
-                        <p key={`${post.id}-paragraph-${paragraphIndex}`}>{paragraph}</p>
+                        <p
+                          key={`${post.id}-paragraph-${paragraphIndex}`}
+                          className="stored-text"
+                        >
+                          {paragraph}
+                        </p>
                       ),
                     )}
                     <p>

@@ -1378,7 +1378,7 @@ function ProposalItem(props: {
   return (
     <li className="item-list__item">
       <h3>{proposal.title}</h3>
-      <p>{proposal.rationale}</p>
+      <p className="stored-text">{proposal.rationale}</p>
       <p>
         Proposed by{" "}
         {proposer === null ? (

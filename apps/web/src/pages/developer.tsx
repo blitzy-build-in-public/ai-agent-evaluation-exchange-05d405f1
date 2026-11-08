@@ -843,6 +843,26 @@ const AUDIT_COLUMNS: readonly string[] = Object.freeze([
 /** What a column renders for a field the row left empty, so no cell is rendered blank. */
 const NO_REASON_NOTE = "no reason was recorded";
 
+/**
+ * The longest reason the audit feed's Reason cell prints inline, in the row itself.
+ *
+ * The feed is one fixed seven-column table, so every column takes an equal share of its width — about
+ * 145px of text at 1280px — and 80 characters is about four lines in the cell, the same order the
+ * 36-character resource identifier the row already carries wraps to. The moderation write that
+ * records most of these reasons is validated against
+ * `packages/shared/src/schemas/moderation-schema.ts`, which permits a reason of up to 1000
+ * characters, so the cell has to bound what it shows: a longer reason is disclosed through
+ * {@link ReasonCell} rather than printed where it would stretch the row.
+ */
+const REASON_INLINE_MAX_LENGTH = 80;
+
+/**
+ * The label the Reason cell's disclosure carries. It states what opening it gives the reader — the
+ * whole of the recorded reason — and claims nothing about the reason or about the write it was
+ * recorded for.
+ */
+const REASON_DISCLOSURE_LABEL = "Show the whole reason";
+
 
 /**
  * The sentence a throttled write renders: what the limit is, how long the response says to wait, and
@@ -3208,6 +3228,38 @@ function AuditFeed(props: {
 }
 
 /**
+ * One audited write's reason, bounded to the cell that renders it.
+ *
+ * A stored reason is rendered as text and never as markup, and both of its renderings keep the
+ * paragraph breaks its author typed, through the stylesheet's `.stored-text`. An event that recorded
+ * no reason says so rather than rendering a blank cell. A reason longer than
+ * {@link REASON_INLINE_MAX_LENGTH} is printed inside a disclosure instead of in the row, and that
+ * bound is the whole point: the feed gives every column an equal share of its width, so a long reason
+ * printed inline runs to dozens of lines and stretches one row until the page around it is distorted.
+ * Nothing is dropped to achieve it — the disclosure renders the whole of what was recorded, and the
+ * label states the length — because the audit feed exists to carry the reason, so no part of it may
+ * become unreachable.
+ */
+function ReasonCell(props: { readonly reason: string | null }): JSX.Element {
+  const reason = props.reason;
+
+  if (reason === null) {
+    return <em>{NO_REASON_NOTE}</em>;
+  }
+
+  if (reason.length <= REASON_INLINE_MAX_LENGTH) {
+    return <span className="stored-text">{reason}</span>;
+  }
+
+  return (
+    <details className="table__reason">
+      <summary>{`${REASON_DISCLOSURE_LABEL} (${reason.length} characters)`}</summary>
+      <p className="stored-text">{reason}</p>
+    </details>
+  );
+}
+
+/**
  * The audit events as a table, in the order the read returned them.
  *
  * Five facts and two timestamps, the two instants rendered through the workspace's one reading of a
@@ -3245,7 +3297,7 @@ function AuditTable(props: { readonly events: readonly AuditEvent[] }): JSX.Elem
                 </td>
                 <td data-label={STATUS_COLUMN_LABEL}>{event.status_code}</td>
                 <td data-label={REASON_COLUMN_LABEL}>
-                  {event.reason === null ? <em>{NO_REASON_NOTE}</em> : event.reason}
+                  <ReasonCell reason={event.reason} />
                 </td>
                 <td data-label={RECORDED_COLUMN_LABEL}>
                   <Timestamp value={event.created_at} />
