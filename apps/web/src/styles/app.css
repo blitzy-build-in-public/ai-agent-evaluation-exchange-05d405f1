@@ -485,10 +485,6 @@ canvas {
   overflow-wrap: anywhere;
 }
 
-.demo-banner p {
-  margin-block: 0;
-}
-
 /* Rendered directly under the shell, the band carries its own inset so its rounded edge never
    meets the viewport. */
 .app-shell > .demo-banner {
@@ -813,8 +809,7 @@ canvas {
 /* The version that was measured and the standard version it was measured against: machine
    data, so monospaced and always wrapping. */
 .listing-card__version,
-.listing-card__standard,
-.listing-card__report-id {
+.listing-card__standard {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
   overflow-wrap: anywhere;
@@ -982,7 +977,6 @@ canvas {
 
 /* Amounts, entry types and the references tying an entry to its transaction or its report:
    machine data, monospaced, and always wrapping rather than widening the table. */
-.table--ledger .table__amount,
 .ledger-table__amount,
 .opportunity-index-table__amount {
   font-family: var(--font-family-mono);
@@ -1018,12 +1012,30 @@ canvas {
   overflow-wrap: anywhere;
 }
 
-.ledger-table summary,
-.opportunity-index-table summary {
+.ledger-table summary {
   display: inline-flex;
   align-items: center;
   min-height: var(--touch-target-min);
   cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) ease-out,
+    color var(--motion-duration-fast) ease-out;
+}
+
+/* Hover: the surface under the disclosure sinks, so the control is marked before it is taken.
+   Nothing a reader needs is reachable on hover alone — the label, the geometry and the touch
+   target are the same either way. */
+.ledger-table summary:hover {
+  background-color: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+/* Pressed: the same sunken fill, with the label deepening to the strong accent, which is the cue
+   that marks the moment the refund form under it is disclosed. */
+.ledger-table summary:active {
+  background-color: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent-strong);
 }
 
 /* ==========================================================================
@@ -1068,7 +1080,6 @@ canvas {
   min-width: 0;
 }
 
-.compare-table__listing > h2,
 .compare-table__listing > h3,
 .compare-table__listing > h4 {
   margin-block: 0;
@@ -1307,6 +1318,20 @@ input[type="radio"] {
   height: 1.25rem;
   margin: 0;
   accent-color: var(--color-accent);
+}
+
+/* The platform draws the control's own box, so the accent is the property that can carry a state
+   cue, and on hover and on press it deepens to the strong accent — the value tokens.css names as
+   the hover and active fill. The label around the control keeps the whole touch target, so the
+   control stays as easy to hit as it was. */
+input[type="checkbox"]:hover,
+input[type="radio"]:hover {
+  accent-color: var(--color-accent-strong);
+}
+
+input[type="checkbox"]:active,
+input[type="radio"]:active {
+  accent-color: var(--color-accent-strong);
 }
 
 /* One button, three named variants. Every state carries a cue other than colour: disabled dims
@@ -1594,7 +1619,14 @@ input[type="radio"] {
 
 /* The one way text is reduced visually, and a last resort: the text stays in the document and in
    the accessibility tree. It is never applied to the demonstration banner, the sponsored label,
-   the sample badge, a form label, a live region or any other disclosure. */
+   the sample badge, a form label, a live region or any other disclosure.
+
+   The three 1px values below — the width, the height and the negative margin — are this
+   utility's own geometry, deliberately literal rather than values of the token set: tokens.css
+   holds the UI's colours, space, radius, border widths, type and motion, and its own header
+   leaves a dimension that belongs to one element's own box with that element's rule. A box that
+   has to stay sub-perceivable is not a scale value, so the literals here are a decision and not
+   a slip. */
 .visually-hidden {
   position: absolute;
   width: 1px;

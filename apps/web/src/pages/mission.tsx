@@ -29,16 +29,16 @@ import {
  * that link's target and `tabIndex` is what lets the link move focus here without putting
  * `<main>` in the tab order — so neither is a free name to rename.
  *
- * The class names follow the stylesheet's convention: `.mission` is the block and
- * `.mission__lead`, `.mission__section` and `.mission__list` are its elements, alongside the
- * shared `.page`, `.page-mission` and `.item-list` classes the stylesheet already styles.
+ * The class names here are exactly the ones the stylesheet defines: the shared `.page`,
+ * `.page-mission` and `.item-list` classes. The page declares no `.mission` block and no
+ * element hook beneath it, because `app.css` defines neither.
  */
 export function Mission(): JSX.Element {
   return (
     <main id="main-content" tabIndex={-1} className="page page-mission">
       <h1>The ADEM mission</h1>
 
-      <p className="mission__lead">
+      <p>
         ADEM — the Agent Development Exchange and Marketplace — is a new, independent, public
         open-source foundation for an AI agent exchange. Its purpose is narrow and can be stated
         plainly: an independent developer or a small team should be able to publish an agent
@@ -46,7 +46,7 @@ export function Mission(): JSX.Element {
         claims with what was actually measured.
       </p>
 
-      <section className="mission__section" aria-labelledby="mission-what-adem-is">
+      <section aria-labelledby="mission-what-adem-is">
         <h2 id="mission-what-adem-is">What ADEM is</h2>
         <p>
           Developers list agents and agent groups. A listing carries the versions its developer
@@ -75,10 +75,10 @@ export function Mission(): JSX.Element {
         </p>
       </section>
 
-      <section className="mission__section" aria-labelledby="mission-who-it-serves">
+      <section aria-labelledby="mission-who-it-serves">
         <h2 id="mission-who-it-serves">Who ADEM serves</h2>
         <p>Four roles use the exchange, with different work to do on it.</p>
-        <ul className="item-list mission__list">
+        <ul className="item-list">
           <li className="item-list__item">
             <strong>Developer.</strong> Lists agents and versions, runs simulated evaluations
             against them, and answers the challenges a buyer raises about a claim.
@@ -107,7 +107,7 @@ export function Mission(): JSX.Element {
         </p>
       </section>
 
-      <section className="mission__section" aria-labelledby="mission-developer-to-buyer">
+      <section aria-labelledby="mission-developer-to-buyer">
         <h2 id="mission-developer-to-buyer">The developer-to-buyer loop</h2>
         <p>
           A developer publishes a listing and a version of it, runs a simulated SGI evaluation on
@@ -121,7 +121,7 @@ export function Mission(): JSX.Element {
         </p>
       </section>
 
-      <section className="mission__section" aria-labelledby="mission-governance">
+      <section aria-labelledby="mission-governance">
         <h2 id="mission-governance">How the standard is governed</h2>
         <p>
           Standards and their pass thresholds change in exactly one way: by creating a new
@@ -146,13 +146,13 @@ export function Mission(): JSX.Element {
         </p>
       </section>
 
-      <section className="mission__section" aria-labelledby="mission-limits">
+      <section aria-labelledby="mission-limits">
         <h2 id="mission-limits">What ADEM does not do</h2>
         <p>
           These limits are part of the product rather than caveats added to it. Each one
           describes what this repository is today.
         </p>
-        <ul className="item-list mission__list">
+        <ul className="item-list">
           <li className="item-list__item">
             <strong>No production authentication.</strong> The demonstration accounts are synthetic
             rows selected by a request header, and the label that stands beside the switcher reads
@@ -212,10 +212,10 @@ export function Mission(): JSX.Element {
         </ul>
       </section>
 
-      <section className="mission__section" aria-labelledby="mission-take-part">
+      <section aria-labelledby="mission-take-part">
         <h2 id="mission-take-part">Where to take part</h2>
         <p>Four routes in this running product are a contributor's entry points.</p>
-        <ul className="item-list mission__list">
+        <ul className="item-list">
           <li className="item-list__item">
             <Link to="/standards">Read the provisional standard and propose a change</Link>
           </li>

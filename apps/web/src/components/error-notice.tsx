@@ -351,16 +351,16 @@ export function ErrorNotice(props: ErrorNoticeProps): JSX.Element {
           politeness explicitly — polite either way, and never an alert, which would interrupt a
           screen-reader user for a failure that can simply be sent again. The retry control is
           deliberately outside the region, so the announcement carries the message and not a control. */}
-      <div className="status-region error-notice__body" role="status" aria-live="polite">
-        <p className="error-notice__explanation">{text.explanation}</p>
-        {serverSentence === null ? null : <p className="error-notice__detail">{serverSentence}</p>}
-        <p className="error-notice__guidance">{text.guidance}</p>
+      <div className="status-region" role="status" aria-live="polite">
+        <p>{text.explanation}</p>
+        {serverSentence === null ? null : <p>{serverSentence}</p>}
+        <p>{text.guidance}</p>
         {props.detail === undefined || props.detail === null ? null : (
-          <div className="error-notice__extra">{props.detail}</div>
+          <div>{props.detail}</div>
         )}
       </div>
       {props.onRetry === undefined ? null : (
-        <div className="error-notice__actions">
+        <div>
           <button type="button" className="button button--secondary" onClick={props.onRetry}>
             Try again
           </button>
