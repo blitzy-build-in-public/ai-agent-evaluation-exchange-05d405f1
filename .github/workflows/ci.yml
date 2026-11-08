@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20 with the npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      - name: Build the workspaces and the web bundle
+        run: npm run build
+
+      - name: Run unit and integration tests and the scan self-test
+        run: npm test
+
+      - name: Install the Chromium browser for the browser suites
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the end-to-end developer-to-buyer loop and the route walk
+        run: npm run test:e2e
+
+      - name: Run the accessibility and responsiveness suites
+        run: npm run test:a11y
+
+      - name: Scan for prohibited content and dependencies
+        run: npm run scan:exclusions
+
+      - name: Regenerate and check the dependency report
+        run: npm run deps:report
