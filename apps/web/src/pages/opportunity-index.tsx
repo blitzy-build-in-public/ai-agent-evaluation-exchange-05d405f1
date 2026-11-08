@@ -35,9 +35,11 @@
  * ratio's scale is stated in words, and nothing here describes the figures as a measurement, a
  * forecast, a market size, a valuation, investment guidance or an offer.
  *
- * **Its vocabulary is imported rather than restated.** The one label it names — the sponsored label
- * — comes from `@adem/shared`, so it cannot drift from the value the API, the sponsored-label
- * component and the end-to-end assertions agree on.
+ * **Its vocabulary is imported rather than restated.** The sponsored label comes from
+ * `@adem/shared`, so it cannot drift from the value the API, the sponsored-label component and the
+ * end-to-end assertions agree on. The three terms the reading list below names — the two figures and
+ * the ratio between them — come from `../components/opportunity-index-table`, which is where the
+ * table labels the same three values, so both surfaces describe a row in the same words.
  *
  * Appearance belongs to the `.page`, `.page-opportunity-index`, `.notice`, `.empty-state`,
  * `.status-region` and `.table*` rules in `apps/web/src/styles/app.css`, which this module does not
@@ -56,7 +58,12 @@ import type { ListingSearchQuery, ListingSearchResult, ListingSummary } from "@a
 import { listListings } from "../api-client";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
-import { OpportunityIndexTable } from "../components/opportunity-index-table";
+import {
+  LABEL_DEMAND,
+  LABEL_RATIO,
+  LABEL_SUPPLY,
+  OpportunityIndexTable,
+} from "../components/opportunity-index-table";
 import {
   OPPORTUNITY_DEMAND_TABLE,
   RATIO_BASIS_POINT_SCALE,
@@ -107,9 +114,9 @@ const BASIS_MOVEMENT =
 /** How supply was counted, on the row itself, so the paging decision is visible where it matters. */
 const SUPPLY_DESCRIPTION = `How many listings this exchange publishes in the category, counted from the public listing search over the whole published set. The search answers with ${String(LISTING_PAGE_SIZE)} listings at a time and this page reads every page of it before it counts.`;
 
-/** What the demand figure is, in the plainest terms available. */
+/** What the demand figure is, in the plainest terms available: what it counts, and its status. */
 const DEMAND_DESCRIPTION =
-  "The fixed, fictional figure the client's own demand table holds for the category. It comes from no source outside this application, it is the same on every visit, and it measures nothing.";
+  "The fixed, fictional figure the client's own demand table holds for the category, counted in the same unit as the supply column — a listing — so the two figures can be read beside each other and divided into the ratio below. It comes from no source outside this application, it is the same on every visit, and it measures nothing.";
 
 /** The ratio's scale, in words, because the row's ratio is a bare integer. */
 const RATIO_DESCRIPTION = `Demand against supply in basis points, on the scale the derivation fixes: ${String(RATIO_BASIS_POINT_SCALE)} means demand equals supply, and a larger figure means demand runs ahead of supply by that much more.`;
@@ -278,11 +285,11 @@ export function OpportunityIndex(): JSX.Element {
       <section aria-labelledby={READING_HEADING_ID}>
         <h2 id={READING_HEADING_ID}>How to read a row</h2>
         <dl>
-          <dt>Supply</dt>
+          <dt>{LABEL_SUPPLY}</dt>
           <dd>{SUPPLY_DESCRIPTION}</dd>
-          <dt>Demand</dt>
+          <dt>{LABEL_DEMAND}</dt>
           <dd>{DEMAND_DESCRIPTION}</dd>
-          <dt>Ratio (basis points)</dt>
+          <dt>{LABEL_RATIO}</dt>
           <dd>{RATIO_DESCRIPTION}</dd>
         </dl>
         <p>{ORDERING_NOTE}</p>

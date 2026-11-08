@@ -14,6 +14,8 @@
  * - a development-only exception is decided by **graph membership, not by licence name**, so the same
  *   licence passes in the development graph and fails in the runtime graph — asserted in both
  *   directions, because a one-sided test is exactly how an exception widens to a runtime dependency;
+ * - a third value, `workspace`, names this repository's own members: it belongs to neither inventory
+ *   graph, so it is counted, rendered and read apart from both and never as what the product ships;
  * - a marker that names no usable licence (`UNLICENSED`, `UNKNOWN`, `SEE LICENSE IN …`) can never pass;
  * - the rendered document carries no timestamp, host name or absolute path, so regenerating the
  *   committed file produces no spurious diff;
@@ -68,7 +70,7 @@ const GENERATED_BY = "npm run deps:report";
 /** The manifests the document names as its sources. */
 const REPORT_SOURCES: readonly string[] = ["package.json", "package-lock.json"];
 
-/** Both graphs, so a case that has to hold in either one reads as a single line. */
+/** The two inventory graphs, so a case that has to hold in either one reads as a single line. */
 const GRAPHS: readonly DependencyGraph[] = ["runtime", "development"];
 
 /** The licences the request's Success criteria 11 requires the allowlist to hold. */
@@ -497,7 +499,11 @@ describe("the allowlist decision", () => {
   });
 
   it("exempts a repository workspace even when it declares no licence", () => {
-    const workspace = dependency("@adem/planted-workspace", { licenses: [], inRepo: true });
+    const workspace = dependency("@adem/planted-workspace", {
+      licenses: [],
+      graph: "workspace",
+      inRepo: true,
+    });
 
     expect(checkLicenses([workspace], deliveredAllowlist())).toEqual([]);
   });
@@ -611,7 +617,12 @@ describe("readInstalledTree", () => {
       // A workspace manifest's runtime dependency joins the closure, a devDependencies edge does not
       // follow, and only what a manifest of this repository declares is direct.
       expect(entries).toEqual([
-        dependency("@synthetic/example", { version: "0.1.0", licenses: ["Apache-2.0"], inRepo: true }),
+        dependency("@synthetic/example", {
+          version: "0.1.0",
+          licenses: ["Apache-2.0"],
+          graph: "workspace",
+          inRepo: true,
+        }),
         dependency("pkg-development-direct", {
           licenses: [DEVELOPMENT_ONLY_EXCEPTION],
           direct: true,
@@ -793,6 +804,69 @@ describe("runDepsReport", () => {
     });
   });
 
+  describe("the workspace graph", () => {
+    it("is neither inventory graph: an allowlisted licence passes there and a development-only one does not", () => {
+      const allowlist = deliveredAllowlist();
+
+      expect(isAllowlisted(["MIT"], "workspace", allowlist)).toBe(true);
+      expect(isAllowlisted([DEVELOPMENT_ONLY_EXCEPTION], "workspace", allowlist)).toBe(false);
+
+      // An in-repo entry is exempt because it is this repository's own member — in the workspace graph
+      // as in the two inventory graphs — never because a third graph accepts a licence.
+      const inRepo = dependency("@adem/planted-workspace", {
+        version: "0.1.0",
+        licenses: [OUT_OF_ALLOWLIST_LICENCE],
+        graph: "workspace",
+        inRepo: true,
+      });
+      expect(checkLicenses([inRepo], allowlist)).toEqual([]);
+    });
+
+    it("names the graph an entry was judged in, so a workspace entry is never called a runtime one", () => {
+      const judged = dependency("pkg-workspace-graph", {
+        version: "1.0.0",
+        licenses: [DEVELOPMENT_ONLY_EXCEPTION],
+        graph: "workspace",
+      });
+
+      const violation = firstOf(
+        checkLicenses([judged], deliveredAllowlist()),
+        "the workspace-graph violation",
+      );
+      expect(violation.graph).toBe("workspace");
+      expect(violation.reason).toMatch(/development-only/);
+      expect(violation.reason).toMatch(/workspace graph/);
+      expect(violation.reason).not.toMatch(/runtime graph/);
+    });
+  });
+
+  it("reports the runtime, development and in-repo counts the document states", async () => {
+    const reportPath = scratchPath("kind-counts-report.md");
+    const { result, printed } = await runCommand({
+      root: REPO_ROOT,
+      allowlist: deliveredAllowlist(),
+      reportPath,
+      entries: [
+        dependency("pkg-runtime-only", { version: "1.0.0", licenses: ["MIT"], graph: "runtime" }),
+        dependency("pkg-development-only", { version: "1.0.0", licenses: ["MIT"], graph: "development" }),
+        dependency("@adem/planted-workspace", {
+          version: "0.1.0",
+          licenses: [],
+          graph: "workspace",
+          inRepo: true,
+        }),
+      ],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(printed).toContain("3 dependencies: 1 runtime, 1 development, 1 in-repo");
+    // The same three numbers in the document, so an operator and a reader of the committed file see
+    // one split rather than two.
+    expect(readFileSync(reportPath, "utf8")).toContain(
+      "3 entries: 1 in the runtime graph, 1 in the development graph and 1 this repository's own",
+    );
+  });
+
   it("exits 0 for a repository workspace that declares no licence, and renders it as such", async () => {
     const reportPath = scratchPath("in-repo-report.md");
     const { result } = await runCommand({
@@ -800,7 +874,12 @@ describe("runDepsReport", () => {
       allowlist: deliveredAllowlist(),
       reportPath,
       entries: [
-        dependency("@adem/planted-workspace", { version: "0.1.0", licenses: [], inRepo: true }),
+        dependency("@adem/planted-workspace", {
+          version: "0.1.0",
+          licenses: [],
+          graph: "workspace",
+          inRepo: true,
+        }),
         dependency("pkg-third-party", { version: "1.0.0", licenses: ["MIT"] }),
       ],
     });
@@ -830,7 +909,13 @@ describe("the generated document", () => {
       direct: false,
       graph: "development",
     }),
-    dependency("@adem/example-workspace", { version: "0.1.0", licenses: [], direct: false, inRepo: true }),
+    dependency("@adem/example-workspace", {
+      version: "0.1.0",
+      licenses: [],
+      direct: false,
+      graph: "workspace",
+      inRepo: true,
+    }),
   ];
 
   /** Renders the document exactly as the command does, over the given entries. */
@@ -864,11 +949,38 @@ describe("the generated document", () => {
       "@adem/example-workspace",
       "0.1.0",
       "none declared",
-      "transitive",
-      "runtime",
+      "workspace",
+      "workspace",
     ]);
     for (const row of dependencyRows(document)) {
       expect(row).toHaveLength(5);
+    }
+  });
+
+  it("counts the runtime, development and in-repo buckets separately, and names all three in the table header", () => {
+    const document = render();
+    const rows = dependencyRows(document);
+    const countOf = (graph: string): number => rows.filter((cells) => cells[4] === graph).length;
+
+    // The header paragraph states the counts the table's own graph column carries: the repository's
+    // own workspace is counted as such, never folded into the runtime graph it does not belong to.
+    expect(document).toContain(
+      `${rows.length} entries: ${countOf("runtime")} in the runtime graph, ${countOf(
+        "development",
+      )} in the development graph and ${countOf("workspace")} this repository's own`,
+    );
+    expect(countOf("workspace")).toBe(1);
+
+    // Both column headers name the third value, so `workspace` in a cell is documented rather than a
+    // value a reader has to interpret from the row it sits in.
+    expect(document).toContain(
+      "| Package | Version | License | Kind (direct/transitive/workspace) | Graph (runtime/development/workspace) |",
+    );
+
+    // A workspace kind and a workspace graph travel together: no row offers one without the other, so
+    // no in-repo entry reads as a direct or transitive dependency of this product.
+    for (const cells of rows) {
+      expect(cells[3] === "workspace").toBe(cells[4] === "workspace");
     }
   });
 
@@ -918,7 +1030,7 @@ describe("the generated document", () => {
     // column would be byte-identical with itself and pass a self-comparison.
     expect(render([...entries].reverse())).toBe(first);
     expect(dependencyRows(first)).toEqual([
-      ["@adem/example-workspace", "0.1.0", "none declared", "transitive", "runtime"],
+      ["@adem/example-workspace", "0.1.0", "none declared", "workspace", "workspace"],
       ["pkg-direct-runtime", "1.2.3", "MIT", "direct", "runtime"],
       ["pkg-mpl-development", "7.8.9", DEVELOPMENT_ONLY_EXCEPTION, "transitive", "development"],
       ["pkg-transitive-development", "4.5.6", "Apache-2.0", "transitive", "development"],

@@ -31,22 +31,22 @@ the runtime graph, because a licence permitted for development must not be distr
 
 ## Dependencies
 
-308 entries: 151 in the runtime graph and 157 in the development
-graph, 8 of them this repository's own workspaces. A package reachable only through a
-`devDependencies` map is a development dependency. The in-repo `@adem/*` workspaces list the
-licence their own manifest declares: they are not third-party dependencies, and they are exempt
-from the allowlist check.
+308 entries: 143 in the runtime graph, 157 in the development graph and 8 this repository's own
+workspaces. A package reachable only through a `devDependencies` map is a development dependency; an
+in-repo workspace is listed from its own manifest rather than by reachability, so it belongs to
+neither graph, and the `@adem/*` workspaces list the licence their own manifest declares: they are
+not third-party dependencies, and they are exempt from the allowlist check.
 
-| Package | Version | License | Kind (direct/transitive) | Graph (runtime/development) |
+| Package | Version | License | Kind (direct/transitive/workspace) | Graph (runtime/development/workspace) |
 | --- | --- | --- | --- | --- |
-| @adem/api | 0.1.0 | MIT | transitive | runtime |
-| @adem/commerce-sim | 0.1.0 | MIT | direct | runtime |
-| @adem/extension-fixture-pack | 0.1.0 | MIT | transitive | runtime |
-| @adem/sgi-core | 0.1.0 | MIT | direct | runtime |
-| @adem/sgi-fixtures | 0.1.0 | MIT | direct | runtime |
-| @adem/shared | 0.1.0 | MIT | direct | runtime |
-| @adem/shield | 0.1.0 | MIT | transitive | runtime |
-| @adem/web | 0.1.0 | MIT | transitive | runtime |
+| @adem/api | 0.1.0 | MIT | workspace | workspace |
+| @adem/commerce-sim | 0.1.0 | MIT | workspace | workspace |
+| @adem/extension-fixture-pack | 0.1.0 | MIT | workspace | workspace |
+| @adem/sgi-core | 0.1.0 | MIT | workspace | workspace |
+| @adem/sgi-fixtures | 0.1.0 | MIT | workspace | workspace |
+| @adem/shared | 0.1.0 | MIT | workspace | workspace |
+| @adem/shield | 0.1.0 | MIT | workspace | workspace |
+| @adem/web | 0.1.0 | MIT | workspace | workspace |
 | @axe-core/playwright | 4.9.1 | MPL-2.0 | direct | development |
 | @babel/code-frame | 7.29.7 | MIT | transitive | development |
 | @babel/compat-data | 7.29.7 | MIT | transitive | development |

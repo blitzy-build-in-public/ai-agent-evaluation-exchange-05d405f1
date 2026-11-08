@@ -45,6 +45,7 @@
  * stylesheet, which cap the table at the width of the column it sits in and wrap every cell, so the
  * page reflows at 360px rather than scrolling sideways.
  */
+import { RATIO_BASIS_POINT_SCALE } from "../illustrative/opportunity-index";
 import type { OpportunityRow } from "../illustrative/opportunity-index";
 
 /**
@@ -76,23 +77,45 @@ const STATEMENT =
   "Illustrative only: supply is counted from the synthetic listings this page loaded, and each demand figure comes from a fixed fictional table written into the site's code rather than from anything observed.";
 
 /**
- * The ratio's scale, stated in text because the row's ratio value is a bare integer. `10,000` is the
- * derivation's `RATIO_BASIS_POINT_SCALE`: a ratio of 1.0, meaning demand equal to supply.
+ * The ratio's scale, stated in text because the row's ratio value is a bare integer.
+ *
+ * The numeral is interpolated from `RATIO_BASIS_POINT_SCALE`, the derivation's own constant, rather
+ * than written out here: the page states the same scale in its definition of the ratio, and reading
+ * it from one source is what stops the note above the table and that definition from being written
+ * two ways. It is left ungrouped on purpose, so the threshold reads the way the rows' own ratio
+ * values read: no thousand separator here, where the rows print none either.
  */
-const RATIO_SCALE_NOTE =
-  "Ratio is demand against supply in basis points, where 10,000 means demand equals supply and a larger figure means demand exceeds supply.";
+const RATIO_SCALE_NOTE = `Ratio is demand against supply in basis points, where ${String(RATIO_BASIS_POINT_SCALE)} means demand equals supply and a larger figure means demand exceeds supply.`;
 
 /** Column header over the category each row covers. */
 const COLUMN_CATEGORY = "Category";
 /** Column header over the three figures a row carries, each with its label in the row itself. */
 const COLUMN_FIGURES = "Illustrative figures";
 
-/** Row label over the number of the given listings that sit in the row's category. */
-const LABEL_SUPPLY = "Supply (listings)";
-/** Row label over the fictional demand table's figure for the row's category. */
-const LABEL_DEMAND = "Demand";
-/** Row label over the derived demand-to-supply ratio, whose scale the statement above gives. */
-const LABEL_RATIO = "Ratio (basis points)";
+/**
+ * Row label over the number of the given listings that sit in the row's category: the unit is part
+ * of the label, so a reader meets it where the value is and not only in the page's definition below
+ * the table.
+ *
+ * The page's "How to read a row" list names this term through this constant rather than writing it
+ * again, so one label set describes the row in both places.
+ */
+export const LABEL_SUPPLY = "Supply (listings)";
+/**
+ * Row label over the fictional demand table's figure for the row's category. It states the unit the
+ * figure counts in, which is the unit the supply column counts in — a listing — because the two
+ * figures are set beside each other and divided into the ratio below. It calls that unit
+ * illustrative, because the figure comes from the fictional table rather than from anything
+ * observed, exactly as the supply label's unit is a count of synthetic listings.
+ *
+ * Named by the page's "How to read a row" list through this constant, as its two siblings are.
+ */
+export const LABEL_DEMAND = "Demand (illustrative listings)";
+/**
+ * Row label over the derived demand-to-supply ratio, whose scale the statement above gives. Named
+ * by the page's "How to read a row" list through this constant, as its two siblings are.
+ */
+export const LABEL_RATIO = "Ratio (basis points)";
 
 /** The derivation's per-row marker, rendered as text so it reaches the row's accessible name. */
 const ROW_MARKER = "illustrative";

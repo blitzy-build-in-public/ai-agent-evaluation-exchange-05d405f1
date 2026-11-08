@@ -6,13 +6,18 @@
  * allowlist appears in the tree. The allowlist is data (`scripts/license-allowlist.json`), so
  * widening it is a reviewable diff rather than a code change.
  *
- * Four properties the report rests on:
+ * Five properties the report rests on:
  *
  * - **It is generated, never hand-edited.** The document is committed, so identical input must render
  *   byte-identically: no timestamp, no machine name, no absolute path, no run counter. A spurious
  *   diff on every run would hide a real one.
  * - **Versions and licences are read from the installed tree**, never re-derived from the lockfile's
  *   ranges, which is what keeps the document and `npm ci` from disagreeing.
+ * - **An in-repo workspace is a third kind, not a graph.** Every workspace the root manifest declares
+ *   is listed with `workspace` as its kind and its graph: it is this repository's own member, read
+ *   from its own manifest rather than reached from one, and it belongs to neither the runtime graph
+ *   nor the development graph — so nothing the document says describes one as something the product
+ *   ships or as a development-only dependency.
  * - **Graph membership decides the development-only exception.** A licence listed under
  *   `developmentOnlyExceptions` passes only for an entry in the development graph, so the same
  *   licence reaching a runtime graph fails the gate instead of slipping through on a name match.
@@ -67,8 +72,12 @@ const ALL_DEPENDENCY_MAPS: readonly string[] = [
   'optionalDependencies',
 ];
 
-/** Which graph a package belongs to: what the product ships, or what only builds and tests it. */
-export type DependencyGraph = 'runtime' | 'development';
+/**
+ * Which graph a package belongs to: what the product ships, what only builds and tests it, or — as
+ * `workspace` — this repository's own member, which is neither an installed runtime dependency nor a
+ * development one, and which neither graph's rules are meant to cover.
+ */
+export type DependencyGraph = 'runtime' | 'development' | 'workspace';
 
 /** The workspace label the repository root manifest is listed under in the declared-package section. */
 const ROOT_WORKSPACE_LABEL = 'root';
@@ -104,7 +113,10 @@ export interface DependencyEntry {
   readonly licenses: readonly string[];
   /** True when a manifest in this repository declares the package; false when it arrives transitively. */
   readonly direct: boolean;
-  /** The graph the package was installed for. */
+  /**
+   * The graph the package belongs to: the runtime graph, the development graph, or `workspace` for
+   * this repository's own in-repo member, which belongs to neither of those two.
+   */
   readonly graph: DependencyGraph;
   /** True for the repository's own `@adem/*` workspaces, which are not third-party dependencies. */
   readonly inRepo: boolean;
@@ -499,8 +511,8 @@ const operandsOf = (operand: string): readonly string[] => {
 /**
  * Returns why one normalised operand fails the allowlist, or an empty list when it passes.
  *
- * The messages name the graph, because the same licence is acceptable in one graph and not in the
- * other, and call out the development-only case in its own words.
+ * The messages name the graph the entry was judged in, because the same licence is acceptable in one
+ * graph and not in another, and call out the development-only case in its own words.
  */
 const assessOperand = (
   operand: string,
@@ -523,7 +535,7 @@ const assessOperand = (
   if (allowlist.developmentOnly.includes(operand)) {
     if (graph === 'development') return [];
     return [
-      `licence "${operand}" is a development-only exception but the entry is in the runtime graph`,
+      `licence "${operand}" is a development-only exception but the entry is in the ${graph} graph`,
     ];
   }
   return [`licence "${operand}" is not on the allowlist (${graph} graph)`];
@@ -534,7 +546,11 @@ const assessOperand = (
  *
  * An entry passes when every operand of a conjunction passes and at least one alternative of a
  * disjunction passes. A licence the data lists as development-only passes only in the development
- * graph, so the exception can never carry a runtime dependency.
+ * graph, so the exception can never carry a runtime dependency. The `workspace` graph names this
+ * repository's own member rather than an inventory: it belongs to neither of the two graphs the
+ * allowlist scopes its decision to, and the development-only exception does not extend to it — an
+ * in-repo entry is exempt from the check as {@link checkLicenses} records, never because a
+ * development-only licence was accepted in a third graph.
  *
  * @param licenses - Normalised operands, as {@link normalizeLicense} returns them.
  * @param graph - The graph the entry was found in.
@@ -955,9 +971,11 @@ const readInstalledPackages = async (rootDir: string): Promise<ModuleInfos> => {
  * Versions and licences come from the installed tree, so the document cannot disagree with what
  * `npm ci` installed. In-repo workspaces are read from their own manifests rather than from their
  * `UNLICENSED` private-package rows, and the project itself — which is not a dependency of anything —
- * is left out. Only the name, version and licences of a package are kept: the raw license-checker
- * payload embeds every licence's full text, which would make the document unusable and its size
- * arbitrary.
+ * is left out. Each in-repo workspace is classified `workspace`: it is this repository's own member,
+ * listed from its own manifest rather than because something reaches it, so whether anything depends
+ * on it never decides that, and it is neither a runtime dependency nor a development one. Only the
+ * name, version and licences of a package are kept: the raw license-checker payload embeds every
+ * licence's full text, which would make the document unusable and its size arbitrary.
  *
  * @param root - Repository root to read from. Defaults to the current working directory.
  * @returns The entries, sorted by name then version; empty when no installed tree is present.
@@ -1000,7 +1018,7 @@ export async function readInstalledTree(root: string = process.cwd()): Promise<r
       version: manifest.version,
       licenses: normalizeLicense(manifest.license),
       direct: declaredNames.has(manifest.name),
-      graph: 'runtime',
+      graph: 'workspace',
       inRepo: true,
     });
   }
@@ -1069,6 +1087,17 @@ const licenceSpan = (licence: string): string => codeSpan(neutraliseLineBreaks(l
 const licenceCell = (entry: DependencyEntry): string =>
   entry.licenses.length === 0 ? 'none declared' : entry.licenses.map(escapeCell).join(', ');
 
+/**
+ * Renders an entry's kind as one table cell.
+ *
+ * An in-repo workspace is named `workspace` instead of `direct` or `transitive`: it is one of this
+ * repository's own members, listed from its own manifest rather than reached from another package, so
+ * a directness taken from who declares it would tell a reader the product depends on it when nothing
+ * does — which is exactly how the community example came to read as a runtime dependency.
+ */
+const kindCell = (entry: DependencyEntry): string =>
+  entry.inRepo ? 'workspace' : entry.direct ? 'direct' : 'transitive';
+
 /** Lists the development-only exception licences an entry actually carries. */
 const exceptionLicencesOf = (
   entry: DependencyEntry,
@@ -1110,6 +1139,38 @@ const declaredPackageLine = (declared: DeclaredPackage): string => {
   return `- ${name} ${versions} — ${licences} — declared by ${declarations} — purpose: ${purpose}`;
 };
 
+/** How many entries fall in each of the three buckets the report counts. */
+interface DependencyCounts {
+  /** Entries in the runtime graph: what the product ships. */
+  readonly runtime: number;
+  /** Entries in the development graph: what only builds and tests the product. */
+  readonly development: number;
+  /** Entries that are this repository's own workspaces, in neither graph. */
+  readonly workspace: number;
+}
+
+/**
+ * Counts the entries three ways: the runtime graph, the development graph, and this repository's own
+ * workspaces.
+ *
+ * An in-repo workspace is counted in its own bucket and in neither graph. It is one of the
+ * repository's own members, read from its own manifest rather than reached from one, so counting it
+ * as a runtime dependency would tell a reader the community example ships with the product — the
+ * reading this split exists to prevent. The three counts partition the entries, and the document and
+ * the operator-facing summary both take them from here, so the two can never disagree.
+ */
+const countEntries = (entries: readonly DependencyEntry[]): DependencyCounts => {
+  let runtime = 0;
+  let development = 0;
+  let workspace = 0;
+  for (const entry of entries) {
+    if (entry.inRepo || entry.graph === 'workspace') workspace += 1;
+    else if (entry.graph === 'development') development += 1;
+    else runtime += 1;
+  }
+  return { runtime, development, workspace };
+};
+
 /**
  * Renders the document.
  *
@@ -1140,8 +1201,7 @@ export function renderDependencyReport(input: {
       entry.graph === 'development' &&
       exceptionLicencesOf(entry, input.allowlist.developmentOnly).length > 0,
   );
-  const runtimeCount = entries.filter((entry) => entry.graph === 'runtime').length;
-  const inRepoCount = entries.filter((entry) => entry.inRepo).length;
+  const counts = countEntries(entries);
 
   const lines: string[] = [];
   lines.push('# Dependency inventory');
@@ -1180,22 +1240,24 @@ export function renderDependencyReport(input: {
   lines.push('## Dependencies');
   lines.push('');
   lines.push(
-    `${entries.length} entries: ${runtimeCount} in the runtime graph and ${entries.length - runtimeCount} in the development`,
+    `${entries.length} entries: ${counts.runtime} in the runtime graph, ${counts.development} in the development graph and ${counts.workspace} this repository's own`,
   );
   lines.push(
-    `graph, ${inRepoCount} of them this repository's own workspaces. A package reachable only through a`,
+    'workspaces. A package reachable only through a `devDependencies` map is a development dependency; an',
   );
-  lines.push('`devDependencies` map is a development dependency. The in-repo `@adem/*` workspaces list the');
-  lines.push('licence their own manifest declares: they are not third-party dependencies, and they are exempt');
-  lines.push('from the allowlist check.');
+  lines.push('in-repo workspace is listed from its own manifest rather than by reachability, so it belongs to');
+  lines.push('neither graph, and the `@adem/*` workspaces list the licence their own manifest declares: they are');
+  lines.push('not third-party dependencies, and they are exempt from the allowlist check.');
   lines.push('');
-  lines.push('| Package | Version | License | Kind (direct/transitive) | Graph (runtime/development) |');
+  lines.push(
+    '| Package | Version | License | Kind (direct/transitive/workspace) | Graph (runtime/development/workspace) |',
+  );
   lines.push('| --- | --- | --- | --- | --- |');
   for (const entry of entries) {
     lines.push(
-      `| ${escapeCell(entry.name)} | ${escapeCell(entry.version)} | ${licenceCell(entry)} | ${
-        entry.direct ? 'direct' : 'transitive'
-      } | ${entry.graph} |`,
+      `| ${escapeCell(entry.name)} | ${escapeCell(entry.version)} | ${licenceCell(entry)} | ${kindCell(
+        entry,
+      )} | ${entry.graph} |`,
     );
   }
 
@@ -1295,10 +1357,9 @@ export async function runDepsReport(options: RunDepsReportOptions = {}): Promise
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, document, 'utf8');
 
-  const runtimeCount = entries.filter((entry) => entry.graph === 'runtime').length;
-  const inRepoCount = entries.filter((entry) => entry.inRepo).length;
+  const counts = countEntries(entries);
   printLine(
-    `${entries.length} dependencies: ${runtimeCount} runtime, ${entries.length - runtimeCount} development, ${inRepoCount} in-repo`,
+    `${entries.length} dependencies: ${counts.runtime} runtime, ${counts.development} development, ${counts.workspace} in-repo`,
   );
   printLine(`${violations.length} licence violation(s) against ${allowlist.allowed.length} allowlisted licence(s)`);
   printLine(`wrote ${reportPath}`);
