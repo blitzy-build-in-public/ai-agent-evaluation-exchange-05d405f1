@@ -875,9 +875,12 @@ export const SEED_CHALLENGE_RESPONSES: readonly ChallengeResponse[] = Object.fre
 /**
  * The one standard of this release: `SGI-SO-1.0.0`, Structured Output Conformance.
  *
- * `id` and `code` deliberately hold the same value, because both lookup paths resolve against it:
- * the standards routes accept either the catalogue row's id or the code people quote, so making
- * the two equal is what lets `GET /standards/{id}/versions/{v}` be answered with the label itself.
+ * `id` is the row's primary key, and it takes the shape every seeded id takes: a readable prefix
+ * followed by the four hexadecimal groups that complete a UUID, because the identifier rule this
+ * product holds is that identifiers are UUID strings (AAP §0.12.2). `code` carries the standard's
+ * own code, `SGI-SO-1.0.0`, which is the identifier people quote, so the two columns no longer
+ * need to hold the same value. A standard resolves by `code` first and by `id` only when no code
+ * matches, so `GET /standards/{id}/versions/{v}` answers when the label or the row id is used.
  *
  * The `summary` keeps the closed vocabulary: the standard compares recorded outputs against a fixed
  * fixture set, and it certifies nothing beyond that.
@@ -889,7 +892,7 @@ export const SEED_CHALLENGE_RESPONSES: readonly ChallengeResponse[] = Object.fre
  * one runtime authority rather than a hand-written row.
  */
 export const SEED_STANDARD: Standard = Object.freeze({
-  id: "SGI-SO-1.0.0",
+  id: "stan0001-3c5e-4a7b-9d2f-b6c8e0f1a3d4",
   code: "SGI-SO-1.0.0",
   title: "Structured Output Conformance",
   summary:

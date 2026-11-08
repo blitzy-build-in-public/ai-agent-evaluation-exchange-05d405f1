@@ -3,11 +3,16 @@
  * a thrown value — a domain package's refusal included — into that error by its stable
  * `code`.
  *
- * A leaf module: it imports its sibling {@link ApiErrorCode} vocabulary and nothing
- * else, so no framework, no domain package and no runtime facility takes part in shaping
- * a response body. That is what lets the error handler in `apps/api/src/server.ts`, the
+ * A leaf module: it imports its sibling {@link ApiErrorCode} vocabulary and the shared
+ * header-name declaration {@link DEMO_ACCOUNT_HEADER} names, and nothing else, so no
+ * framework, no domain package and no runtime facility takes part in shaping a response
+ * body. The one framework spelling it recognises — Fastify's `FST_ERR_VALIDATION`, in
+ * {@link toApiError} — is matched as a string rather than imported, which is what keeps
+ * that boundary. That is what lets the error handler in `apps/api/src/server.ts`, the
  * write rate-limit response builder and a test all build the same shape from here.
  */
+
+import { DEMO_ACCOUNT_HEADER } from '@adem/shared';
 
 import { ERROR_STATUS } from './error-codes';
 import type { ApiErrorCode } from './error-codes';
@@ -198,26 +203,36 @@ const UNSAFE_MESSAGE_MARKERS_IGNORING_CASE: readonly string[] = Object.freeze([
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 /**
- * Reads a candidate string property from a thrown value of any type.
+ * Reads a property of any type from a thrown value or from one of its members.
  *
- * Only an object that is neither `null` nor a function can carry one, so every other
- * value — a primitive, a function, `null` — yields `undefined` instead of a TypeError. The
- * read itself is guarded because the value is arbitrary: an accessor or a proxy trap that
- * raises must yield no property rather than propagate out of the mapper and cost a client
- * the envelope. Nothing is repaired and nothing permissive is substituted — a property that
- * cannot be read yields `undefined`, the same answer a value carrying no such property
- * yields.
+ * The guarded read every other reader in this module is built on: only an object that is
+ * neither `null` nor a function can carry a property, so every other value — a primitive, a
+ * function, `null` — yields `undefined` instead of a TypeError; and the read itself is guarded
+ * because the value is arbitrary, so an accessor or a proxy trap that raises yields no property
+ * rather than propagating out of the mapper and costing a client the envelope. Nothing is
+ * repaired and nothing permissive is substituted — a property that cannot be read yields
+ * `undefined`, the same answer a value carrying no such property yields.
  */
-function readStringProperty(value: unknown, key: string): string | undefined {
+function readProperty(value: unknown, key: string): unknown {
   if (typeof value !== 'object' || value === null) {
     return undefined;
   }
-  let candidate: unknown;
   try {
-    candidate = (value as Record<string, unknown>)[key];
+    return (value as Record<string, unknown>)[key];
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Reads a candidate string property from a thrown value of any type.
+ *
+ * {@link readProperty} reads the property and the guard it applies is the one that matters
+ * here: a value that is not an object, or one whose property cannot be read, yields no
+ * property rather than a TypeError out of the mapper.
+ */
+function readStringProperty(value: unknown, key: string): string | undefined {
+  const candidate = readProperty(value, key);
   return typeof candidate === 'string' ? candidate : undefined;
 }
 
@@ -257,6 +272,89 @@ function knownStatusOf(code: string): number | undefined {
   }
   const status: number | undefined = ERROR_STATUS[code as ApiErrorCode];
   return typeof status === 'number' ? status : undefined;
+}
+
+/**
+ * Fastify's own code for a request that fails a route's JSON schema: the framework raises it
+ * with status `400` before the handler runs, for a `headers`, `body`, `params` or `querystring`
+ * schema alike.
+ *
+ * It is recognised here as a string and is deliberately neither a member of
+ * {@link ApiErrorCode} nor an entry of {@link ERROR_STATUS}. Those two are the closed
+ * vocabulary of codes the API returns in `{ error: { code, message } }`, the map is a total
+ * `Record` over the union, and the statuses in it are the contract's — a framework spelling
+ * must never be a value a client reads back as `error.code`, and the contract fixes no status
+ * of the framework's. A schema rejection is therefore answered from the envelope's own
+ * vocabulary instead: the demo-header pair below answers `401 unauthorized`, and every other
+ * schema rejection answers `400 validation_error`.
+ */
+const FASTIFY_VALIDATION_CODE = 'FST_ERR_VALIDATION';
+
+/**
+ * The demo header's name as a validation failure spells it: Fastify lowercases the incoming
+ * header names and the schema's own property names and `required` entries alike, so the
+ * property such a failure carries is the lowercased one. Derived from the header name's single
+ * declaration site rather than retyped, so the two cannot drift.
+ */
+const DEMO_HEADER_VALIDATION_NAME = DEMO_ACCOUNT_HEADER.toLowerCase();
+
+/**
+ * The last segment of a JSON pointer: the property a pointer such as `/x-demo-account` or
+ * `/items/0/title` names. A pointer that is absent, empty or ends in a separator names none.
+ */
+function lastInstancePathSegment(instancePath: string | undefined): string | undefined {
+  if (instancePath === undefined) {
+    return undefined;
+  }
+  const segments = instancePath.split('/');
+  const segment = segments[segments.length - 1];
+  return segment !== undefined && segment.length > 0 ? segment : undefined;
+}
+
+/**
+ * The property a single entry of a validation failure names, read defensively from a value of
+ * any type.
+ *
+ * Ajv reports a missing required property in `params.missingProperty` — its `instancePath`
+ * points at the object that lacked the property, not at the property — and reports every other
+ * keyword in the last segment of `instancePath`, the JSON pointer to the value that failed. A
+ * `required` entry whose `params` yields no property falls back to that segment rather than
+ * being discarded. Every member may be absent or of any type, and each read is
+ * {@link readStringProperty}'s, so an entry that is a primitive, a number in `instancePath` or
+ * a string in `params` yields no property name instead of throwing.
+ */
+function validatedPropertyOf(entry: unknown): string | undefined {
+  if (readStringProperty(entry, 'keyword') === 'required') {
+    const missing = readStringProperty(readProperty(entry, 'params'), 'missingProperty');
+    if (missing !== undefined) {
+      return missing;
+    }
+  }
+  return lastInstancePathSegment(readStringProperty(entry, 'instancePath'));
+}
+
+/**
+ * Whether a Fastify schema-validation failure concerns the demo-session header.
+ *
+ * Reads the failure's `validation` array — Ajv's entries — and answers `true` when any entry
+ * names the demo header, compared case-insensitively against the header name's own declaration
+ * site. Anything that is not an array is no evidence of a header failure: the answer is `false`
+ * and the caller answers `400`, the contract's outcome for every other schema rejection.
+ *
+ * Nothing here throws. The `validation` property, its entries, their `params` and their
+ * `instancePath` may each be absent or of any type, and an unreadable member yields no property
+ * name rather than propagating out of {@link toApiError}, whose doc comment promises it always
+ * returns an `ApiError`.
+ */
+function concernsDemoHeader(error: unknown): boolean {
+  const validation = readProperty(error, 'validation');
+  if (!Array.isArray(validation)) {
+    return false;
+  }
+  const entries: unknown[] = validation;
+  return entries.some(
+    (entry) => validatedPropertyOf(entry)?.toLowerCase() === DEMO_HEADER_VALIDATION_NAME,
+  );
 }
 
 /**
@@ -316,7 +414,16 @@ function safeMessageOf(error: unknown, status: number): string {
  * 1. An `ApiError` is returned unchanged, never re-wrapped and never re-messaged.
  * 2. The value's stable code is read from a string `code`, or failing that a string
  *    `reason` (see {@link stableCodeOf} for why both spellings exist).
- * 3. A code {@link ERROR_STATUS} records — matched as an own entry of that map, so a
+ * 3. {@link FASTIFY_VALIDATION_CODE} — Fastify's own code, raised before the handler runs for a
+ *    failed route schema — is answered from the envelope's own vocabulary: `401 unauthorized`
+ *    when the failure concerns the demo-session header (see {@link concernsDemoHeader}, which is
+ *    what makes an absent-header request and an unknown-account request both `401`), and `400
+ *    validation_error` for every other schema rejection. Both sentences come from an
+ *    {@link ApiError} factory, so the client reads the product's own sentence and never the
+ *    schema's spelling, an `instancePath` or an echoed value. The branch sits here rather than in
+ *    `ERROR_STATUS` because that map is the closed vocabulary of codes the API returns, and a
+ *    framework code is not one of them.
+ * 4. A code {@link ERROR_STATUS} records — matched as an own entry of that map, so a
  *    string naming an inherited member of an object is not mistaken for one — yields that
  *    status with the code **preserved** as the domain spelled it:
  *    `incomplete_submission` and `not_offered` are answered as `422 incomplete_submission`
@@ -326,7 +433,7 @@ function safeMessageOf(error: unknown, status: number): string {
  *    status when the thrown message cannot be sent, so the status a client is answered with
  *    and the sentence it reads always agree and a mapped client error never claims the
  *    failure was recorded.
- * 4. Anything else becomes `500 internal_error` with {@link GENERIC_MESSAGE} — a code
+ * 5. Anything else becomes `500 internal_error` with {@link GENERIC_MESSAGE} — a code
  *    that is absent, empty, unreadable, or simply not in the vocabulary. That last case
  *    is deliberate and is what makes a composition-time defect safe: `seam_validation`,
  *    `duplicate_extension` and `unknown_event_type` are absent from {@link ERROR_STATUS},
@@ -340,6 +447,12 @@ export function toApiError(error: unknown): ApiError {
   }
 
   const code = stableCodeOf(error);
+  if (code === FASTIFY_VALIDATION_CODE) {
+    // The demo-header pair is the contract's: a request that reaches a non-public row without a
+    // resolvable account is `401`, and every other schema rejection is the request failing the
+    // shape its endpoint validates, which is `400`.
+    return concernsDemoHeader(error) ? ApiError.unauthorized() : ApiError.validation();
+  }
   if (code !== undefined) {
     const status = knownStatusOf(code);
     if (status !== undefined) {

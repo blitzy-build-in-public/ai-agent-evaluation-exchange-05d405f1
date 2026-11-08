@@ -15,6 +15,10 @@
  * restated as an inline literal, so a fixture whose delta is tidied away fails this file —
  * which is exactly what those deltas are for.
  *
+ * The one failure the comparison propagates is proven too: a recording canonical JSON cannot
+ * represent — one that refers to itself, or a revoked `Proxy` — refuses with the coded
+ * `UnrenderableValueError` rather than returning one of the three verdicts.
+ *
  * The comparison is also proven pure and repeatable: two calls over equal inputs return
  * deeply equal verdicts and leave both arguments byte for byte as they were. Nothing here
  * reads a clock, a locale, a timezone, a random source, an environment variable or a
@@ -33,6 +37,7 @@ import type {
   RecordedOutput,
 } from "@adem/sgi-fixtures";
 
+import { UnrenderableValueError } from "./canonical-json";
 import { compareRecordedOutput } from "./compare-recorded-output";
 import type { CaseComparison } from "./compare-recorded-output";
 
@@ -175,6 +180,38 @@ describe("compareRecordedOutput", () => {
         expect(comparison.actualCanonical.length).toBeGreaterThan(0);
       }
     });
+  });
+
+  describe("a recording canonical JSON cannot represent", () => {
+    const cyclic: Record<string, unknown> = { note: "pending review" };
+    cyclic.self = cyclic;
+    const revoked = Proxy.revocable({ note: "pending review" }, {});
+    revoked.revoke();
+
+    /** One such recording, with the label its case is named by. */
+    const unrepresentable: ReadonlyArray<readonly [string, JsonValue]> = [
+      ["a recording that refers to itself", cyclic as unknown as JsonValue],
+      ["a revoked proxy", revoked.proxy as unknown as JsonValue],
+    ];
+
+    it.each(unrepresentable)(
+      "refuses %s with the coded refusal rather than returning a verdict",
+      (_description, recording) => {
+        let thrown: unknown = "the call returned instead of refusing";
+        try {
+          compareRecordedOutput({ note: "pending review" }, recording);
+        } catch (error) {
+          thrown = error;
+        }
+
+        // A recording with no canonical form leaves the comparison nothing to compare, so the
+        // failure is the renderer's coded refusal and never a raw engine error.
+        expect(thrown).toBeInstanceOf(UnrenderableValueError);
+        expect((thrown as UnrenderableValueError).code).toBe("unrenderable_value");
+        expect(thrown).not.toBeInstanceOf(RangeError);
+        expect(thrown).not.toBeInstanceOf(TypeError);
+      },
+    );
   });
 
   describe("the SGI-SO-1.0.0 fixture probes", () => {

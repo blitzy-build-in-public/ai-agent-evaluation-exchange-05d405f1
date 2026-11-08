@@ -85,9 +85,13 @@ export interface CaseComparison {
  * - Array **order is significant**: case `so-014` records the same codes in a different
  *   order and does not match, because the order of an array's elements is data.
  *
- * It refuses nothing and it never throws, whatever it is handed: both arguments are plain
- * JSON values, and `undefined` for the recorded side is a defined input rather than an
- * error.
+ * It refuses nothing of its own: both arguments are plain JSON values, and `undefined` for
+ * the recorded side is a defined input rather than an error. The one failure it propagates
+ * is {@link UnrenderableValueError}, with the code `unrenderable_value`, for an expected or
+ * a recorded value canonical JSON cannot represent — a value that refers to itself, a
+ * member that cannot be read, or a value that is not JSON data — because the canonical form
+ * each side is compared in comes from {@link canonicalize}, and a value with no canonical
+ * form has nothing to compare.
  *
  * @param expected - The expected output of the case, as the standard version's fixture set
  * states it.
@@ -99,6 +103,9 @@ export interface CaseComparison {
  * involves no recorded value, which reports `match: false` and `actualCanonical: ""`. Both
  * canonical strings are returned on all three outcomes, so a report row always holds its
  * expected and its actual evidence.
+ * @throws {UnrenderableValueError} when `expected`, or the `actual` supplied, cannot be
+ * rendered as canonical JSON; it carries `code: "unrenderable_value"` for the caller that
+ * maps it.
  */
 export function compareRecordedOutput(
   expected: JsonValue,

@@ -90,8 +90,11 @@ export type CaseSeverity = (typeof CASE_SEVERITIES)[number];
 
 /**
  * The identifier of one fixture case, as stored in
- * `report_case_results.case_id`: a UUID string unique within the case set its
- * standard version names.
+ * `report_case_results.case_id`: a case identifier string unique within the
+ * case set its standard version names, spelled by that set itself — `so-001`
+ * in the 20-case set of standard version `SGI-SO-1.0.0`. It is versioned
+ * fixture data rather than a generated row identifier, so a case keeps its id
+ * for as long as the standard version naming it does.
  *
  * It is the value {@link RecordedOutput.case_id} states and the value a report's
  * per-case evidence is keyed by, which is how a recorded output is paired with

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalize } from "./canonical-json";
+import type { JsonValue } from "@adem/sgi-fixtures";
+
+import { canonicalize, UnrenderableValueError } from "./canonical-json";
 
 /**
  * Unit tests for `canonicalize` from `./canonical-json`, the renderer that turns a candidate's
@@ -10,6 +12,13 @@ import { canonicalize } from "./canonical-json";
  * invariant needs — key order is fixed and insignificant, array order and the bytes inside a
  * string value survive untouched, and the output carries no byte that only a pretty-printer
  * would add — so that one value renders one string on any machine, in any locale, on any run.
+ *
+ * The walk's totality is pinned here as well, because determinism needs it: a document nested
+ * twenty thousand levels deep renders, and renders identically twice, because the depth of a value
+ * is not a limit of the evaluator; while the values JSON has no canonical text for — one that
+ * refers to itself, one holding a member that cannot be read, one that is not JSON data at all —
+ * refuse with the coded `UnrenderableValueError` rather than a raw engine error.
+ *
  * The behaviour is exercised through the function's arguments alone, which is why the module
  * loads no fixture file, opens no database and reads no environment.
  */
@@ -172,6 +181,114 @@ describe("canonicalize", () => {
       // value would render several strings and the comparison would stop being reproducible.
       expect(canonicalize({ a: 1, B: 2 })).toBe('{"B":2,"a":1}');
       expect(canonicalize({ a: 1, B: 2, Z: 3 })).toBe('{"B":2,"Z":3,"a":1}');
+    });
+  });
+
+  describe("totality at any depth, and the three refusals", () => {
+    /**
+     * The depth the documents below are nested to.
+     *
+     * Far past the depth a recursive walk reaches before it exhausts the call stack — the depth that
+     * used to make this function raise `RangeError` — and well inside what `JSON.parse` accepts.
+     */
+    const DEPTH = 20000;
+
+    /**
+     * One well-formed document, as text, and the label its case is named by.
+     *
+     * Both of them have one key per level, so sorting the keys changes nothing and the canonical
+     * form of the document is the text it was built from.
+     */
+    const deepDocuments: ReadonlyArray<readonly [string, string]> = [
+      [
+        "an array nested twenty thousand levels deep",
+        `{"outer":${"[".repeat(DEPTH)}1${"]".repeat(DEPTH)}}`,
+      ],
+      [
+        "an object nested twenty thousand levels deep",
+        `{"outer":${'{"inner":'.repeat(DEPTH)}1${"}".repeat(DEPTH)}}`,
+      ],
+    ];
+
+    it.each(deepDocuments)(
+      "renders %s, byte for byte and identically on every call",
+      (_description, text) => {
+        const document = JSON.parse(text) as JsonValue;
+        const rendered = canonicalize(document);
+
+        // The same text back, and the same string for a second call on this value and on a fresh but
+        // equal one: the depth costs memory in the walk rather than a JavaScript call frame per
+        // level, so it neither changes a byte nor limits what can be rendered.
+        expect(rendered).toBe(text);
+        expect(canonicalize(document)).toBe(rendered);
+        expect(canonicalize(JSON.parse(text) as JsonValue)).toBe(rendered);
+      },
+    );
+
+    it("renders a sub-record two keys share rather than refusing it as a cycle", () => {
+      const shared: JsonValue = { a: 1 };
+
+      // Sharing is not a cycle: the record leaves the walk's set of ancestors as soon as its own
+      // rendering ends, so a later key renders it again instead of being refused.
+      expect(canonicalize({ p: shared, q: shared })).toBe('{"p":{"a":1},"q":{"a":1}}');
+      expect(canonicalize([shared, shared])).toBe('[{"a":1},{"a":1}]');
+    });
+
+    const cyclic: Record<string, unknown> = { note: "pending review" };
+    cyclic.self = cyclic;
+    const revoked = Proxy.revocable({ a: 1 }, {});
+    revoked.revoke();
+
+    /**
+     * One value JSON has no canonical text for, with the label its case is named by.
+     *
+     * `undefined` and the bigint are cast because handing one in is exactly what these cases are
+     * about: the argument type says JSON data, and a caller can still pass a value that is not.
+     */
+    const unrenderable: ReadonlyArray<readonly [string, JsonValue]> = [
+      ["a value that refers to itself", cyclic as unknown as JsonValue],
+      ["a revoked proxy", revoked.proxy as unknown as JsonValue],
+      ["undefined", undefined as unknown as JsonValue],
+      ["a bigint", 1n as unknown as JsonValue],
+    ];
+
+    it.each(unrenderable)(
+      "refuses %s with the coded refusal rather than an engine error",
+      (_description, value) => {
+        let thrown: unknown = "the call returned instead of refusing";
+        try {
+          canonicalize(value);
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(UnrenderableValueError);
+        expect((thrown as UnrenderableValueError).code).toBe("unrenderable_value");
+        expect((thrown as UnrenderableValueError).name).toBe("UnrenderableValueError");
+
+        // Neither of the two engine errors these inputs used to raise: a caller gets a name it maps,
+        // not one it has to recognise.
+        expect(thrown).not.toBeInstanceOf(RangeError);
+        expect(thrown).not.toBeInstanceOf(TypeError);
+      },
+    );
+
+    it("attaches the engine error an unreadable member raised as the refusal's cause", () => {
+      const revocable = Proxy.revocable({ a: 1 }, {});
+      revocable.revoke();
+
+      let thrown: unknown = "the call returned instead of refusing";
+      try {
+        canonicalize(revocable.proxy as unknown as JsonValue);
+      } catch (error) {
+        thrown = error;
+      }
+
+      // The message is this module's own words; the engine's error is kept beside it, because it is
+      // the only record of why the member could not be read.
+      expect(thrown).toBeInstanceOf(UnrenderableValueError);
+      expect((thrown as UnrenderableValueError).cause).toBeInstanceOf(TypeError);
+      expect((thrown as UnrenderableValueError).message).not.toContain("IsArray");
     });
   });
 });

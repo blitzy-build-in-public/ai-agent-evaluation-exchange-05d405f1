@@ -302,6 +302,11 @@ function selectComparison(
  * @throws {UnknownCaseError} when a recorded output names a case id the case set does not define.
  * @throws {DuplicateCaseError} when a recorded output repeats a case id.
  * @throws {IncompleteSubmissionError} when a fixture case has no recorded output.
+ * @throws {UnrenderableValueError} when a recorded output, or a case's expected output, is a value
+ * canonical JSON cannot represent — one that refers to itself, one holding a member that cannot be
+ * read, or one that is not JSON data. The refusal comes from `./canonical-json` and carries
+ * `code: "unrenderable_value"`. It is a property of the value, never of its size or its shape: a
+ * well-formed recording of any depth is scored, not refused.
  * @throws Whatever a supplied check throws: a check that fails is a contribution defect, and the
  * call refuses rather than scoring the case as a match.
  */

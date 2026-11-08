@@ -1,10 +1,10 @@
 /**
  * The illustrative opportunity index's pure derivation, pinned to the rules its module documents.
  *
- * `apps/web` has no DOM test environment — no such package is in the dependency inventory — so this
- * workspace's unit tests cover pure functions only, and this is the whole of them. Every assertion
- * below is therefore about values: the supply a caller's listings represent, the fictional demand
- * the table contributes, and the integer ratio between the two.
+ * `apps/web` has no DOM test environment — no such package is in the dependency inventory — so
+ * a unit test in this workspace asserts values rather than rendered output. Every assertion below
+ * is therefore about values: the supply a caller's listings represent, the fictional demand the
+ * table contributes, and the integer ratio between the two.
  *
  * Three properties the module's contract turns on are pinned here rather than left to a reader.
  * The derivation is deterministic and independent of the order its arguments arrive in. The ratio
@@ -19,7 +19,8 @@
  * The fixtures are synthetic and inline, and the demand tables the arithmetic is asserted against
  * are written here rather than read from `OPPORTUNITY_DEMAND_TABLE`, so every expected integer
  * follows from a figure the test states and never from data the test cannot reason about. The
- * shipped table is checked for its own shape separately.
+ * shipped table is checked separately: for its own shape, and against the seeded category slugs it
+ * has to name for the derivation to put any demand in a row at all.
  */
 
 import { describe, expect, it } from "vitest";
@@ -35,6 +36,32 @@ import type { DemandEntry, OpportunityRow } from "./opportunity-index";
  * listing can actually be grouped by.
  */
 const SEEDED_SLUG_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
+
+/**
+ * The four category slugs the seed publishes, as `SEED_CATEGORIES` in
+ * `apps/api/src/seed/seed-data.ts` declares them and as `/api/v1` returns them in
+ * `ListingSummary.category.slug`. That file owns the seeded set and is the source of truth for it.
+ *
+ * The copy is frozen deliberately rather than imported: `apps/web` may not import `@adem/api`, so
+ * `@adem/shared`'s types are the whole of this workspace's dependency set and the seeded vocabulary
+ * reaches this suite as the constant below, which the seed's own review keeps in step. The shipped
+ * demand table is then held to these four slugs, so a seeded category it stops naming — or one the
+ * seed gains and neither follows — fails the case below rather than quietly rendering a zero.
+ */
+const SEEDED_CATEGORY_SLUGS: readonly string[] = Object.freeze([
+  "order-intake",
+  "depot-routing",
+  "record-keeping",
+  "notification-drafting",
+]);
+
+/**
+ * Sorts slugs by code unit, so a slug set compares as a set: the demand table is declared in the
+ * seed's own declaration order and no case here asserts anything about that order.
+ */
+function sortedSlugs(slugs: readonly string[]): string[] {
+  return [...slugs].sort();
+}
 
 /**
  * One synthetic listing in `categorySlug`, complete against `ListingSummary` so a field this
@@ -246,5 +273,15 @@ describe("OPPORTUNITY_DEMAND_TABLE", () => {
     // reported, so a duplicate key in the shipped table is a defect worth failing on here.
     const slugs = OPPORTUNITY_DEMAND_TABLE.map((entry) => entry.category_slug);
     expect(new Set(slugs).size).toBe(slugs.length);
+  });
+
+  it("names the four category slugs the seed publishes, and no others", () => {
+    const slugs = OPPORTUNITY_DEMAND_TABLE.map((entry) => entry.category_slug);
+
+    // The bound the shape assertions above cannot state: a key that is a well-formed slug of no
+    // seeded category satisfies every one of them. Derivation groups each listing by its own
+    // `category.slug`, so such a key contributes demand to no row and the index falls back to the
+    // visible zero this table exists to keep off the page.
+    expect(sortedSlugs(slugs)).toEqual(sortedSlugs(SEEDED_CATEGORY_SLUGS));
   });
 });

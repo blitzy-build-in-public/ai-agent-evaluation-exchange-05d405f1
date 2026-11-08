@@ -219,6 +219,18 @@ function withCases(caseSet: CaseSet, cases: FixtureCase[]): CaseSet {
   return { ...caseSet, cases };
 }
 
+/**
+ * The canonical text of a well-formed document nested `depth` levels inside one object.
+ *
+ * The document is written as text and parsed rather than assembled as objects, because its depth is
+ * the point of it: this is the shape a request body carries, `JSON.parse` accepts it far past the
+ * depth a recursive renderer reaches before it exhausts the call stack, and one key per level makes
+ * the document its own canonical form.
+ */
+function deepRecordingText(depth: number): string {
+  return `{"outer":${"[".repeat(depth)}1${"]".repeat(depth)}}`;
+}
+
 /** The verdict a check returns for a case the built-in comparison would not have matched. */
 function mismatchVerdict(expected: JsonValue, marker: string) {
   return {
@@ -539,6 +551,42 @@ describe("scoreSubmission", () => {
 
       expect(withEmptyOptions).toEqual(withoutOptions);
       expect(withEmptyChecks).toEqual(withoutOptions);
+    });
+  });
+
+  describe("a well-formed recording nested past a recursive walk's reach", () => {
+    it("scores a twenty-thousand-level recording rather than refusing it", () => {
+      const caseSet = caseSetOf();
+      const candidate = candidateOf("seed-alpha");
+      const target = firstCase(caseSet);
+      const depth = 20000;
+      const documentText = deepRecordingText(depth);
+      const submission = withRecordedOutputs(
+        candidate,
+        candidate.recorded_outputs.map((recorded) =>
+          recorded.case_id === target.id
+            ? { ...recorded, output: JSON.parse(documentText) as JsonValue }
+            : recorded,
+        ),
+      );
+
+      const scored = scoreSubmission(STANDARD, caseSet, submission);
+      const caseResult = requireCaseResult(scored, target.id);
+
+      // The case reached the comparison and came back with its evidence: a recording's depth is not
+      // a refusal, because the renderer keeps its pending work on the heap rather than in the call
+      // stack. The other nineteen recordings are scored exactly as they were.
+      expect(scored.caseResults).toHaveLength(caseSet.total_cases);
+      expect(scored.matchedCount).toBe(caseSet.total_cases - 1);
+      expect(caseResult.match).toBe(false);
+      expect(caseResult.actualJson).toBe(documentText);
+      expect(caseResult.actualJson.length).toBe(2 * depth + 11);
+
+      // The recording replaced the set's first case, which is one of its critical ones, so the one
+      // mismatch is also a critical failure: the outcome is FAIL rather than the 19-of-20 pass.
+      expect(target.severity).toBe("critical");
+      expect(scored.criticalFailures).toBe(1);
+      expect(scored.outcome).toBe("FAIL");
     });
   });
 

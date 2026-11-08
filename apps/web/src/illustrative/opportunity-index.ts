@@ -101,20 +101,20 @@ export const RATIO_BASIS_POINT_SCALE = 10_000;
 /**
  * The compile-time, entirely fictional demand table, one entry per seeded listing category.
  *
- * The four keys are the four category slugs the repository publishes — the worked examples of the
- * `ListingCategory` extension seam's own contract, which a category added through that seam
- * satisfies. `apps/api/src/seed/seed-data.ts` owns the seeded set and is the source of truth for
- * it, so the two belong side by side: a seeded slug this table does not name derives `demand: 0`
- * and renders as a visible zero, which is how a drift between them shows up as a reconciliation
- * task rather than as a failure. The figures themselves are made up — fictional and modest, in the
- * order of magnitude of a seeded listing count so the derived ratio is meaningful — and they are
- * frozen so no caller can adjust what the index reports.
+ * The four keys are the four category slugs `SEED_CATEGORIES` in
+ * `apps/api/src/seed/seed-data.ts` publishes and `/api/v1` returns as
+ * `ListingSummary.category.slug`. That file owns the seeded set and is the source of truth for it,
+ * so the two belong side by side: a seeded slug this table does not name derives `demand: 0` and
+ * renders as a visible zero, which is how a drift between them shows up as a reconciliation task
+ * rather than as a failure. The figures themselves are made up — fictional and modest, in the order
+ * of magnitude of a seeded listing count so the derived ratio is meaningful — and they are frozen
+ * so no caller can adjust what the index reports.
  */
 export const OPPORTUNITY_DEMAND_TABLE: readonly DemandEntry[] = Object.freeze([
-  Object.freeze({ category_slug: "customer-support", demand: 9 }),
-  Object.freeze({ category_slug: "data-pipelines", demand: 6 }),
-  Object.freeze({ category_slug: "document-processing", demand: 5 }),
-  Object.freeze({ category_slug: "logistics-tools", demand: 2 }),
+  Object.freeze({ category_slug: "order-intake", demand: 9 }),
+  Object.freeze({ category_slug: "depot-routing", demand: 6 }),
+  Object.freeze({ category_slug: "record-keeping", demand: 5 }),
+  Object.freeze({ category_slug: "notification-drafting", demand: 2 }),
 ]);
 
 /**
