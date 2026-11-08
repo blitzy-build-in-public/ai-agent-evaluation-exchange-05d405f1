@@ -1,0 +1,366 @@
+/**
+ * Unit tests for the append-only ledger writer and its ordered read.
+ *
+ * Every case runs in process against a real SQLite database held in memory and built from the
+ * `ledger_entries` DDL of `packages/shared/migrations/0008_commerce_ledgers_and_refunds.sql`, column
+ * for column and `CHECK` for `CHECK`: the stored column shape, the three closed vocabularies, the
+ * non-negative amount guard and the label guard are properties of the table rather than of the
+ * function alone, so a vocabulary drift has to fail a case here instead of passing silently. The
+ * foreign keys are deliberately not carried over — the parent tables are not part of this unit
+ * fixture, and the authoritative assertion against the real migrations belongs to the API's
+ * integration suite. The append-only abort triggers of `0010_append_only_triggers.sql` are
+ * deliberately not stood in for either: what this file asserts is the property the module holds,
+ * that repeated writes only append rows and leave the rows already appended untouched. The proof
+ * that no route rewrites an append-only row belongs to that integration suite, which owns the
+ * routes and the triggers together.
+ *
+ * No HTTP server, no database file and no per-package runner configuration: the file is discovered
+ * by the root unit configuration's `packages/ * /src/**` glob.
+ */
+
+import Database from 'better-sqlite3';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { resolveCommerceConfig } from '../config';
+import type { LedgerEntryInput } from './ledger-types';
+import { insertLedgerEntries, insertLedgerEntry, listLedgerEntries } from './ledger-repository';
+
+/**
+ * The `ledger_entries` DDL of migration 0008, with its column names, its three closed vocabularies,
+ * its non-negative amount guard, its synthetic-currency guard and its table-level pair constraint
+ * reproduced as the migration states them.
+ */
+const CREATE_LEDGER_ENTRIES_SQL = `CREATE TABLE ledger_entries (
+  id                 TEXT PRIMARY KEY,
+  ledger             TEXT NOT NULL CHECK (ledger IN ('marketplace', 'gate_fees', 'founder_allocation')),
+  entry_type         TEXT NOT NULL CHECK (entry_type IN ('charge', 'allocation', 'reversal')),
+  direction          TEXT NOT NULL CHECK (direction IN ('debit', 'credit')),
+  amount_minor_units INTEGER NOT NULL CHECK (amount_minor_units >= 0),
+  transaction_id     TEXT,
+  report_id          TEXT,
+  currency_label     TEXT NOT NULL CHECK (currency_label = 'DEMO'),
+  disclosure_label   TEXT NOT NULL,
+  description        TEXT NOT NULL,
+  created_at         TEXT NOT NULL,
+  CHECK ((transaction_id IS NULL) <> (report_id IS NULL))
+)`;
+
+/** The columns every case reads a stored row through, in the table's own order. */
+const SELECT_STORED_ENTRY_SQL = `SELECT
+  id, ledger, entry_type, direction, amount_minor_units, transaction_id, report_id,
+  currency_label, disclosure_label, description, created_at
+FROM ledger_entries
+WHERE id = ?`;
+
+/**
+ * The fiction this file stores. Both identifiers are fixed and invented, and neither corresponds to
+ * a row in another table: this fixture holds no parent tables, so a reference is an opaque string
+ * here and its referential truth is the integration suite's assertion rather than this file's.
+ */
+const TRANSACTION_ID = '1f2b6d84-9a30-4c57-8e12-6b4d7c05a9f3';
+const REPORT_ID = 'a7c4e01b-5d92-4b68-9f37-2e8c1a60d4b5';
+
+/** The instant the injected clock returns, pinned so rows can deliberately share it. */
+const FIXTURE_INSTANT = '2024-01-01T00:00:00.000Z';
+
+/** A second pinned instant, so a batch can be appended with an instant per entry. */
+const LATER_FIXTURE_INSTANT = '2024-01-02T00:00:00.000Z';
+
+/** The clock a case appends under, so an inserted instant is a known value rather than a reading. */
+const pinnedNow = (): string => FIXTURE_INSTANT;
+
+/** The shape the default clock's ISO-8601 UTC instant takes, asserted where no clock is supplied. */
+const ISO_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** The shape `crypto.randomUUID()` produces; asserted so two rows cannot share an identifier. */
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** The resolved configuration, which is the only source of the two labels an entry carries. */
+const CONFIG = resolveCommerceConfig();
+
+/** One appended entry of the marketplace ledger: a charge, which carries the transaction. */
+const MARKETPLACE_CHARGE: LedgerEntryInput = {
+  ledger: 'marketplace',
+  entry_type: 'charge',
+  direction: 'debit',
+  amount_minor_units: 10000,
+  transaction_id: TRANSACTION_ID,
+  report_id: null,
+  currency_label: CONFIG.currencyLabel,
+  disclosure_label: CONFIG.disclosureLabel,
+  description: 'Simulated marketplace charge for a completed checkout',
+};
+
+/** One appended entry of the gate-evaluation-fee ledger: a charge, which carries the report. */
+const GATE_FEE_CHARGE: LedgerEntryInput = {
+  ledger: 'gate_fees',
+  entry_type: 'charge',
+  direction: 'debit',
+  amount_minor_units: 15000,
+  transaction_id: null,
+  report_id: REPORT_ID,
+  currency_label: CONFIG.currencyLabel,
+  disclosure_label: CONFIG.disclosureLabel,
+  description: 'Simulated gate-evaluation fee for a completed evaluation report',
+};
+
+/** One appended entry of the founder-allocation ledger: an allocation, which carries the transaction. */
+const FOUNDER_ALLOCATION: LedgerEntryInput = {
+  ledger: 'founder_allocation',
+  entry_type: 'allocation',
+  direction: 'credit',
+  amount_minor_units: 25,
+  transaction_id: TRANSACTION_ID,
+  report_id: null,
+  currency_label: CONFIG.currencyLabel,
+  disclosure_label: CONFIG.disclosureLabel,
+  description: 'Simulated founder allocation computed at 25 basis points',
+};
+
+/** The marketplace reversal of a refunded charge, the first half of the pair a refund appends. */
+const MARKETPLACE_REVERSAL: LedgerEntryInput = {
+  ledger: 'marketplace',
+  entry_type: 'reversal',
+  direction: 'credit',
+  amount_minor_units: 4000,
+  transaction_id: TRANSACTION_ID,
+  report_id: null,
+  currency_label: CONFIG.currencyLabel,
+  disclosure_label: CONFIG.disclosureLabel,
+  description: 'Simulated refund reversal of the marketplace charge',
+};
+
+/** The founder-allocation reversal of the same refund, the second half of that pair. */
+const FOUNDER_ALLOCATION_REVERSAL: LedgerEntryInput = {
+  ledger: 'founder_allocation',
+  entry_type: 'reversal',
+  direction: 'debit',
+  amount_minor_units: 10,
+  transaction_id: TRANSACTION_ID,
+  report_id: null,
+  currency_label: CONFIG.currencyLabel,
+  disclosure_label: CONFIG.disclosureLabel,
+  description: 'Simulated refund reversal of the founder allocation',
+};
+
+/** The pair a refund appends, in the order it is to be written and therefore by one call. */
+const REVERSAL_PAIR: readonly [LedgerEntryInput, LedgerEntryInput] = [
+  MARKETPLACE_REVERSAL,
+  FOUNDER_ALLOCATION_REVERSAL,
+];
+
+/**
+ * One entry of each of the three ledgers, so a case that drives the writer meets every ledger name,
+ * every entry kind and both reference sides.
+ */
+const ENTRY_CASES: ReadonlyArray<{ readonly label: string; readonly input: LedgerEntryInput }> = [
+  { label: 'marketplace charge', input: MARKETPLACE_CHARGE },
+  { label: 'gate-evaluation fee charge', input: GATE_FEE_CHARGE },
+  { label: 'founder-allocation', input: FOUNDER_ALLOCATION },
+];
+
+let db: Database.Database;
+
+/** One stored row, read through this file's own statement rather than through the module under test. */
+interface StoredLedgerEntryRow {
+  readonly id: string;
+  readonly ledger: string;
+  readonly entry_type: string;
+  readonly direction: string;
+  readonly amount_minor_units: number;
+  readonly transaction_id: string | null;
+  readonly report_id: string | null;
+  readonly currency_label: string;
+  readonly disclosure_label: string;
+  readonly description: string;
+  readonly created_at: string;
+}
+
+/** Reads one stored row by its identifier, independently of the reader under test. */
+function readStoredRow(id: string): StoredLedgerEntryRow | undefined {
+  return db.prepare<[string], StoredLedgerEntryRow>(SELECT_STORED_ENTRY_SQL).get(id);
+}
+
+/** Counts the rows the table holds, so a case can assert that a write only appended rows. */
+function storedRowCount(): number {
+  const row = db
+    .prepare<[], { readonly count: number }>('SELECT COUNT(*) AS count FROM ledger_entries')
+    .get();
+
+  return row?.count ?? 0;
+}
+
+beforeEach(() => {
+  db = new Database(':memory:');
+  db.exec(CREATE_LEDGER_ENTRIES_SQL);
+});
+
+afterEach(() => {
+  db.close();
+});
+
+describe('insertLedgerEntry', () => {
+  it.each(ENTRY_CASES)('appends the $label entry and reads it back intact', ({ input }) => {
+    const appended = insertLedgerEntry(db, { ...input, now: pinnedNow });
+
+    // The nine stored values are carried through exactly as they arrived, and the two generated here
+    // are a fresh identifier and the instant the pinned clock answers with.
+    expect(appended).toEqual({ ...input, id: appended.id, created_at: FIXTURE_INSTANT });
+    expect(appended.id).toMatch(UUID_V4);
+
+    // The returned entry is the stored row: reading the table through a statement of this file's own
+    // shows the same eleven values, so the writer's answer is not merely self-consistent.
+    expect(readStoredRow(appended.id)).toEqual(appended);
+
+    // And it is the only row of its ledger, read back in insertion order.
+    expect(listLedgerEntries(db, input.ledger)).toEqual([appended]);
+  });
+
+  it('gives every appended row its own identifier, under the default clock when none is supplied', () => {
+    const first = insertLedgerEntry(db, MARKETPLACE_CHARGE);
+    const second = insertLedgerEntry(db, MARKETPLACE_CHARGE);
+
+    expect(first.id).not.toBe(second.id);
+    expect(first.id).toMatch(UUID_V4);
+    expect(second.id).toMatch(UUID_V4);
+
+    // The system clock answers with an ISO-8601 UTC instant, never SQLite's timestamp format.
+    expect(first.created_at).toMatch(ISO_UTC_INSTANT);
+    expect(second.created_at).toMatch(ISO_UTC_INSTANT);
+  });
+
+  it('only appends rows: writing the same values again leaves the rows already written untouched', () => {
+    const first = insertLedgerEntry(db, { ...FOUNDER_ALLOCATION, now: pinnedNow });
+    const countAfterFirst = storedRowCount();
+
+    insertLedgerEntry(db, { ...FOUNDER_ALLOCATION, now: pinnedNow });
+    insertLedgerEntry(db, { ...FOUNDER_ALLOCATION, now: pinnedNow });
+
+    // Two writes appended exactly two rows, and the first row reads back value for value as it was
+    // written: the history is a sequence of appended rows and never a rewritten one.
+    expect(storedRowCount()).toBe(countAfterFirst + 2);
+
+    const appended = listLedgerEntries(db, 'founder_allocation');
+    expect(appended).toHaveLength(3);
+    expect(appended[0]).toEqual(first);
+    expect(readStoredRow(first.id)).toEqual(first);
+  });
+});
+
+describe('insertLedgerEntries', () => {
+  it('appends every entry in one call and returns them in input order', () => {
+    const appended = insertLedgerEntries(db, REVERSAL_PAIR.map((entry) => ({ ...entry, now: pinnedNow })));
+
+    expect(appended).toHaveLength(2);
+    expect(appended[0]).toMatchObject({
+      ledger: 'marketplace',
+      description: MARKETPLACE_REVERSAL.description,
+      created_at: FIXTURE_INSTANT,
+    });
+    expect(appended[1]).toMatchObject({
+      ledger: 'founder_allocation',
+      description: FOUNDER_ALLOCATION_REVERSAL.description,
+      created_at: FIXTURE_INSTANT,
+    });
+
+    // Each ledger read returns its own half of the pair, in the order the two were appended.
+    expect(listLedgerEntries(db, 'marketplace')).toEqual([appended[0]]);
+    expect(listLedgerEntries(db, 'founder_allocation')).toEqual([appended[1]]);
+    expect(storedRowCount()).toBe(2);
+  });
+
+  it('appends each entry under the clock that entry carries', () => {
+    const appended = insertLedgerEntries(db, [
+      { ...MARKETPLACE_REVERSAL, now: pinnedNow },
+      { ...FOUNDER_ALLOCATION_REVERSAL, now: () => LATER_FIXTURE_INSTANT },
+    ]);
+
+    expect(appended[0]?.created_at).toBe(FIXTURE_INSTANT);
+    expect(appended[1]?.created_at).toBe(LATER_FIXTURE_INSTANT);
+
+    for (const entry of appended) {
+      expect(readStoredRow(entry.id)).toEqual(entry);
+    }
+  });
+
+  it('appends nothing and returns an empty array for an empty input', () => {
+    const appended = insertLedgerEntries(db, []);
+
+    expect(appended).toEqual([]);
+    expect(storedRowCount()).toBe(0);
+    expect(listLedgerEntries(db, 'marketplace')).toEqual([]);
+  });
+});
+
+describe('listLedgerEntries', () => {
+  it('returns an empty array for a ledger no row was appended to', () => {
+    expect(listLedgerEntries(db, 'marketplace')).toEqual([]);
+    expect(listLedgerEntries(db, 'gate_fees')).toEqual([]);
+    expect(listLedgerEntries(db, 'founder_allocation')).toEqual([]);
+  });
+
+  it('returns only the rows of the ledger it was asked for', () => {
+    const appended = insertLedgerEntries(
+      db,
+      ENTRY_CASES.map(({ input }) => ({ ...input })),
+    );
+
+    expect(appended).toHaveLength(3);
+    expect(storedRowCount()).toBe(3);
+
+    // One row per ledger, so a read that returned a row of another ledger could not also return the
+    // one row it should: the count and the discriminator together settle the separation.
+    for (const { input } of ENTRY_CASES) {
+      const rows = listLedgerEntries(db, input.ledger);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        ledger: input.ledger,
+        entry_type: input.entry_type,
+        direction: input.direction,
+        amount_minor_units: input.amount_minor_units,
+        transaction_id: input.transaction_id,
+        report_id: input.report_id,
+        description: input.description,
+      });
+    }
+  });
+
+  it('returns the rows in append order even when a pinned clock gives them one instant', () => {
+    for (const position of [0, 1, 2]) {
+      insertLedgerEntry(db, {
+        ...MARKETPLACE_CHARGE,
+        description: `Appended in position ${String(position)}`,
+        now: pinnedNow,
+      });
+    }
+
+    const rows = listLedgerEntries(db, 'marketplace');
+
+    // Three rows share one instant, so only the insertion sequence can order them: the read returns
+    // the sequence they were appended in, and it keeps returning it as more rows arrive.
+    expect(rows.map((row) => row.description)).toEqual([
+      'Appended in position 0',
+      'Appended in position 1',
+      'Appended in position 2',
+    ]);
+    expect(rows.map((row) => row.created_at)).toEqual([
+      FIXTURE_INSTANT,
+      FIXTURE_INSTANT,
+      FIXTURE_INSTANT,
+    ]);
+
+    insertLedgerEntry(db, {
+      ...MARKETPLACE_CHARGE,
+      description: 'Appended in position 3',
+      now: pinnedNow,
+    });
+
+    expect(listLedgerEntries(db, 'marketplace').map((row) => row.description)).toEqual([
+      'Appended in position 0',
+      'Appended in position 1',
+      'Appended in position 2',
+      'Appended in position 3',
+    ]);
+  });
+});
