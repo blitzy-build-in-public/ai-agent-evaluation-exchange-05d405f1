@@ -274,7 +274,7 @@ interface RefusalResponse {
  * The two refusals of the checkout path, each as the contract gives it.
  *
  * `not_offered` — the listing does not make the model the buyer selected, or makes no offer at all —
- * is the row's `422 unprocessable`, and it is decided by the domain before anything is written.
+ * is the row's `422 not_offered`, and it is decided by the domain before anything is written.
  * `invalid_amount` is the `400 validation_error` the request schema answers with at the edge for
  * every case it can see; it is mapped here for the case it cannot, a server-assembled offer whose
  * amount is not a whole number of minor units, which the domain refuses rather than storing.
@@ -284,7 +284,11 @@ interface RefusalResponse {
  */
 const REFUSALS: Readonly<Record<CheckoutSimulationRefusalReason, RefusalResponse>> = Object.freeze({
   not_offered: Object.freeze({
-    code: "unprocessable",
+    // The domain's own string, and not a generic name for the status: a route maps a refusal by the
+    // code the package that produces it spells, which is what `./error-codes` documents as the rule
+    // and what the envelope's mapper preserves, so a client reads what was refused rather than that
+    // something was unprocessable.
+    code: "not_offered",
     message: "This listing does not make the offer model the request selected.",
   }),
   invalid_amount: Object.freeze({
