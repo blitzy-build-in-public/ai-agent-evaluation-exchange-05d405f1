@@ -117,6 +117,7 @@ import type {
   Transaction,
 } from "@adem/shared";
 
+import { PAGE_PARAM } from "./collection-paging";
 import { isRecord, readCount, readMember, readString, readText } from "./payload-reading";
 
 /**
@@ -1231,32 +1232,84 @@ function entityRow<T>(raw: unknown): T {
 }
 
 /**
- * `GET /challenges` (public): the challenges board, each challenge with the responses it has
- * collected.
+ * The query of the two collaboration board reads: the one `page` parameter their shared collection
+ * schema declares, and nothing else.
  *
- * The responses are returned with their challenge under either layout the read may use —
- * nested in the row, or beside the rows as a second collection grouped by the `challenge_id`
- * each response carries — so the board never reads a raw shape. A challenge with no response
- * yet carries the empty list.
- *
- * Raises {@link ApiClientError} for a response that carries no challenges to read.
+ * The parameter is always set, exactly as {@link listingSearchQuery} sets the search's own page, so an
+ * argument that is absent, not a whole number or below 1 is sent as page 1 rather than omitted: an
+ * omitted page and a stated page 1 are the same request to the service, but only the stated one is the
+ * request a reader can read the address of. There is no page-size parameter, because the size is the
+ * contract's fixed page size for a collection read and not a client input.
  */
-export async function listChallenges(): Promise<ChallengeListItem[]> {
-  const response = await send("GET", "/challenges");
+function boardPageQuery(page: number | undefined): URLSearchParams {
+  const requested = readCount(page);
+  const params = new URLSearchParams();
+  params.set(PAGE_PARAM, String(requested === null || requested < 1 ? 1 : requested));
+  return params;
+}
+
+/**
+ * What the public challenges board read answers with: one page of the board, the number of challenges
+ * the whole board holds, and the page the service answered.
+ *
+ * `total` is the board's own count and never this page's row count: the read is bounded to one page of
+ * the fixed page size, so the length of a page is not the size of a board, and a board that stated one
+ * as the other would tell a reader they had seen everything while rows remained. `page` is the page
+ * the service answered rather than the one that was asked for, so the rows on screen are always
+ * labelled with the page they are from.
+ */
+export interface ChallengeBoardRead {
+  /** The page's challenges, each with the responses it has collected, in the service's own order. */
+  readonly items: readonly ChallengeListItem[];
+  /** The number of challenges the whole board holds. */
+  readonly total: number;
+  /** The 1-based page these rows are from. */
+  readonly page: number;
+}
+
+/**
+ * `GET /challenges?page` (public): one page of the challenges board, each challenge with the responses
+ * it has collected, with the board's own count and the page the service answered.
+ *
+ * The address's page is forwarded, which is what makes a page other than the newest one reachable, and
+ * a page past the board's last is the ordinary state the route documents rather than an error: `200`
+ * with `items: []`, the board's own `total` and the page that was asked for. An absent or unusable
+ * argument is sent as page 1.
+ *
+ * The responses are returned with their challenge under either layout the read may use — nested in the
+ * row, or beside the rows as a second collection grouped by the `challenge_id` each response carries —
+ * so the board never reads a raw shape. A challenge with no response yet carries the empty list.
+ *
+ * `total` and `page` are required of the response rather than defaulted, as the ledger read requires its
+ * own: a body that states neither cannot tell a short board from a clipped page, and a locally guessed
+ * count would be this module's assumption about the board rather than the board's size.
+ *
+ * Raises {@link ApiClientError} for `400` (a page the collection query schema rejects) and for a
+ * response that carries no challenges to read or states no total or page.
+ */
+export async function listChallenges(page?: number): Promise<ChallengeBoardRead> {
+  const response = await send("GET", "/challenges", { query: boardPageQuery(page) });
   const payload = recordOrNull(response.payload);
   const siblings = payload === null ? [] : arrayOrEmpty(payload["responses"]);
-  return requireArray(response, ["items", "challenges"]).map((raw: unknown): ChallengeListItem => {
-    const record = recordOrNull(raw) ?? {};
-    return {
-      ...entityRow<Challenge>(raw),
-      responses: ownedCollection(
-        record["responses"],
-        siblings,
-        "challenge_id",
-        readString(record["id"]),
-      ) as ChallengeResponse[],
-    };
-  });
+  const items = requireArray(response, ["items", "challenges"]).map(
+    (raw: unknown): ChallengeListItem => {
+      const record = recordOrNull(raw) ?? {};
+      return {
+        ...entityRow<Challenge>(raw),
+        responses: ownedCollection(
+          record["responses"],
+          siblings,
+          "challenge_id",
+          readString(record["id"]),
+        ) as ChallengeResponse[],
+      };
+    },
+  );
+  return {
+    items,
+    total: requireCount(payload === null ? null : payload["total"], response),
+    page: requireCount(payload === null ? null : payload["page"], response),
+  };
 }
 
 /**
@@ -1293,26 +1346,62 @@ export async function respondToChallenge(
 }
 
 /**
- * `GET /threads` (public): the discussion board, each thread with the posts it has collected.
+ * What the public discussion board read answers with: one page of the board, the number of threads the
+ * whole board holds, and the page the service answered.
  *
- * The posts come back with their thread under either layout the read may use — nested in the
- * row, or beside the rows as a second collection grouped by the `thread_id` each post
- * carries. A thread with no reply yet carries the empty list, which is the state the board
- * renders rather than an absent key.
- *
- * Raises {@link ApiClientError} for a response that carries no threads to read.
+ * `total` is the board's own count and never this page's row count: the read is bounded to one page of
+ * the fixed page size, so the length of a page is not the size of a board, and a board that stated one
+ * as the other would tell a reader they had seen everything while rows remained. `page` is the page
+ * the service answered rather than the one that was asked for, so the rows on screen are always
+ * labelled with the page they are from.
  */
-export async function listThreads(): Promise<ThreadListItem[]> {
-  const response = await send("GET", "/threads");
+export interface ThreadBoardRead {
+  /** The page's threads, each with the posts it has collected, in the service's own order. */
+  readonly items: readonly ThreadListItem[];
+  /** The number of threads the whole board holds. */
+  readonly total: number;
+  /** The 1-based page these rows are from. */
+  readonly page: number;
+}
+
+/**
+ * `GET /threads?page` (public): one page of the discussion board, each thread with the posts it has
+ * collected, with the board's own count and the page the service answered.
+ *
+ * The address's page is forwarded, which is what makes a page other than the newest one reachable, and
+ * a page past the board's last is the ordinary state the route documents rather than an error: `200`
+ * with `items: []`, the board's own `total` and the page that was asked for. An absent or unusable
+ * argument is sent as page 1.
+ *
+ * The posts come back with their thread under either layout the read may use — nested in the row, or
+ * beside the rows as a second collection grouped by the `thread_id` each post carries. A thread with no
+ * reply yet carries the empty list, which is the state the board renders rather than an absent key.
+ *
+ * `total` and `page` are required of the response rather than defaulted, as the ledger read requires its
+ * own: a body that states neither cannot tell a short board from a clipped page, and a locally guessed
+ * count would be this module's assumption about the board rather than the board's size.
+ *
+ * Raises {@link ApiClientError} for `400` (a page the collection query schema rejects) and for a
+ * response that carries no threads to read or states no total or page.
+ */
+export async function listThreads(page?: number): Promise<ThreadBoardRead> {
+  const response = await send("GET", "/threads", { query: boardPageQuery(page) });
   const payload = recordOrNull(response.payload);
   const siblings = payload === null ? [] : arrayOrEmpty(payload["posts"]);
-  return requireArray(response, ["items", "threads"]).map((raw: unknown): ThreadListItem => {
-    const record = recordOrNull(raw) ?? {};
-    return {
-      ...entityRow<Thread>(raw),
-      posts: ownedCollection(record["posts"], siblings, "thread_id", readString(record["id"])) as ThreadPost[],
-    };
-  });
+  const items = requireArray(response, ["items", "threads"]).map(
+    (raw: unknown): ThreadListItem => {
+      const record = recordOrNull(raw) ?? {};
+      return {
+        ...entityRow<Thread>(raw),
+        posts: ownedCollection(record["posts"], siblings, "thread_id", readString(record["id"])) as ThreadPost[],
+      };
+    },
+  );
+  return {
+    items,
+    total: requireCount(payload === null ? null : payload["total"], response),
+    page: requireCount(payload === null ? null : payload["page"], response),
+  };
 }
 
 /**

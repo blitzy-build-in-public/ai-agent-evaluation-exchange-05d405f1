@@ -343,9 +343,10 @@ of proposals; and `version_total` on a listing's detail — which is what lets a
 collection from a clipped page and ask for the next one. The nested rows of a page are read for the
 parents that page carries rather than for the whole collection: a thread's replies are read for the
 page's threads and a challenge's responses for the page's challenges, so the rows of one parent are
-that parent's own content. The pages that render the four operator reads state the page they show and
-offer controls that reach each page before it, while the pages that render the other four show the
-newest page, and the older pages are reached through each read's own `page`.
+that parent's own content. The pages that render the four operator reads and the two boards state
+the page they show and offer controls that reach the pages before and after it, while the pages
+that render the catalogue's proposals and a listing's version history show the newest page, and
+the older pages of those two are reached through each read's own `page`.
 The paged board reads order by their instant with
 an identifier tie-break and page through that order, which no index serves and none is added for —
 an applied migration is immutable, so such an index is a new numbered migration rather than a change

@@ -10,13 +10,23 @@
  * `404` for a thread that is gone and the `429` write rate limit — each explained by the form
  * components, which own their own field, their own explanation and their own polite announcement.
  *
- * Four decisions shape this file.
+ * Five decisions shape this file.
  *
- * **The address is the selection.** Which thread is open lives in the `id` query parameter and
- * nowhere else: no context provider, no shared state module, no storage. A thread is therefore a
- * link a contributor can paste, the back button steps through the threads that were opened, and a
- * selection the page of the board cannot resolve renders an explanation with a way back to the
- * board rather than an empty panel.
+ * **The address is the selection and the page.** Which thread is open lives in the `id` query
+ * parameter, and which page of the board is on screen lives in the `page` parameter, and in nothing
+ * else: no context provider, no shared state module, no storage. A thread is therefore a link a
+ * contributor can paste, the back button steps through the threads that were opened and the pages
+ * that were read, and a selection the page of the board cannot resolve renders an explanation with a
+ * way back to the board rather than an empty panel.
+ *
+ * **The board's page is read, one bounded page at a time.** `GET /threads` answers one page of a board
+ * it counts in full, so the address's page is forwarded to the read and the two counts the read states
+ * are kept apart: the rows this page holds, and the size of the whole board. The paging row below the
+ * board is what makes an older page reachable, and a page past the last one is the ordinary empty page
+ * the route documents rather than a failure — it renders an explanation naming the board's own size
+ * and a link back to the page that holds its rows. An address whose page the contract cannot express
+ * sends no request at all, because the client would have to replace the value silently, and renders
+ * the `400` the API would have answered it with in the same notice the API's own refusals use.
  *
  * **One read, and re-read rather than patched.** `../api-client` is the only module that calls the
  * API, and this page makes exactly one kind of call through it: `listThreads`. After a thread is
@@ -26,10 +36,13 @@
  * this page's guess at where that row belongs.
  *
  * **A refresh keeps the rows that are already on screen.** Re-reading never blanks the board: the
- * loading state belongs to the first read, and a later read that fails leaves the board readable
- * with the failure explained beside it. A read is also marked in flight the moment it is asked for,
- * because a selection written a moment earlier must not be judged — and so announced as unknown —
- * against the board it is about to replace.
+ * loading state belongs to the first read of a page, and a later read that fails leaves the board
+ * readable with the failure explained beside it. A read is also marked in flight the moment it is
+ * asked for, because a selection written a moment earlier must not be judged — and so announced as
+ * unknown — against the board it is about to replace. Rows hold their place for the page they were
+ * returned for and no other: a reading of a different page is never rendered against the page the
+ * address now asks for, so a page change shows the board loading rather than the previous page's
+ * rows under the new page's address.
  *
  * **Append-only is what the surface shows.** A thread's replies read in the order they were
  * written and nothing on this page edits, hides or removes one; the reply field adds a row and the
@@ -48,19 +61,38 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { COLLECTION_PAGE_SIZE } from "@adem/shared";
 import type { Thread, ThreadPost } from "@adem/shared";
-import { listThreads } from "../api-client";
-import type { ThreadListItem } from "../api-client";
+import { ApiClientError, listThreads } from "../api-client";
+import type { ThreadBoardRead, ThreadListItem } from "../api-client";
+import {
+  ACCEPTED_PAGE_VALUES,
+  PAGE_PARAM,
+  collectionPageHref,
+  lastPageNumber,
+  readRequestedPage,
+} from "../collection-paging";
+import type { RequestedPage } from "../collection-paging";
+import { CollectionPager } from "../components/collection-pager";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { ThreadCreateForm, ThreadReplyForm } from "../components/thread-reply-form";
 import { findDemoAccount } from "../data/demo-accounts";
 import { Timestamp, readString } from "../payload-reading";
 
+/** The route this page owns, which every link that selects a thread or a page is built from. */
+const THREADS_PATH = "/threads";
+
 /**
- * The query parameter that names the open thread. It is this page's only selection state, and it is
- * spelled here rather than shared because no other module reads or writes it.
+ * The query parameter that names the open thread. It is this page's only selection state — the page
+ * of the board the selection is read from travels in the `page` parameter the shared paging contract
+ * spells — and it is spelled here rather than shared because no other module reads or writes it.
  */
 const THREAD_ID_PARAM = "id";
+
+/**
+ * The page an address that asks for no usable page is compared against. It is never sent: such an
+ * address has no request, and the refusal notice is what the board renders for it.
+ */
+const FIRST_PAGE = 1;
 
 /**
  * The create region's `id`. The empty board's action focuses that region, and an `id` is what lets
@@ -83,6 +115,29 @@ const BOARD_HEADING = "The board";
 const REPLIES_LABEL = "Replies";
 const REPLY_HEADING = "Post a reply";
 const BACK_TO_BOARD_LABEL = "Back to the board";
+
+/** The accessible name of the paging row, and the collection its own reasons name. */
+const PAGER_LABEL = "Board pages";
+const PAGER_COLLECTION_NAME = "board";
+
+/**
+ * The refusal an address whose page the board read cannot express is explained with.
+ *
+ * It is the same `400` the API would have answered such a request with, rendered through the same
+ * component, so a reader meets one shape whichever side refused: what happened, what the board read
+ * accepts in place of the value, and the link that resolves the address. The value itself is quoted in
+ * the notice's detail, where it is rendered as text rather than echoed into a message.
+ */
+const REFUSAL_MESSAGE =
+  "The address carries a page value the board read cannot express, so no request was sent for it.";
+const REFUSED_PAGE_PARAMETER_NOTE = `The board is read one page of ${String(COLLECTION_PAGE_SIZE)} threads at a time, and the page parameter names which of those pages to read.`;
+const WITHOUT_PAGE_PARAMETER_LABEL = "Read the board without the page parameter";
+
+/**
+ * The page past the last one: the state the route's own documentation calls this page's, stated with
+ * the action that returns a reader to the rows the board does hold.
+ */
+const LAST_PAGE_OF_THE_BOARD_LABEL = "Go to the last page of the board";
 
 /** The empty board: a state of the product, stated with the action that leaves it. */
 const EMPTY_BOARD_HEADING = "No discussion has started yet";
@@ -130,13 +185,62 @@ function readSelectedThreadId(params: URLSearchParams): string | null {
 }
 
 /**
- * The address that opens one thread: this page's own route with the selection in its query.
+ * The address that opens one thread from the page of the board the reader is looking at.
  *
- * Only the selection travels in the address, so the board keeps the route a reader can reach from
- * the navigation while a thread stays linkable. The identifier is encoded because it is opaque.
+ * The selection is rewritten and every other parameter of the board's own address is carried through
+ * untouched, so a thread opened from an older page keeps that page: the row the reader clicked is on
+ * it, and an address that dropped the page would report that thread as one the page it was clicked
+ * from does not carry. The identifier is left to the serialisation, which encodes it.
  */
-function threadPath(threadId: string): string {
-  return `/threads?${THREAD_ID_PARAM}=${encodeURIComponent(threadId)}`;
+function threadPath(params: URLSearchParams, threadId: string): string {
+  const next = new URLSearchParams(params);
+  next.set(THREAD_ID_PARAM, threadId);
+  return `${THREADS_PATH}?${next.toString()}`;
+}
+
+/** A page value the contract cannot express, with the value the address wrote. */
+type PageRefusal = Extract<RequestedPage, { readonly kind: "refused" }>;
+
+/**
+ * The notice an address whose page the contract refuses is explained with.
+ *
+ * It is the same `400` the API would have answered such a request with, rendered through the same
+ * component, and the link drops the parameter at fault and keeps every other one — the smallest change
+ * that makes the address answerable again, so a reader who mistyped a page number keeps the thread they
+ * had open. The value is quoted as text and no request is ever sent for it: the client would have to
+ * replace it silently, and a page that showed one page while its address asked for another would be a
+ * page whose own address is not what it shows.
+ */
+function renderRefusalNotice(refusal: PageRefusal, validHref: string): JSX.Element {
+  return (
+    <ErrorNotice
+      error={new ApiClientError(400, "validation_error", REFUSAL_MESSAGE)}
+      detail={
+        <>
+          <p>
+            {`The address carries "${refusal.value}" as the page parameter, and the board read accepts ${ACCEPTED_PAGE_VALUES}.`}
+          </p>
+          <p>{REFUSED_PAGE_PARAMETER_NOTE}</p>
+          <p>
+            <Link to={validHref}>{WITHOUT_PAGE_PARAMETER_LABEL}</Link>
+          </p>
+        </>
+      }
+    />
+  );
+}
+
+/**
+ * The address with the page parameter removed, which is how a refused page value is resolved.
+ *
+ * A refused value is dropped rather than replaced with `1`: the reader wrote neither, and the shortest
+ * address that means the first page is the one without the parameter at all.
+ */
+function hrefWithoutPageParameter(params: URLSearchParams): string {
+  const next = new URLSearchParams(params);
+  next.delete(PAGE_PARAM);
+  const serialized = next.toString();
+  return serialized === "" ? THREADS_PATH : `${THREADS_PATH}?${serialized}`;
 }
 
 /** How many replies a thread holds, counted from the posts the read returned with it. */
@@ -184,42 +288,122 @@ function readPostParagraphs(body: unknown): readonly string[] {
 }
 
 /**
- * What the board's live region says once a read has settled. The count is the one fact a reader
- * cannot see from the list itself when it is long, and it is what tells a reader who just started a
- * thread that the board has taken it.
+ * One settled reading of the board: the page the address asked for, the rows and the board's own count
+ * the service answered with, and the page the service stated those rows are from.
  *
- * The read answers one page of the board, so the count is the board's own only while the page came
- * back shorter than {@link COLLECTION_PAGE_SIZE}: a page that came back full may hold the newest
- * threads of a longer board, and the sentence says which of the two it is rather than stating a
- * size the read did not confirm.
+ * The two counts are held apart on purpose, because they are two facts: `items.length` is how many rows
+ * this page holds, and `total` is how many threads the whole board holds. A sentence that stated one as
+ * the other would tell a reader they had seen everything while rows remained.
  */
-function describeLoadedBoard(count: number): string {
-  if (count === 0) {
+interface BoardReading {
+  /** The page the address asked for, which is the page this reading is kept for. */
+  readonly requestedPage: number;
+  /** The page's threads, in the service's own order. */
+  readonly items: readonly ThreadListItem[];
+  /** The number of threads the whole board holds, as the read stated it. */
+  readonly total: number;
+  /** The page the service stated these rows are from, which is the page a sentence names. */
+  readonly answeredPage: number;
+}
+
+/**
+ * The board as this page holds it: the page the state answers, the reading that page has, whether a read
+ * for it is in flight, and the failure the last read of it raised.
+ *
+ * One object rather than four pieces of state, because the four are read together and a reading of one
+ * page must never be rendered as though it answered another: the page is the key, and the whole state
+ * moves with it.
+ */
+interface BoardState {
+  /** The address page this state answers. */
+  readonly page: number;
+  /** The reading this page has, or `null` while its first read has yet to settle. */
+  readonly reading: BoardReading | null;
+  /** Whether a read for this page is in flight. */
+  readonly isLoading: boolean;
+  /** The failure the last read of this page raised, or `null`. */
+  readonly failure: unknown;
+}
+
+/** How many threads a count is, in the reader's own words, singular or plural. */
+function describeThreadCount(count: number): string {
+  return count === 1 ? "one thread" : `${count} threads`;
+}
+
+/**
+ * How many rows the page holds, as a bare count rather than as a count of something.
+ *
+ * The sentence that states it names the board's own noun once, after "of its", so the row count belongs
+ * there as a number alone — "holding 20 of its 28 threads". A count of one is spelled rather than
+ * written as a digit, as every count in this file is, so a short page never reads "1 of its 28 threads".
+ */
+function describeRowCount(count: number): string {
+  return count === 1 ? "one" : String(count);
+}
+
+/** How many pages a count of pages is, in the reader's own words, singular or plural. */
+function describePageCount(count: number): string {
+  return count === 1 ? "one page" : `${count} pages`;
+}
+
+/**
+ * What the board's live region says once a read has settled. The two counts are the facts a reader
+ * cannot see from the list itself, and they are not the same fact: how many rows this page holds, and
+ * how many threads the whole board holds.
+ *
+ * There are four settled sentences, and which one is said depends on whether the board's own size is
+ * known to be on screen. The whole board is on screen exactly when the page carries every thread the
+ * read counted, so the board's size is stated as the board's size then and only then. A page that
+ * holds rows of a longer board names the page and both counts; a page past the end has no rows to show
+ * and says where the board's rows are instead. A page that came back full is never described as the
+ * board, which is what a sentence stating a page's row count as the board's size would do.
+ */
+function describeLoadedBoard(page: number, count: number, total: number): string {
+  if (total === 0) {
     return "The board is loaded and holds no thread yet.";
   }
-  const loaded = count === 1 ? "one thread" : `${count} threads`;
-  return count < COLLECTION_PAGE_SIZE
-    ? `The board is loaded with ${loaded} on it.`
-    : `The board's most recent page is loaded, holding ${loaded}.`;
+  if (count === total) {
+    return `The board is loaded with ${describeThreadCount(count)} on it.`;
+  }
+  if (count === 0) {
+    return total === 1
+      ? `Page ${String(page)} of the board is loaded, and its ${describeThreadCount(total)} is before it.`
+      : `Page ${String(page)} of the board is loaded, and its ${describeThreadCount(total)} are all before it.`;
+  }
+  return `Page ${String(page)} of the board is loaded, holding ${describeRowCount(count)} of its ${describeThreadCount(total)}.`;
 }
 
 /**
  * The sentence the board's live region carries, or `null` when it should carry none.
  *
- * It is `null` in exactly two situations, and both matter. While a later read is in flight over
- * rows that are already on screen there is no state worth announcing, because nothing a reader can
- * see is about to change. And when the first read failed there is nothing to announce here either:
- * the error notice beside this region is the explanation, and a second, vaguer sentence from this
- * region would be the duplicate a screen-reader user hears first.
+ * It is `null` in three situations, and each of them matters. A refused page carries none: the notice
+ * beneath the region states the refusal inside its own live region, so a sentence here would put the
+ * same words on the page twice and have a screen-reader user hear them twice. That branch must stay
+ * ahead of the loading sentence as well, because no request is sent for a refused address and the
+ * loading sentence would name a read that never happened. While a later read is in flight over rows
+ * that are already on screen there is no state worth announcing, because nothing a reader can see is
+ * about to change. And when a read failed there is nothing to announce here either: the error notice
+ * beside this region is the explanation, and a second, vaguer sentence from this region would be the
+ * duplicate a screen-reader user hears first.
  */
 function describeBoardStatus(
-  threads: readonly ThreadListItem[] | null,
+  reading: BoardReading | null,
   isLoading: boolean,
+  failure: unknown,
+  refusal: PageRefusal | null,
 ): string | null {
-  if (threads !== null) {
-    return isLoading ? null : describeLoadedBoard(threads.length);
+  if (refusal !== null) {
+    return null;
   }
-  return isLoading ? LOADING_MESSAGE : null;
+  if (failure !== null) {
+    return null;
+  }
+  if (reading === null) {
+    return LOADING_MESSAGE;
+  }
+  return isLoading
+    ? null
+    : describeLoadedBoard(reading.answeredPage, reading.items.length, reading.total);
 }
 
 /**
@@ -233,12 +417,23 @@ function describeBoardStatus(
 export function Threads(): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // The board, the state of the read that produced it, and the counter that asks for another one.
-  // `null` rows mean no read has produced a board yet, which is what separates the first read — the
-  // only one that shows a loading state — from every later read, which keeps what is on screen.
-  const [threads, setThreads] = useState<readonly ThreadListItem[] | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [readError, setReadError] = useState<unknown>(null);
+  // The address, read once per render and reduced to primitives, so the effect below re-runs when the
+  // page it asks for changes rather than whenever a fresh `URLSearchParams` was allocated for the same
+  // address.
+  const requested = readRequestedPage(searchParams);
+  const refusal: PageRefusal | null = requested.kind === "refused" ? requested : null;
+  const page = requested.kind === "requested" ? requested.page : FIRST_PAGE;
+  const refusalKey = refusal === null ? "" : refusal.value;
+
+  // The board as this page holds it, keyed by the page it answers, and the counter that asks for
+  // another read of it. A state whose page is not the one the address asks for is not rendered at all,
+  // which is what keeps the previous page's rows from appearing under the new page's address.
+  const [read, setRead] = useState<BoardState>((): BoardState => ({
+    page,
+    reading: null,
+    isLoading: true,
+    failure: null,
+  }));
   const [readCount, setReadCount] = useState<number>(0);
 
   // The create region, focused by the empty board's action. It is the region rather than the field
@@ -246,21 +441,53 @@ export function Threads(): JSX.Element {
   // action's own label names.
   const createRegionRef = useRef<HTMLElement | null>(null);
 
+  // The reading the address's page has, or the in-flight state that stands in for it: a reading of
+  // another page answers a question the reader is no longer asking.
+  const current: BoardState =
+    read.page === page ? read : { page, reading: null, isLoading: true, failure: null };
+
+  // The rows on screen, and the whole of what this page renders from. A refused page renders none of
+  // them: the notice below the board's status region is what the page shows instead.
+  const rows: readonly ThreadListItem[] | null =
+    refusal !== null || current.reading === null ? null : current.reading.items;
+
+  const total = current.reading === null ? 0 : current.reading.total;
+  const lastPage = lastPageNumber(total);
+  const isBoardEmpty = rows !== null && rows.length === 0 && total === 0;
+  const isPastLastPage = rows !== null && rows.length === 0 && total > 0;
+
   const selectedId = readSelectedThreadId(searchParams);
 
   const selectedThread: ThreadListItem | null =
-    threads === null || selectedId === null
+    rows === null || selectedId === null
       ? null
-      : (threads.find((thread: ThreadListItem): boolean => thread.id === selectedId) ?? null);
+      : (rows.find((thread: ThreadListItem): boolean => thread.id === selectedId) ?? null);
 
   // A selection that resolves to nothing is only reportable once a read has settled over rows the
   // page actually holds. While a read is in flight the selection is a question still being
-  // answered, and after a failed read the board on screen is not the board the address was written
-  // against, so neither state claims the thread is missing.
+  // answered, after a failed read the board on screen is not the board the address was written
+  // against, and while a refused page stands there are no rows to resolve it against — so none of the
+  // three claims the thread is missing.
   const isSelectionUnknown =
-    readError === null && !isLoading && threads !== null && selectedId !== null && selectedThread === null;
+    refusal === null &&
+    current.failure === null &&
+    !current.isLoading &&
+    rows !== null &&
+    selectedId !== null &&
+    selectedThread === null;
 
-  const boardStatus = describeBoardStatus(threads, isLoading);
+  const boardStatus = describeBoardStatus(
+    refusal === null ? current.reading : null,
+    current.isLoading,
+    current.failure,
+    refusal,
+  );
+
+  /** The address of one page of this board, carrying whatever else the board's address holds. */
+  const pageHref = useCallback(
+    (targetPage: number): string => collectionPageHref(THREADS_PATH, searchParams, targetPage),
+    [searchParams],
+  );
 
   /**
    * Read the board again.
@@ -271,14 +498,22 @@ export function Threads(): JSX.Element {
    * to run.
    */
   const reload = useCallback((): void => {
-    setIsLoading(true);
+    setRead((previous: BoardState): BoardState => ({ ...previous, isLoading: true }));
     setReadCount((previous: number): number => previous + 1);
   }, []);
 
-  /** Open one thread by writing only the selection into the address. */
-  const selectThread = useCallback(
+  /**
+   * Open one thread on the board's newest page, which is where a thread that was just started is.
+   *
+   * The page parameter is dropped rather than written as `1` for the same reason the pager's
+   * first-page link drops it: the shortest address that means the newest page. A reader who started a
+   * thread from an older page therefore leaves that page, which is what makes the new row — the
+   * board's newest — the one on screen beside it.
+   */
+  const openNewestBoardRow = useCallback(
     (threadId: string): void => {
       const next = new URLSearchParams(searchParams);
+      next.delete(PAGE_PARAM);
       next.set(THREAD_ID_PARAM, threadId);
       if (next.toString() === searchParams.toString()) {
         return;
@@ -291,40 +526,65 @@ export function Threads(): JSX.Element {
   /**
    * The board read, and the only effect this page has.
    *
+   * A refused page has no request to send, so the effect sends none and the notice stands in its place.
    * The cancelled flag is what keeps a reader from being shown a board twice: the read is asked for
-   * when the address changes nothing about it but the reload counter turns, and a response that
-   * arrives after a newer one has been requested is discarded rather than rendered.
+   * when the page or the reload counter turns, and a response that arrives after a newer one has been
+   * requested is discarded rather than rendered.
    */
-  useEffect((): (() => void) => {
+  useEffect((): (() => void) | void => {
+    if (refusal !== null) {
+      return;
+    }
+
     let cancelled = false;
 
-    setIsLoading(true);
-    setReadError(null);
+    // A read of the page the address asks for is in flight, and the rows already read for that same
+    // page stay on screen while it is: only a read of a different page starts from nothing, so a
+    // refresh never blanks the board and a page change never shows the page just left.
+    setRead((previous: BoardState): BoardState => ({
+      page,
+      reading: previous.page === page ? previous.reading : null,
+      isLoading: true,
+      failure: null,
+    }));
 
-    listThreads().then(
-      (rows: readonly ThreadListItem[]): void => {
+    listThreads(page).then(
+      (board: ThreadBoardRead): void => {
         if (cancelled) {
           return;
         }
-        setThreads(rows);
-        setIsLoading(false);
+        setRead({
+          page,
+          reading: {
+            requestedPage: page,
+            items: board.items,
+            total: board.total,
+            answeredPage: board.page,
+          },
+          isLoading: false,
+          failure: null,
+        });
       },
       (failure: unknown): void => {
         if (cancelled) {
           return;
         }
-        setReadError(failure);
-        setIsLoading(false);
+        setRead((previous: BoardState): BoardState => ({
+          page,
+          reading: previous.page === page ? previous.reading : null,
+          isLoading: false,
+          failure,
+        }));
       },
     );
 
     return (): void => {
       cancelled = true;
     };
-  }, [readCount]);
+  }, [page, refusalKey, readCount]);
 
   /**
-   * A thread was started: open it, then read the board again.
+   * A thread was started: open it on the board's newest page, then read the board again.
    *
    * Both halves are needed. The selection is what makes the new thread the one shown below, and the
    * read is what places it among the others in the order the service keeps rather than at a
@@ -332,10 +592,10 @@ export function Threads(): JSX.Element {
    */
   const handleThreadCreated = useCallback(
     (thread: Thread): void => {
-      selectThread(thread.id);
+      openNewestBoardRow(thread.id);
       reload();
     },
-    [reload, selectThread],
+    [openNewestBoardRow, reload],
   );
 
   /**
@@ -379,20 +639,29 @@ export function Threads(): JSX.Element {
         <h2 id="threads-board-heading">{BOARD_HEADING}</h2>
 
         {/* One region, mounted with the page and never unmounted, so the sentence that replaces its
-            content is announced: the board reading and the board arriving are both status changes. */}
+            content is announced: the board reading and the board arriving are both status changes. A
+            refused page carries no sentence here, because the notice below states the refusal. */}
         <div className="status-region" role="status">
           {boardStatus === null ? null : <p>{boardStatus}</p>}
         </div>
 
-        {readError === null ? null : <ErrorNotice error={readError} onRetry={reload} />}
+        {/* A page the contract refuses is explained rather than sent, so the notice stands where the
+            page's own outcome would: there are no rows to render, and no request was made for any. */}
+        {refusal === null ? null : renderRefusalNotice(refusal, hrefWithoutPageParameter(searchParams))}
 
-        {threads === null || threads.length === 0 ? null : (
+        {refusal !== null || current.failure === null ? null : (
+          <ErrorNotice error={current.failure} onRetry={reload} />
+        )}
+
+        {rows === null || rows.length === 0 ? null : (
           <ul className="item-list">
-            {threads.map(
+            {rows.map(
               (thread: ThreadListItem): JSX.Element => (
                 <li key={thread.id} className="item-list__item">
                   <p>
-                    <Link to={threadPath(thread.id)}>{thread.title}</Link>
+                    {/* The address carries the page the reader is on as well as the thread, so the
+                        selection they open is resolved against the rows it was clicked from. */}
+                    <Link to={threadPath(searchParams, thread.id)}>{thread.title}</Link>
                   </p>
                   <p>
                     Started by <strong>{describeAuthor(thread.author_account_id)}</strong>
@@ -407,7 +676,11 @@ export function Threads(): JSX.Element {
           </ul>
         )}
 
-        {threads !== null && threads.length === 0 ? (
+        {/* The two empty states the board has, and they are not the same state. A board that holds
+            nothing at all is explained with the action that leaves it; a page past the board's last
+            one holds no rows either, but the board does, so that state names the board's own size and
+            where its rows stop and offers the page they are on. */}
+        {isBoardEmpty ? (
           <EmptyState
             heading={EMPTY_BOARD_HEADING}
             explanation={EMPTY_BOARD_EXPLANATION}
@@ -418,13 +691,37 @@ export function Threads(): JSX.Element {
             }
           />
         ) : null}
+
+        {isPastLastPage ? (
+          <EmptyState
+            heading={`Nothing on page ${String(page)}`}
+            explanation={`The board holds ${describeThreadCount(total)} on ${describePageCount(lastPage)}; page ${String(page)} is past the last page.`}
+            action={
+              <Link to={pageHref(lastPage)}>{LAST_PAGE_OF_THE_BOARD_LABEL}</Link>
+            }
+          />
+        ) : null}
+
+        {/* The paging row belongs to a board that has answered: without a settled reading there is no
+            size to page over, and the notice above is what a reader is owed instead. It is rendered
+            for a page past the end too, because the page that holds the rows is exactly where its
+            controls go. */}
+        {refusal !== null || current.reading === null ? null : (
+          <CollectionPager
+            page={current.reading.requestedPage}
+            lastPage={lastPage}
+            label={PAGER_LABEL}
+            collectionName={PAGER_COLLECTION_NAME}
+            hrefFor={pageHref}
+          />
+        )}
       </section>
 
       {isSelectionUnknown ? (
         <EmptyState
           heading={UNKNOWN_THREAD_HEADING}
           explanation={UNKNOWN_THREAD_EXPLANATION}
-          action={<Link to="/threads">{BACK_TO_BOARD_LABEL}</Link>}
+          action={<Link to={THREADS_PATH}>{BACK_TO_BOARD_LABEL}</Link>}
         />
       ) : null}
 

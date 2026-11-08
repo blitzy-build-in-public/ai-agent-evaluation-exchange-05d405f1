@@ -2,25 +2,46 @@
  * The `/challenges` route: the public challenges board, and the responses a challenge collects.
  *
  * A challenge is a buyer's public question about a listing's claims. The board lists the page of
- * challenges the service answered with, in the order the service returned it, a reader opens one
- * through the query parameter it is addressed by, and either the buyer who asked or the listing's
- * developer answers it here. A challenge is a question and never a measurement: nothing on this
+ * challenges the address asks for, in the order the service returned it, a reader opens one through
+ * the query parameter it is addressed by, and either the buyer who asked or the listing's developer
+ * answers it here. A challenge is a question and never a measurement: nothing on this
  * page describes a question or an answer as evidence for a listing's claims, as a pass, or as
  * anything about safety.
  *
- * Five decisions shape this file, each of which a later reader could otherwise "improve" into a
+ * Six decisions shape this file, each of which a later reader could otherwise "improve" into a
  * bug.
  *
  *   - **The selection lives in the address and nowhere else.** `?id=<challenge id>` is the whole
  *     of this page's state: every challenge on the page of the board is a `<Link>` that rewrites
  *     that one parameter, `useSearchParams` reads it back, and clearing it returns to the board.
  *     There is no context provider, no shared state module and no stored preference, so a challenge
- *     is linkable and a reload of a link opens the same challenge.
+ *     is linkable and a reload of a link opens the same challenge. The page of the board the
+ *     selection was made from travels in the address beside it, which is what lets a reader select a
+ *     challenge from an older page and still be shown it.
  *
- *   - **The listing picker reads the public search, and for one reason.** A challenge cannot be
- *     written without a `listing_id` — `POST /challenges` requires one — and the contract exposes
- *     no listing-options read, so the first page of `listListings` supplies the picker above the
- *     create form. That read is this page's only listing read, and it is a public one.
+ *   - **The listing picker reads the whole public catalogue, and for one reason.** A challenge cannot
+ *     be written without a `listing_id` — `POST /challenges` requires one — and the contract exposes
+ *     no listing-options read, so the picker above the create form is filled from `../catalogue-read`,
+ *     the workspace's bounded walk over every page of the public listing search. The search's newest
+ *     page alone would leave a listing older than twenty of them unpickable, which would make the
+ *     board's own promise — that a challenge can be put to any published listing — untrue for the
+ *     older half of the exchange. Every request that walk makes is a public one.
+ *
+ *   - **The board's page is read, one bounded page at a time.** `GET /challenges` answers one page of
+ *     a board it counts in full, so the address's page is forwarded to the read and the two counts the
+ *     read states stay apart: the rows this page holds, and the size of the whole board. The paging
+ *     row below the board is what makes an older page reachable, and a page past the last one is the
+ *     ordinary empty page the route documents rather than a failure — it renders an explanation naming
+ *     the board's own size and a link back to the page holding its rows. An address whose page the
+ *     contract cannot express sends no request at all, because the client would have to replace the
+ *     value silently, and renders the `400` the API would have answered it with.
+ *
+ *   - **The empty board points at an action the page renders.** A challenge needs a published listing
+ *     to attach a question to, so the create form is rendered only while the picker holds a listing,
+ *     and an account that cannot ask is never offered it. The empty board's explanation is therefore
+ *     chosen by whether that form is on screen and not by the account's role alone: a sentence
+ *     directing a reader to "the form above" would name a form that is not there whenever the picker
+ *     is still loading, its read failed, or nothing is published yet.
  *
  *   - **The board is re-read, never patched.** A posted challenge, a posted response and a failed
  *     read all lead to the same thing: `GET /challenges` is read again and whatever came back is
@@ -49,11 +70,26 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { DEFAULT_LISTING_SORT, DEMO_AUTHENTICATION_LABEL, WRITE_RATE_LIMIT_MAX } from "@adem/shared";
-import type { ChallengeStatus, ListingSearchResult, ListingSummary } from "@adem/shared";
-import { getSelectedDemoAccountId, listChallenges, listListings, respondToChallenge } from "../api-client";
-import type { ChallengeListItem } from "../api-client";
+import { COLLECTION_PAGE_SIZE, DEMO_AUTHENTICATION_LABEL, WRITE_RATE_LIMIT_MAX } from "@adem/shared";
+import type { ChallengeStatus, ListingSummary } from "@adem/shared";
+import {
+  ApiClientError,
+  getSelectedDemoAccountId,
+  listChallenges,
+  respondToChallenge,
+} from "../api-client";
+import type { ChallengeBoardRead, ChallengeListItem } from "../api-client";
+import { readCatalogueListings } from "../catalogue-read";
+import {
+  ACCEPTED_PAGE_VALUES,
+  PAGE_PARAM,
+  collectionPageHref,
+  lastPageNumber,
+  readRequestedPage,
+} from "../collection-paging";
+import type { RequestedPage } from "../collection-paging";
 import { ChallengeForm } from "../components/challenge-form";
+import { CollectionPager } from "../components/collection-pager";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { findDemoAccount } from "../data/demo-accounts";
@@ -68,13 +104,36 @@ const CHALLENGES_PATH = "/challenges";
 const LISTING_PATH_PREFIX = "/listings";
 
 /**
- * The one query parameter this page reads and writes: the challenge a reader selected. It is the
- * page's only parameter, so a link carrying it rewrites exactly that parameter and nothing else.
+ * The one query parameter this page reads and writes for its selection: the challenge a reader
+ * selected. Every other parameter — the page of the board most of all — travels beside it untouched.
  */
 const SELECTED_CHALLENGE_PARAM = "id";
 
-/** The page of the listing search the challenge picker reads: the first one, and only that one. */
+/**
+ * The page an address that asks for no usable page is compared against. It is never sent: such an
+ * address has no request, and the refusal notice is what the board renders for it.
+ */
 const FIRST_PAGE = 1;
+
+/** The accessible name of the paging row, and the collection its own reasons name. */
+const PAGER_LABEL = "Board pages";
+const PAGER_COLLECTION_NAME = "board";
+
+/**
+ * The refusal an address whose page the board read cannot express is explained with.
+ *
+ * It is the same `400` the API would have answered such a request with, rendered through the same
+ * component, so a reader meets one shape whichever side refused: what happened, what the board read
+ * accepts in place of the value, and the link that resolves the address. The value itself is quoted in
+ * the notice's detail, where it is rendered as text rather than echoed into a message.
+ */
+const REFUSAL_MESSAGE =
+  "The address carries a page value the board read cannot express, so no request was sent for it.";
+const REFUSED_PAGE_PARAMETER_NOTE = `The board is read one page of ${String(COLLECTION_PAGE_SIZE)} challenges at a time, and the page parameter names which of those pages to read.`;
+const WITHOUT_PAGE_PARAMETER_LABEL = "Read the board without the page parameter";
+
+/** The page past the last one: the state this page's own route documentation names, with its way back. */
+const LAST_PAGE_OF_THE_BOARD_LABEL = "Go to the last page of the board";
 
 /** The word the open state is stated with, so a status is never conveyed by colour alone. */
 const STATUS_WORD_OPEN = "Open";
@@ -96,16 +155,21 @@ const LOADING_BOARD_MESSAGE = "Loading the challenges board…";
 const RESPONDER_UNLISTED_LABEL = "an account the demo-account switcher does not list";
 
 /**
- * The empty board, and the same state for an account the create form is withheld from.
+ * The empty board, in the three states the page can be in when it renders.
  *
- * The two differ in one sentence: the form above the board is offered to a buyer and to a visitor
- * who has selected no account, so pointing the first reader at it is a direction and pointing the
- * second at it would be a direction to nothing.
+ * The sentences differ in one thing: what the reader can do next. The first points at the create form
+ * above the board, and is used only while that form is rendered. The second is for an account that may
+ * not ask at all. The third is for every other reason the form is absent — the picker still loading,
+ * the picker's read failed, or nothing published yet — and it names only an action the page does offer,
+ * the link to browse the listings: a board that told a reader to use a form it does not render would be
+ * directing them at nothing.
  */
 const EMPTY_BOARD_EXPLANATION =
   "No one has asked a challenge yet. A challenge is a public question about a listing's claims, and the first one can be asked from the form above.";
 const EMPTY_BOARD_EXPLANATION_WITHOUT_FORM =
   "No one has asked a challenge yet. A challenge is a public question about a listing's claims, and one can be asked by a buyer account.";
+const EMPTY_BOARD_EXPLANATION_WITHOUT_LISTING =
+  "No one has asked a challenge yet. A challenge is a public question about a listing's claims, and it is attached to a published listing, so a form for asking one appears on this page once a listing can be read to attach a question to. The listings can be browsed in the meantime.";
 
 /**
  * A challenge nobody has answered yet, and the same state for an account the answer form is withheld
@@ -235,20 +299,53 @@ function describeResponseCount(count: number): string {
   return `${count} responses`;
 }
 
+/** How many challenges a count is, in the reader's own words, singular or plural. */
+function describeChallengeCount(count: number): string {
+  return count === 1 ? "one challenge" : `${count} challenges`;
+}
+
 /**
- * What the board's live region says once a read has settled, in the words the sibling boards use.
+ * How many rows the page holds, as a bare count rather than as a count of something.
  *
- * The count is the one fact a reader cannot see from the list itself when it is long, and it is what
- * tells a reader who just asked a challenge that the board has taken it.
+ * The sentence that states it names the board's own noun once, after "of its", so the row count belongs
+ * there as a number alone — "holding 20 of its 24 challenges". A count of one is spelled rather than
+ * written as a digit, as every count in this file is, so a short page never reads "1 of its 24
+ * challenges".
  */
-function describeLoadedBoard(count: number): string {
-  if (count === 0) {
+function describeRowCount(count: number): string {
+  return count === 1 ? "one" : String(count);
+}
+
+/** How many pages a count of pages is, in the reader's own words, singular or plural. */
+function describePageCount(count: number): string {
+  return count === 1 ? "one page" : `${count} pages`;
+}
+
+/**
+ * What the board's live region says once a read has settled. The two counts are the facts a reader
+ * cannot see from the list itself, and they are not the same fact: how many rows this page holds, and
+ * how many challenges the whole board holds.
+ *
+ * There are four settled sentences, and which one is said depends on whether the board's own size is
+ * known to be on screen. The whole board is on screen exactly when the page carries every challenge the
+ * read counted, so the board's size is stated as the board's size then and only then. A page that holds
+ * rows of a longer board names the page and both counts; a page past the end has no rows to show and
+ * says where the board's rows are instead. A page that came back exactly full is never described as the
+ * board, which is what a sentence stating a page's row count as the board's size would do.
+ */
+function describeLoadedBoard(page: number, count: number, total: number): string {
+  if (total === 0) {
     return "The board is loaded and holds no challenge yet.";
   }
-  if (count === 1) {
-    return "The board is loaded with one challenge on it.";
+  if (count === total) {
+    return `The board is loaded with ${describeChallengeCount(count)} on it.`;
   }
-  return `The board is loaded with ${count} challenges on it.`;
+  if (count === 0) {
+    return total === 1
+      ? `Page ${String(page)} of the board is loaded, and its ${describeChallengeCount(total)} is before it.`
+      : `Page ${String(page)} of the board is loaded, and its ${describeChallengeCount(total)} are all before it.`;
+  }
+  return `Page ${String(page)} of the board is loaded, holding ${describeRowCount(count)} of its ${describeChallengeCount(total)}.`;
 }
 
 /** The one line a picker option shows: the listing's title and the handle of its developer. */
@@ -260,7 +357,7 @@ function describeListingChoice(listing: ListingSummary): string {
 }
 
 /**
- * The picker's options, built from one page of the search read.
+ * The picker's options, built from the listing rows the catalogue walk returned.
  *
  * A row without a usable identifier is left out rather than offered as a choice that could not be
  * sent, so the picker holds only listings a challenge can actually be attached to.
@@ -277,11 +374,101 @@ function readListingChoices(items: readonly ListingSummary[]): readonly ListingC
   return choices;
 }
 
-/** The address that selects one challenge on the board, rewriting only the selection parameter. */
-function selectionHref(challengeId: string): string {
-  const params = new URLSearchParams();
-  params.set(SELECTED_CHALLENGE_PARAM, challengeId);
-  return `${CHALLENGES_PATH}?${params.toString()}`;
+/**
+ * The address that selects one challenge from the page of the board the reader is looking at.
+ *
+ * The selection is rewritten and every other parameter of the board's own address is carried through
+ * untouched, so a challenge opened from an older page keeps that page: the row the reader clicked is on
+ * it, and an address that dropped the page would report that challenge as one the page it was clicked
+ * from does not carry. The parameter's value is left to the serialisation, which encodes it.
+ */
+function selectionHref(params: URLSearchParams, challengeId: string): string {
+  const next = new URLSearchParams(params);
+  next.set(SELECTED_CHALLENGE_PARAM, challengeId);
+  return `${CHALLENGES_PATH}?${next.toString()}`;
+}
+
+/** A page value the contract cannot express, with the value the address wrote. */
+type PageRefusal = Extract<RequestedPage, { readonly kind: "refused" }>;
+
+/**
+ * The notice an address whose page the contract refuses is explained with.
+ *
+ * It is the same `400` the API would have answered such a request with, rendered through the same
+ * component, and the link drops the parameter at fault and keeps every other one — the smallest change
+ * that makes the address answerable again, so a reader who mistyped a page number keeps the challenge
+ * they had open. The value is quoted as text and no request is ever sent for it: the client would have
+ * to replace it silently, and a page that showed one page while its address asked for another would be
+ * a page whose own address is not what it shows.
+ */
+function renderRefusalNotice(refusal: PageRefusal, validHref: string): JSX.Element {
+  return (
+    <ErrorNotice
+      error={new ApiClientError(400, "validation_error", REFUSAL_MESSAGE)}
+      detail={
+        <>
+          <p>
+            {`The address carries "${refusal.value}" as the page parameter, and the board read accepts ${ACCEPTED_PAGE_VALUES}.`}
+          </p>
+          <p>{REFUSED_PAGE_PARAMETER_NOTE}</p>
+          <p>
+            <Link to={validHref}>{WITHOUT_PAGE_PARAMETER_LABEL}</Link>
+          </p>
+        </>
+      }
+    />
+  );
+}
+
+/**
+ * The address with the page parameter removed, which is how a refused page value is resolved.
+ *
+ * A refused value is dropped rather than replaced with `1`: the reader wrote neither, and the shortest
+ * address that means the first page is the one without the parameter at all.
+ */
+function hrefWithoutPageParameter(params: URLSearchParams): string {
+  const next = new URLSearchParams(params);
+  next.delete(PAGE_PARAM);
+  const serialized = next.toString();
+  return serialized === "" ? CHALLENGES_PATH : `${CHALLENGES_PATH}?${serialized}`;
+}
+
+/**
+ * One settled reading of the board: the page the address asked for, the rows and the board's own count
+ * the service answered with, and the page the service stated those rows are from.
+ *
+ * The two counts are held apart on purpose, because they are two facts: `items.length` is how many rows
+ * this page holds, and `total` is how many challenges the whole board holds. A sentence that stated one
+ * as the other would tell a reader they had seen everything while rows remained.
+ */
+interface BoardReading {
+  /** The page the address asked for, which is the page this reading is kept for. */
+  readonly requestedPage: number;
+  /** The page's challenges, in the service's own order. */
+  readonly items: readonly ChallengeListItem[];
+  /** The number of challenges the whole board holds, as the read stated it. */
+  readonly total: number;
+  /** The page the service stated these rows are from, which is the page a sentence names. */
+  readonly answeredPage: number;
+}
+
+/**
+ * The board as this page holds it: the page the state answers, the reading that page has, whether a read
+ * for it is in flight, and the failure the last read of it raised.
+ *
+ * One object rather than four pieces of state, because the four are read together and a reading of one
+ * page must never be rendered as though it answered another: the page is the key, and the whole state
+ * moves with it.
+ */
+interface BoardState {
+  /** The address page this state answers. */
+  readonly page: number;
+  /** The reading this page has, or `null` while its first read has yet to settle. */
+  readonly reading: BoardReading | null;
+  /** Whether a read for this page is in flight. */
+  readonly isLoading: boolean;
+  /** The failure the last read of this page raised, or `null`. */
+  readonly failure: unknown;
 }
 
 /** The address of one listing's own page, which a board entry links to. */
@@ -589,7 +776,16 @@ function answerRoleExplanation(account: DemoAccount): string {
  */
 export function Challenges(): JSX.Element {
   const idPrefix = useId();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // The address, read once per render and reduced to primitives, so the effects below re-run when the
+  // page it asks for changes rather than whenever a fresh `URLSearchParams` was allocated for the same
+  // address.
+  const requested = readRequestedPage(searchParams);
+  const refusal: PageRefusal | null = requested.kind === "refused" ? requested : null;
+  const page = requested.kind === "requested" ? requested.page : FIRST_PAGE;
+  const refusalKey = refusal === null ? "" : refusal.value;
+
   const selectedChallengeId = readSelectedChallengeId(searchParams);
 
   // The selected demo account, resolved on every render: the switcher in the page header writes the
@@ -604,9 +800,15 @@ export function Challenges(): JSX.Element {
     selectedAccount.role === "buyer" ||
     selectedAccount.role === "developer";
 
-  const [challenges, setChallenges] = useState<readonly ChallengeListItem[]>([]);
-  const [isBoardLoading, setIsBoardLoading] = useState<boolean>(true);
-  const [boardError, setBoardError] = useState<unknown | null>(null);
+  // The board as this page holds it, keyed by the page it answers, and the counter that asks for
+  // another read of it. A state whose page is not the one the address asks for is not rendered at all,
+  // which is what keeps the previous page's rows from appearing under the new page's address.
+  const [board, setBoard] = useState<BoardState>((): BoardState => ({
+    page,
+    reading: null,
+    isLoading: true,
+    failure: null,
+  }));
   const [boardReadCount, setBoardReadCount] = useState<number>(0);
 
   const [listingChoices, setListingChoices] = useState<readonly ListingChoice[]>([]);
@@ -617,7 +819,23 @@ export function Challenges(): JSX.Element {
 
   const listingPickerRef = useRef<HTMLSelectElement | null>(null);
 
+  // The reading the address's page has, or the in-flight state that stands in for it: a reading of
+  // another page answers a question the reader is no longer asking.
+  const current: BoardState =
+    board.page === page ? board : { page, reading: null, isLoading: true, failure: null };
+
+  // The rows on screen, and the whole of what this page renders from. A refused page renders none of
+  // them: the notice below the board's status region is what the page shows instead.
+  const rows: readonly ChallengeListItem[] | null =
+    refusal !== null || current.reading === null ? null : current.reading.items;
+
+  const total = current.reading === null ? 0 : current.reading.total;
+  const lastPage = lastPageNumber(total);
+  const isBoardEmpty = rows !== null && rows.length === 0 && total === 0;
+  const isPastLastPage = rows !== null && rows.length === 0 && total > 0;
+
   const reloadBoard = useCallback((): void => {
+    setBoard((previous: BoardState): BoardState => ({ ...previous, isLoading: true }));
     setBoardReadCount((count: number): number => count + 1);
   }, []);
 
@@ -632,74 +850,149 @@ export function Challenges(): JSX.Element {
     listingChoices[0];
   const chosenListingId = chosenChoice === undefined ? "" : chosenChoice.id;
 
+  // Whether the create form is on screen at all, which is one thing and not two: it is rendered only
+  // for an account that may ask, only once the picker's read has settled, and only while that read
+  // offers a listing to attach a question to. The empty board's explanation is chosen from this rather
+  // than from the role alone, so no reader is sent to a form that is not there.
+  const isCreateFormRendered =
+    canAskChallenge && !isChoicesLoading && choicesError === null && chosenListingId !== "";
+
   const selectedChallenge =
-    selectedChallengeId === null
+    rows === null || selectedChallengeId === null
       ? null
-      : (challenges.find((row: ChallengeListItem): boolean => row.id === selectedChallengeId) ??
-        null);
+      : (rows.find((row: ChallengeListItem): boolean => row.id === selectedChallengeId) ?? null);
   const selectedRowId = selectedChallenge === null ? "" : readString(selectedChallenge.id);
 
   // A selection the page of the board does not hold is its own state, but only once the board has
-  // answered: during a read, and after a read that failed, the board has said nothing about it.
+  // answered: during a read, after a read that failed, and while a refused page stands, the board has
+  // said nothing about it.
   const isSelectionUnavailable =
+    refusal === null &&
     selectedChallengeId !== null &&
-    !isBoardLoading &&
-    boardError === null &&
+    !current.isLoading &&
+    current.failure === null &&
+    rows !== null &&
     selectedChallenge === null;
 
   // The sentence the board's status region carries, or `null` when it should carry none.
   //
-  // A read that failed carries none: the error notice beside the region is the explanation there,
-  // and a count of a board the read did not produce would contradict it. While a read is in flight
-  // the region says so, and once it has settled it states the count that tells a reader — who has
-  // just asked a challenge, or who cannot count a long list at a glance — what the board now holds.
+  // A refused page carries none: the refusal notice beneath the region states the refusal inside its
+  // own live region, so a sentence here would put the same words on the page twice and have a
+  // screen-reader user hear them twice. A refused address is also the one case where the loading
+  // sentence below must not stand in, because no request is sent for such an address at all. A read
+  // that failed carries none either: the error notice beside the region is the explanation there, and
+  // a count of a board the read did not produce would contradict it. While the first read of a page is
+  // in flight the region says so, and once it has settled it states which page the rows are from and
+  // both counts — what this page holds, and what the whole board holds — which a reader who has just
+  // asked a challenge, or who cannot count a long list at a glance, has no other way to see.
   const boardStatus =
-    boardError !== null
+    refusal !== null || current.failure !== null
       ? null
-      : isBoardLoading
+      : current.reading === null
         ? LOADING_BOARD_MESSAGE
-        : describeLoadedBoard(challenges.length);
+        : current.isLoading
+          ? null
+          : describeLoadedBoard(
+              current.reading.answeredPage,
+              current.reading.items.length,
+              current.reading.total,
+            );
 
-  // The board read. The read counter is the only input that re-runs it, which is what makes a
-  // re-read happen after a write instead of a row being patched in place. The cancelled flag
-  // discards a result that arrives after its read was superseded, so two reads in flight can never
-  // render the older one over the newer.
-  useEffect(() => {
+  /** The address of one page of this board, carrying whatever else the board's address holds. */
+  const pageHref = useCallback(
+    (targetPage: number): string => collectionPageHref(CHALLENGES_PATH, searchParams, targetPage),
+    [searchParams],
+  );
+
+  /**
+   * The board read, and the page's only read of the board.
+   *
+   * A refused page has no request to send, so the effect sends none and the notice stands in its place.
+   * The read counter and the page are the only inputs that re-run it, which is what makes a re-read
+   * happen after a write instead of a row being patched in place. The cancelled flag discards a result
+   * that arrives after its read was superseded, so two reads in flight can never render the older one
+   * over the newer.
+   */
+  useEffect((): (() => void) | void => {
+    if (refusal !== null) {
+      return;
+    }
+
     let isCancelled = false;
-    setIsBoardLoading(true);
-    setBoardError(null);
-    listChallenges()
-      .then((rows: ChallengeListItem[]): void => {
+
+    // A read of the page the address asks for is in flight, and the rows already read for that same
+    // page stay on screen while it is: only a read of a different page starts from nothing, so a
+    // re-read after a write never blanks the board and a page change never shows the page just left.
+    setBoard((previous: BoardState): BoardState => ({
+      page,
+      reading: previous.page === page ? previous.reading : null,
+      isLoading: true,
+      failure: null,
+    }));
+
+    listChallenges(page)
+      .then((boardRead: ChallengeBoardRead): void => {
         if (!isCancelled) {
-          setChallenges(rows);
+          setBoard({
+            page,
+            reading: {
+              requestedPage: page,
+              items: boardRead.items,
+              total: boardRead.total,
+              answeredPage: boardRead.page,
+            },
+            isLoading: false,
+            failure: null,
+          });
         }
       })
       .catch((caught: unknown): void => {
         if (!isCancelled) {
-          setBoardError(caught);
-        }
-      })
-      .finally((): void => {
-        if (!isCancelled) {
-          setIsBoardLoading(false);
+          setBoard((previous: BoardState): BoardState => ({
+            page,
+            reading: previous.page === page ? previous.reading : null,
+            isLoading: false,
+            failure: caught,
+          }));
         }
       });
+
     return (): void => {
       isCancelled = true;
     };
-  }, [boardReadCount]);
+  }, [page, refusalKey, boardReadCount]);
+
+  /**
+   * A challenge was asked: return the address to the board's newest page, then read the board again.
+   *
+   * Both halves are needed. The page parameter is dropped rather than written as `1` for the same reason
+   * the pager's first-page link drops it, and a reader who asked from an older page therefore leaves it,
+   * which is what makes the new row — the board's newest — the one the re-read places on screen. The
+   * re-read is what puts it there in the order the service keeps rather than at a position this page
+   * chose.
+   */
+  const handleChallengeCreated = useCallback((): void => {
+    const next = new URLSearchParams(searchParams);
+    next.delete(PAGE_PARAM);
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next);
+    }
+    reloadBoard();
+  }, [reloadBoard, searchParams, setSearchParams]);
 
   // The listing options, read once per trigger and for one purpose only: giving the create form a
-  // listing to attach a challenge to. A listing row without a usable identifier is dropped here, so
-  // the picker holds only listings a write can actually name.
+  // listing to attach a challenge to. The read is the workspace's bounded walk over every page of the
+  // public listing search rather than its newest page alone, so a listing older than that page can still
+  // carry a challenge. A row without a usable identifier is dropped by the walk's own reading, so the
+  // picker holds only listings a write can actually name.
   useEffect(() => {
     let isCancelled = false;
     setIsChoicesLoading(true);
     setChoicesError(null);
-    listListings({ sort: DEFAULT_LISTING_SORT, page: FIRST_PAGE })
-      .then((result: ListingSearchResult): void => {
+    readCatalogueListings()
+      .then((listings: ListingSummary[]): void => {
         if (!isCancelled) {
-          setListingChoices(readListingChoices(result.items));
+          setListingChoices(readListingChoices(listings));
         }
       })
       .catch((caught: unknown): void => {
@@ -725,8 +1018,8 @@ export function Challenges(): JSX.Element {
     listingPickerRef.current?.focus();
   };
 
-  // The listing a board entry is about, named by its title when the picker's page of results holds
-  // it and described in words when it does not. The link's address is the listing's own either way.
+  // The listing a board entry is about, named by its title when the picker holds it and described in
+  // words when it does not. The link's address is the listing's own either way.
   const describeListingReference = (listingId: string): string => {
     const choice = listingChoices.find(
       (candidate: ListingChoice): boolean => candidate.id === listingId,
@@ -746,6 +1039,16 @@ export function Challenges(): JSX.Element {
         Ask the first challenge
       </button>
     );
+
+  // The empty board's explanation, chosen by what the page actually offers: the form above only while
+  // that form is rendered, the buyer-account sentence for an account that may not ask, and the
+  // listings sentence for every other reason the form is absent. The action below follows the same two
+  // states, so the sentence and the control always point at the same place.
+  const emptyBoardExplanation = !canAskChallenge
+    ? EMPTY_BOARD_EXPLANATION_WITHOUT_FORM
+    : isCreateFormRendered
+      ? EMPTY_BOARD_EXPLANATION
+      : EMPTY_BOARD_EXPLANATION_WITHOUT_LISTING;
 
   return (
     <main id="main-content" tabIndex={-1} className="page page-challenges">
@@ -808,7 +1111,7 @@ export function Challenges(): JSX.Element {
                 the developer whose listing it is can answer it.
               </p>
             </div>
-            <ChallengeForm listingId={chosenListingId} onCreated={reloadBoard} />
+            <ChallengeForm listingId={chosenListingId} onCreated={handleChallengeCreated} />
           </>
         )}
       </section>
@@ -823,22 +1126,41 @@ export function Challenges(): JSX.Element {
           {boardStatus === null ? null : <p>{boardStatus}</p>}
         </div>
 
-        {boardError === null ? null : <ErrorNotice error={boardError} onRetry={reloadBoard} />}
+        {/* A page the contract refuses is explained rather than sent, so the notice stands where the
+            page's own outcome would: there are no rows to render, and no request was made for any. */}
+        {refusal === null ? null : renderRefusalNotice(refusal, hrefWithoutPageParameter(searchParams))}
 
-        {isBoardLoading || boardError !== null || challenges.length > 0 ? null : (
+        {refusal !== null || current.failure === null ? null : (
+          <ErrorNotice error={current.failure} onRetry={reloadBoard} />
+        )}
+
+        {/* The two empty states the board has, and they are not the same state. A board that holds
+            nothing at all is explained with an action the page actually offers; a page past the
+            board's last one holds no rows either, but the board does, so that state names the board's
+            own size and where its rows stop and offers the page they are on. */}
+        {isBoardEmpty ? (
           <EmptyState
             heading="No challenges yet"
             headingLevel={2}
-            explanation={
-              canAskChallenge ? EMPTY_BOARD_EXPLANATION : EMPTY_BOARD_EXPLANATION_WITHOUT_FORM
-            }
+            explanation={emptyBoardExplanation}
             action={emptyBoardAction}
           />
-        )}
+        ) : null}
 
-        {challenges.length === 0 ? null : (
+        {isPastLastPage ? (
+          <EmptyState
+            heading={`Nothing on page ${String(page)}`}
+            headingLevel={2}
+            explanation={`The board holds ${describeChallengeCount(total)} on ${describePageCount(lastPage)}; page ${String(page)} is past the last page.`}
+            action={
+              <Link to={pageHref(lastPage)}>{LAST_PAGE_OF_THE_BOARD_LABEL}</Link>
+            }
+          />
+        ) : null}
+
+        {rows === null || rows.length === 0 ? null : (
           <ul className="item-list">
-            {challenges.map((challenge: ChallengeListItem, index: number): JSX.Element => {
+            {rows.map((challenge: ChallengeListItem, index: number): JSX.Element => {
               const challengeId = readString(challenge.id);
               const listingId = readString(challenge.listing_id);
               const isSelected = challengeId !== "" && challengeId === selectedChallengeId;
@@ -851,8 +1173,10 @@ export function Challenges(): JSX.Element {
                     {challengeId === "" ? (
                       readQuestion(challenge.question)
                     ) : (
+                      /* The address carries the page the reader is on as well as the challenge, so
+                         the selection they open is resolved against the rows it was clicked from. */
                       <Link
-                        to={selectionHref(challengeId)}
+                        to={selectionHref(searchParams, challengeId)}
                         aria-current={isSelected ? "true" : undefined}
                       >
                         {readQuestion(challenge.question)}
@@ -882,6 +1206,20 @@ export function Challenges(): JSX.Element {
               );
             })}
           </ul>
+        )}
+
+        {/* The paging row belongs to a board that has answered: without a settled reading there is no
+            size to page over, and the notice above is what a reader is owed instead. It is rendered
+            for a page past the end too, because the page that holds the rows is exactly where its
+            controls go. */}
+        {refusal !== null || current.reading === null ? null : (
+          <CollectionPager
+            page={current.reading.requestedPage}
+            lastPage={lastPage}
+            label={PAGER_LABEL}
+            collectionName={PAGER_COLLECTION_NAME}
+            hrefFor={pageHref}
+          />
         )}
 
         {selectedChallenge === null ? null : (

@@ -1577,7 +1577,10 @@ function DeveloperWorkspace(props: { readonly account: DemoAccount }): JSX.Eleme
     (): Promise<OwnedListingsRead> => readOwnedListings(handle),
     [handle],
   );
-  const readChallenges = useCallback((): Promise<ChallengeListItem[]> => listChallenges(), []);
+  const readChallenges = useCallback(
+    (): Promise<readonly ChallengeListItem[]> => listChallenges().then((board) => board.items),
+    [],
+  );
   const readStandards = useCallback((): Promise<StandardListItem[]> => listStandards(), []);
 
   const listings = useServiceRead(readListings, listingsToken);
