@@ -38,8 +38,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** The command the report names as its generator. */
 const SCAN_COMMAND = 'npm run scan:exclusions';
 
-/** The exit code an unexpected argument earns, which `main` decides on its own. */
-const USAGE_EXIT_CODE = 2;
+/** The one exit code a run that reached no verdict leaves behind: an argument, or unreadable rules. */
+const NO_VERDICT_EXIT_CODE = 2;
 
 /** The address separator, assembled as `exclusion-rules.ts` assembles its own. */
 const ADDRESS_SEPARATOR = String.fromCharCode(64);
@@ -498,7 +498,7 @@ describe('the real command line', () => {
       join(REPO_ROOT, 'scripts', 'scan-exclusions.ts'),
       '--unexpected',
     ], PLANTED_ROOT);
-    expect(run.status).toBe(USAGE_EXIT_CODE);
+    expect(run.status).toBe(NO_VERDICT_EXIT_CODE);
     expect(run.stderr).toContain('--unexpected');
     expect(run.stdout).toBe('');
   });
@@ -561,8 +561,8 @@ describe('a telephone-shaped token joined by a single hyphen', () => {
 describe('the exit code', () => {
   it('is 0 for an empty command line, 2 for any argument, and untouched by runScan', () => {
     expect(main([])).toBe(0);
-    expect(main(['--unexpected'])).toBe(USAGE_EXIT_CODE);
-    expect(USAGE_EXIT_CODE).toBe(2);
+    expect(main(['--unexpected'])).toBe(NO_VERDICT_EXIT_CODE);
+    expect(NO_VERDICT_EXIT_CODE).toBe(2);
     const before = process.exitCode;
     expect(plantedScan().exitCode).toBe(1);
     expect(runScan({ root: REPO_ROOT }).exitCode).toBe(0);
@@ -588,8 +588,19 @@ describe('the provider digest store', () => {
     expect(() => loadBlockedProviderTokens(path)).toThrow();
     const result = runScan({ root: REFUSED_ROOT, blockedProviderPath: path });
     expect(result.findings).toEqual([]);
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(NO_VERDICT_EXIT_CODE);
     expect(result.notes).toHaveLength(1);
     expect(result.notes[0]).toContain(refused.file);
+  });
+
+  it('reports no verdict rather than a clean tree when its own rules cannot be read', () => {
+    const refused = REFUSED_STORES[0];
+    if (refused === undefined) {
+      throw new Error('the refused stores list is empty');
+    }
+    const result = runScan({ root: REFUSED_ROOT, blockedProviderPath: join(REFUSED_ROOT, refused.file) });
+    const report = renderScanReport(result);
+    expect(report).toContain('reached no verdict');
+    expect(report).not.toContain('0 finding(s)');
   });
 });

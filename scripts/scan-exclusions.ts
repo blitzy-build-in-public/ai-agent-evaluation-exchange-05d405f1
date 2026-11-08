@@ -39,8 +39,12 @@ import type { ExclusionClass, ExclusionRule, FileKind, RuleMatch } from './exclu
 /** The command that runs this scan, named in the report so a reader knows how to repeat it. */
 const SCAN_COMMAND = 'npm run scan:exclusions';
 
-/** Exit code for an unexpected command line - the only code {@link main} decides on its own. */
-const USAGE_EXIT_CODE = 2;
+/**
+ * The one exit code for a run that reached no verdict: an unexpected command line, or a scan whose own
+ * rules could not be read. Distinct from `1`, which means the scan did read the tree and found
+ * something, so a broken scanner is never mistaken for a dirty tree or for a clean one.
+ */
+const NO_VERDICT_EXIT_CODE = 2;
 
 /** Path of the provider digest store, relative to the scan root. */
 const DIGEST_STORE_RELATIVE_PATH = join('scripts', 'blocked-provider-hashes.json');
@@ -131,7 +135,7 @@ export interface ScanResult {
   readonly historyLinesScanned: number;
   /** Operator-facing notes, such as why no history was read. Empty when there is nothing to report. */
   readonly notes: readonly string[];
-  /** `1` when there is at least one finding and `0` when there is none. */
+  /** `1` when there is at least one finding, `0` when there is none, `2` when no verdict was reached. */
   readonly exitCode: number;
 }
 
@@ -739,13 +743,14 @@ function scanGitHistory(root: string): HistoryScan {
  *
  * The provider digest store is read once, before any file: the prohibited-dependency rule cannot match
  * a name without it, so a store that is missing, malformed or unreadable refuses the run with the
- * loader's own message as the single note rather than reporting a scan that could not have seen a
- * prohibited dependency. The scan then reads the working tree's files, the manifests and lockfiles,
- * and the history, and never writes anything.
+ * loader's own message as the single note and a {@link NO_VERDICT_EXIT_CODE} exit code, rather than
+ * reporting a scan that could not have seen a prohibited dependency. The scan then reads the tree's
+ * files, the manifests and lockfiles, and the history, and never writes anything.
  *
  * @param options - The root, the digest store and its override, and whether to read the history.
  * @returns Every finding with its file and line, the file and history counts, the notes, and `1` when
- * there is at least one finding or `0` when there is none.
+ * there is at least one finding, `0` when there is none, or {@link NO_VERDICT_EXIT_CODE} when the run
+ * could not read its own rules and therefore reached no verdict at all.
  */
 export function runScan(options: RunScanOptions = {}): ScanResult {
   const root = resolvePath(options.root ?? process.cwd());
@@ -764,7 +769,7 @@ export function runScan(options: RunScanOptions = {}): ScanResult {
       filesSkipped: 0,
       historyLinesScanned: 0,
       notes: [messageOf(error)],
-      exitCode: 1,
+      exitCode: NO_VERDICT_EXIT_CODE,
     };
   }
 
@@ -824,7 +829,8 @@ export function runScan(options: RunScanOptions = {}): ScanResult {
  * say which file failed would not be actionable. Every limitation in `SCAN_LIMITATIONS` is printed
  * verbatim, because that list is the artefact's own statement of its limits and a scan must not be
  * read as covering more than it does. Excerpts are printed exactly as the rules masked them, so a
- * report can never echo a raw matched value.
+ * report can never echo a raw matched value. A run that reached no verdict closes by saying so, in
+ * place of a finding count, so a scan that could not run never reads as a clean tree.
  *
  * @param result - One run's findings, counts and notes.
  * @returns The report, ready to print, ending in a newline.
@@ -862,6 +868,13 @@ export function renderScanReport(result: ScanResult): string {
     }
   }
 
+  if (result.exitCode === NO_VERDICT_EXIT_CODE) {
+    // A run that could not read its own rules holds no verdict at all, so the closing line states that
+    // rather than printing a zero-finding summary a reader could take for a clean tree.
+    lines.push('', 'The scan reached no verdict, because it could not run: the note above says why.');
+    return `${lines.join('\n')}\n`;
+  }
+
   const ruleCount = new Set(result.findings.map((finding) => finding.ruleId)).size;
   lines.push('', `${result.findings.length} finding(s) across ${ruleCount} rule(s).`);
   return `${lines.join('\n')}\n`;
@@ -873,7 +886,7 @@ export function renderScanReport(result: ScanResult): string {
  * The scan takes no arguments, which is the only thing this can decide on its own.
  *
  * @param argv - Arguments after the script name. Defaults to the process's own.
- * @returns `0` when the command may proceed, {@link USAGE_EXIT_CODE} for an unexpected argument.
+ * @returns `0` when the command may proceed, {@link NO_VERDICT_EXIT_CODE} for an unexpected argument.
  */
 export function main(argv: readonly string[] = process.argv.slice(2)): number {
   const unexpected = argv.filter((argument) => argument.trim().length > 0);
@@ -881,7 +894,7 @@ export function main(argv: readonly string[] = process.argv.slice(2)): number {
     process.stderr.write(
       `scan:exclusions takes no arguments; unexpected: ${unexpected.join(' ')}\n`,
     );
-    return USAGE_EXIT_CODE;
+    return NO_VERDICT_EXIT_CODE;
   }
   return 0;
 }
