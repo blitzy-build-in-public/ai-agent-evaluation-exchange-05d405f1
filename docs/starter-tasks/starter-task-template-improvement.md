@@ -37,7 +37,7 @@ place where the shape is written down.
 
 **What you may not change.** The three structural elements — the level-one title, the scope section and
 the acceptance note — may not be removed or renamed, because the suite above asserts them and
-criterion 12, the contributor path, rests on them. The folder's population and its file names stay as
+the contributor path rests on them. The folder's population and its file names stay as
 they are: one brief per task the plan lists. And the folder's conventions hold: Markdown only, no
 subfolder, no index file, no additional template file, and no further brief invented to hold the
 template, because the template is the shape these briefs share rather than a file of its own. Do not
@@ -79,5 +79,5 @@ worked example.
 5. `npm run scan:exclusions` exits 0 with an empty finding list, and no file in this folder contains
    `@` or a run of five or more consecutive digits.
 6. The pull-request description records which briefs you changed and which of the three structural
-   elements each change left intact, so a reviewer confirms criterion 12 still holds without
+   elements each change left intact, so a reviewer confirms the contributor path still holds without
    re-deriving it.

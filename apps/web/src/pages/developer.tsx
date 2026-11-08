@@ -17,11 +17,12 @@
  * Three decisions shape the developer half.
  *
  * **"This developer's listings" is derived, because the contract has no per-developer read.** The
- * workspace walks the public catalogue page by page — the page size is the contract's fixed
- * {@link LISTING_PAGE_SIZE} — and keeps the listings whose developer handle is the selected
- * account's. A listing's version history, its claims and the evidence linked to its newest version
- * are then read once per listing, and a listing whose detail cannot be read (a hidden or removed
- * listing is not readable by its id) is left out and counted rather than blanking the workspace.
+ * workspace reads the public catalogue once through the shared catalogue reader — the page size is the
+ * contract's fixed {@link LISTING_PAGE_SIZE} and is never a parameter — and keeps the listings whose
+ * developer handle is the selected account's. A listing's version history, its claims and the evidence
+ * linked to its newest version are then read once per listing under {@link OWNED_DETAIL_READ_LIMIT}, and
+ * a listing whose detail cannot be read (a hidden or removed listing is not readable by its id) is left
+ * out and counted rather than blanking the workspace.
  *
  * **The evaluation submission is one labelled JSON field.** No route exposes the fixture case set and
  * this workspace may not reach the fixture data, so a per-case input list cannot exist: the field
@@ -56,19 +57,19 @@ import {
   listAuditEvents,
   listChallenges,
   listLedger,
-  listListings,
   listStandards,
   openAppeal,
 } from "../api-client";
 import type { ChallengeListItem, StandardListItem } from "../api-client";
+import { readCatalogueListings } from "../catalogue-read";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { LedgerTable } from "../components/ledger-table";
+import { mapWithConcurrency } from "../concurrency";
 import { findDemoAccount } from "../data/demo-accounts";
 import type { DemoAccount } from "../data/demo-accounts";
 import { describeRetryWait, isRecord, readText, readWriteFailure, statusOf } from "../payload-reading";
 import {
-  DEFAULT_LISTING_SORT,
   FOUNDER_ALLOCATION_CONTRACT_LABEL,
   LEDGER_NAMES,
   LISTING_PAGE_SIZE,
@@ -144,13 +145,14 @@ const LISTINGS_HEADING = "Your listings";
 
 /**
  * What the listings section states about where these listings come from: the contract's own shape is
- * why the page walks the catalogue instead of asking for one developer's listings.
+ * why the page reads the whole catalogue instead of asking for one developer's listings.
  */
 const LISTINGS_EXPLANATION =
   "The published listings whose owning developer is this account's handle. There is no per-developer " +
-  "read in the contract, so this workspace walks the public catalogue page by page and keeps the " +
-  "listings that name this developer; each one's version history, its claims with their stated " +
-  "limitations and the evidence linked to its newest version are then read per listing.";
+  "read in the contract, so this workspace reads the public catalogue — its first page, then the pages " +
+  "that cover the total that page reported — and keeps the listings that name this developer; each " +
+  "one's version history, its claims with their stated limitations and the evidence linked to its " +
+  "newest version are then read per listing.";
 
 /** The state rendered when the selected developer has published nothing. */
 const NO_LISTINGS_HEADING = "No listings yet";
@@ -1011,37 +1013,6 @@ function isPricingModel(value: string): value is PricingModel {
   return (PRICING_MODELS as readonly string[]).includes(value);
 }
 
-/**
- * The most pages of the listing catalogue this workspace will walk.
- *
- * The contract has no per-developer read, so the workspace walks the catalogue until the listings it
- * has collected reach the total the read reports. The bound is this page's own: a catalogue whose
- * reported total disagreed with its pages would otherwise be walked for ever, and a bound reached
- * yields the listings collected so far rather than a failure.
- */
-const MAX_LISTING_PAGES = 25;
-
-/**
- * Every listing the exchange publishes, collected page by page.
- *
- * The page size is the contract's fixed {@link LISTING_PAGE_SIZE} and is not a parameter, so each
- * page is requested by its number alone. A page that answers no rows ends the walk, as does having
- * collected as many listings as the read reported in total.
- */
-async function readEveryListingPage(): Promise<ListingSummary[]> {
-  const collected: ListingSummary[] = [];
-  for (let page = 1; page <= MAX_LISTING_PAGES; page += 1) {
-    const result = await listListings({ sort: DEFAULT_LISTING_SORT, page });
-    for (const item of result.items) {
-      collected.push(item);
-    }
-    if (result.items.length === 0 || collected.length >= result.total) {
-      break;
-    }
-  }
-  return collected;
-}
-
 /** One of the developer's own listings: the catalogue row and the detail read for it. */
 interface OwnedListing {
   readonly summary: ListingSummary;
@@ -1063,27 +1034,44 @@ interface OwnedListingsRead {
 }
 
 /**
+ * How many of this developer's listing details one read may have in flight at once.
+ *
+ * The detail is read for every one of this developer's listings rather than for the listing a reader
+ * opens, because the page renders each of them with its version history, its claims and the report link
+ * its newest version carries — `e2e/route-walk.spec.ts` asserts those visible on load for the demo
+ * developer account — and the contract's only read for a listing's versions and claims is the listing's
+ * own detail read, since a catalogue summary carries neither. The reads are batched under this bound
+ * rather than deferred behind an interaction, and the bound is deliberately small: the API is one
+ * process whose storage calls are synchronous, so a burst wider than this one queues behind the writer
+ * without finishing any sooner.
+ */
+const OWNED_DETAIL_READ_LIMIT = 4;
+
+/**
  * This developer's listings, each with its detail.
  *
- * The catalogue is walked and filtered by the summary's developer handle, which is the only read that
- * can answer "this developer's listings" while the contract has no per-developer route, and then each
- * listing's detail is read for its version history, its claims and its linked evidence. One detail
+ * The catalogue is read once through {@link readCatalogueListings} and filtered by the summary's
+ * developer handle, which is the only read that can answer "this developer's listings" while the
+ * contract has no per-developer route, and then each listing's detail is read for its version history,
+ * its claims and its linked evidence, {@link OWNED_DETAIL_READ_LIMIT} of them at a time. One detail
  * that cannot be read — a listing no longer in public view is not readable by its id — is left out and
  * counted rather than failing the workspace the developer is working in.
  */
 async function readOwnedListings(handle: string): Promise<OwnedListingsRead> {
-  const catalogue = await readEveryListingPage();
+  const catalogue = await readCatalogueListings();
   const summaries = catalogue.filter(
     (summary: ListingSummary): boolean => summary.developer_handle === handle,
   );
-  const reads = await Promise.all(
-    summaries.map(async (summary: ListingSummary): Promise<OwnedListing | null> => {
+  const reads = await mapWithConcurrency(
+    summaries,
+    OWNED_DETAIL_READ_LIMIT,
+    async (summary: ListingSummary): Promise<OwnedListing | null> => {
       try {
         return { summary, detail: await getListing(summary.id) };
       } catch {
         return null;
       }
-    }),
+    },
   );
   const listings: OwnedListing[] = [];
   let unreadableCount = 0;
@@ -1318,10 +1306,10 @@ function readyValueOf<T>(state: ReadState<T>): T | null {
 }
 
 
-/** How the workspace walks the catalogue, said with the page size the contract fixes. */
+/** How the workspace reads the catalogue, said with the page size the contract fixes. */
 const PAGING_NOTE =
   `The catalogue answers ${LISTING_PAGE_SIZE} listings at a time and reports how many it matched in ` +
-  "total, so the workspace walks its pages until the listings it has collected reach that total.";
+  "total, so the workspace reads the pages that cover that total rather than one page of it.";
 
 /** What a section states while the read it depends on is still in flight. */
 const EVALUATION_WAITING_SENTENCE = "Reading this developer's versions…";

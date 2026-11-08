@@ -4,7 +4,7 @@ Labels: P0, good-first-issue, milestone M3
 
 ## Scope
 
-Criterion 9 is proved by `e2e/a11y.spec.ts`, which audits four pages — the homepage
+The accessibility gate is proved by `e2e/a11y.spec.ts`, which audits four pages — the homepage
 `apps/web/src/pages/home.tsx`, a listing page `apps/web/src/pages/listing-detail.tsx`, a comparison
 `apps/web/src/pages/compare.tsx` and a report `apps/web/src/pages/report.tsx` — under the two
 accessibility projects `playwright.config.ts` declares: `a11y-desktop` sets a 1280 px viewport and
@@ -44,10 +44,10 @@ secret, an environment value of your own or a database someone created by hand, 
 first, because these suites run against the built application.
 
 **What you must not do.** Do not narrow axe's rule set — no disabled rule, no excluded node, no tag
-filter and no scoping — because a narrowed rule set quietly changes what the criterion means. Do not
-raise the impact filter above `serious`, do not weaken or delete an existing assertion, and do not set a
-viewport in the spec. Do not "fix" a violation by loosening the test: a genuine violation is fixed in
-the component or the stylesheet that caused it — `apps/web/src/components/**`,
+filter and no scoping — because a narrowed rule set quietly changes what the accessibility gate means.
+Do not raise the impact filter above `serious`, do not weaken or delete an existing assertion, and do not
+set a viewport in the spec. Do not "fix" a violation by loosening the test: a genuine violation is fixed
+in the component or the stylesheet that caused it — `apps/web/src/components/**`,
 `apps/web/src/styles/tokens.css` and `apps/web/src/styles/app.css` — and described in the pull request,
 because a layout that overflows its width is a defect on the page rather than in the check.
 

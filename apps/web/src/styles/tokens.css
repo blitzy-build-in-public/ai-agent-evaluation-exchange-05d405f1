@@ -12,11 +12,13 @@
  * component's geometry rather than a value of this set. This file is deliberately
  * nothing more than that: it is not a design system and it does not grow into one.
  *
- * Everything that renders lives in app.css. This file holds exactly three rule
- * sets — the :root value set, one :focus-visible rule and one
- * prefers-reduced-motion guard. There is no reset, no element rule and no
- * component rule here, and app.css contains no colour literal at all, so a
- * contrast fix anywhere in the UI is a one-line edit in this file.
+ * Everything that renders lives in app.css. This file holds exactly four rule
+ * sets — the :root value set, the two-part focus policy below (one rule drawing
+ * the ring for controls, one suppressing it for the elements that are focusable
+ * only programmatically) and one prefers-reduced-motion guard. There is no reset,
+ * no element rule and no component rule here, and app.css contains no colour
+ * literal at all, so a contrast fix anywhere in the UI is a one-line edit in this
+ * file.
  *
  * Contrast. Every ratio quoted below is the WCAG 2.1 relative-luminance contrast
  * ratio (L1 + 0.05) / (L2 + 0.05), computed from the values as written. Body text
@@ -240,13 +242,40 @@
   --motion-duration-base: 250ms; /* disclosure and panel transitions */
 }
 
-/* One focus rule for the whole UI: every link, button, input, select, textarea,
+/* The focus policy for the whole UI, in two rules that only work together.
+
+   The first rule draws the ring. Every link, button, input, select, textarea,
    radio control, the navigation disclosure button and the demo-account switcher
-   inherit it, and app.css never repeats or narrows it. outline is never removed,
-   so a keyboard user always sees where focus is (criterion 2.4.7). */
-:focus-visible {
+   inherit it, and app.css never repeats or narrows it. The outline is never
+   removed from a control, so a keyboard user always sees where focus is
+   (criterion 2.4.7).
+
+   The :not([tabindex="-1"]) part is a decision, not a slip, and widening the
+   selector back would restore a defect: an element carrying tabindex="-1" is
+   focusable only programmatically, so it is not a control, Tab never reaches it,
+   and the ring drawn on it is not the keyboard user's location. The shell's
+   bypass link moves focus to the routed page's <main>, and three pages move
+   focus to a region of their own, so the ring would be drawn around a container
+   the size of the whole page and read as a stray page-wide outline rather than
+   as a control. No control is excluded: the only elements that carry
+   tabindex="-1" are the page landmark and those regions. */
+:focus-visible:not([tabindex="-1"]) {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
+}
+
+/* The second rule is what makes that exclusion hold, and it is not redundant
+   with the first one, so it must not be deleted as dead code: narrowing the
+   selector above leaves the user agent's own ring for :focus-visible as the only
+   outline on the same element, and Chrome draws that as a 1px auto outline around
+   the page-sized landmark — the same stray page-wide rule the policy above
+   exists to prevent. An author declaration outranks the user agent's stylesheet
+   whatever the specificity, so this outline: none is what removes it. A
+   programmatic target is not keyboard operable and shows no focus indicator of
+   its own, which is why it carries no ring at all rather than a quieter one:
+   every control keeps the 2px ring and its offset from the rule above. */
+[tabindex="-1"]:focus {
+  outline: none;
 }
 
 /* Readers who ask for less motion get none: every duration collapses to zero, so

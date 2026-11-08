@@ -8,16 +8,27 @@
  * table and the root `e2e/route-walk.spec.ts` are one contract: rename a path here and three places
  * disagree rather than one.
  *
- * **The shell renders no landmark.** Every page owns the route's single `<main>` and its single
- * `<h1>` — the route root carries `.page`, `id="main-content"` and `tabIndex={-1}` — so the matched
- * element is wrapped in a plain container (`.app-main`) and never in a landmark. A `<main>` here
- * would nest one landmark inside another, and every page's own comment says the shell must not wrap
- * a page in another landmark.
+ * **The shell adds no landmark around the routed page.** Every page owns the route's single
+ * `<main>` and its single `<h1>` — the route root carries `.page`, `id="main-content"` and
+ * `tabIndex={-1}` — so the matched element is wrapped in a plain container (`.app-main`) and never
+ * in a landmark. A `<main>` here would nest one landmark inside another, and every page's own
+ * comment says the shell must not wrap a page in another landmark.
  *
- * **The bypass link belongs to the shell.** It is the first focusable element on the page and its
- * target is the routed page's `#main-content`: that id and the page's `tabIndex={-1}` are a pair
- * with this link, which is what lets it move focus to the page without putting `<main>` in the tab
- * order.
+ * **Each route's page module is loaded on demand.** No page module is imported eagerly: each is
+ * fetched when its route is matched, so a visitor downloads the page they asked for rather than all
+ * thirteen, and the routes sit inside one `<Suspense>` boundary. That boundary's fallback is a
+ * status region and nothing more — it adds no landmark and no heading, because the routed page owns
+ * the document's single `<main>` and its single `<h1>`, and the shell wraps no page in a landmark
+ * and stands no heading in front of one.
+ *
+ * **The bypass link belongs to the shell.** It renders inside the header's banner landmark, as the
+ * header's first child, so it precedes the navigation in source order and — the header being the
+ * shell's first child — it stays the document's first focusable element. Its target is the routed
+ * page's `#main-content`: that id and the page's `tabIndex={-1}` are a pair with this link, which is
+ * what lets it move focus to the page without putting `<main>` in the tab order. Moving it under the
+ * header needs no CSS: the link is absolutely positioned against the initial containing block,
+ * because neither `.app-header` nor `.app-shell` is positioned, so its resting position off the top
+ * of the viewport and its reveal on focus are unchanged.
  *
  * **The demonstration disclosure is persistent and sits in the header.** The banner renders on every
  * route and at every width — the stylesheet gives it its own line inside the header row at desktop
@@ -33,30 +44,39 @@
  * its own still renders its own explanation.
  */
 
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { getSelectedDemoAccountId } from "./api-client";
 import { DemoAccountSwitcher } from "./components/demo-account-switcher";
 import { DemoBanner } from "./components/demo-banner";
 import { Nav } from "./components/nav";
-import Academy from "./pages/academy";
-import Challenges from "./pages/challenges";
-import ComparePage from "./pages/compare";
-import DeveloperPage from "./pages/developer";
-import Home from "./pages/home";
-import ListingDetailPage from "./pages/listing-detail";
-import ListingsPage from "./pages/listings";
-import Mission from "./pages/mission";
-import NotFound from "./pages/not-found";
-import OpportunityIndex from "./pages/opportunity-index";
-import ReportPage from "./pages/report";
-import Standards from "./pages/standards";
-import Threads from "./pages/threads";
+
+const Academy = lazy(() => import("./pages/academy"));
+const Challenges = lazy(() => import("./pages/challenges"));
+const ComparePage = lazy(() => import("./pages/compare"));
+const DeveloperPage = lazy(() => import("./pages/developer"));
+const Home = lazy(() => import("./pages/home"));
+const ListingDetailPage = lazy(() => import("./pages/listing-detail"));
+const ListingsPage = lazy(() => import("./pages/listings"));
+const Mission = lazy(() => import("./pages/mission"));
+const NotFound = lazy(() => import("./pages/not-found"));
+const OpportunityIndex = lazy(() => import("./pages/opportunity-index"));
+const ReportPage = lazy(() => import("./pages/report"));
+const Standards = lazy(() => import("./pages/standards"));
+const Threads = lazy(() => import("./pages/threads"));
 
 /** What the bypass link says, and what it targets: the routed page's own landmark. */
 const SKIP_LINK_LABEL = "Skip to main content";
 const SKIP_LINK_TARGET = "#main-content";
+
+/**
+ * What the shell announces, politely, while a route's page module is being fetched. It is a status
+ * sentence only: the fallback it belongs to carries no landmark and no heading, because the page it
+ * is about to be replaced by owns both.
+ */
+const ROUTE_LOADING_SENTENCE =
+  "Loading this page. Its module is fetched on demand, so the page appears as soon as its own code has arrived; the shell reads no data of its own.";
 
 /**
  * The shell: the router, the header and the frame the matched page renders in.
@@ -86,30 +106,38 @@ export default function App(): JSX.Element {
   return (
     <BrowserRouter>
       <div className="app-shell">
-        <a className="app-skip-link" href={SKIP_LINK_TARGET}>
-          {SKIP_LINK_LABEL}
-        </a>
         <header className="app-header">
+          <a className="app-skip-link" href={SKIP_LINK_TARGET}>
+            {SKIP_LINK_LABEL}
+          </a>
           <Nav />
           <DemoAccountSwitcher value={selectedAccountId} onChange={handleAccountChange} />
           <DemoBanner />
         </header>
         <div className="app-main">
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/mission" element={<Mission />} />
-            <Route path="/listings" element={<ListingsPage />} />
-            <Route path="/listings/:id" element={<ListingDetailPage />} />
-            <Route path="/compare" element={<ComparePage />} />
-            <Route path="/developer" element={<DeveloperPage />} />
-            <Route path="/challenges" element={<Challenges />} />
-            <Route path="/threads" element={<Threads />} />
-            <Route path="/standards" element={<Standards />} />
-            <Route path="/reports/:id" element={<ReportPage />} />
-            <Route path="/academy" element={<Academy />} />
-            <Route path="/opportunity-index" element={<OpportunityIndex />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <Suspense
+            fallback={
+              <p className="status-region" role="status" aria-live="polite">
+                {ROUTE_LOADING_SENTENCE}
+              </p>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/mission" element={<Mission />} />
+              <Route path="/listings" element={<ListingsPage />} />
+              <Route path="/listings/:id" element={<ListingDetailPage />} />
+              <Route path="/compare" element={<ComparePage />} />
+              <Route path="/developer" element={<DeveloperPage />} />
+              <Route path="/challenges" element={<Challenges />} />
+              <Route path="/threads" element={<Threads />} />
+              <Route path="/standards" element={<Standards />} />
+              <Route path="/reports/:id" element={<ReportPage />} />
+              <Route path="/academy" element={<Academy />} />
+              <Route path="/opportunity-index" element={<OpportunityIndex />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Suspense>
         </div>
       </div>
     </BrowserRouter>

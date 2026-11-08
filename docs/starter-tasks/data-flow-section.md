@@ -84,6 +84,6 @@ and which of them are append-only; `docs/ARCHITECTURE.md` for the boundaries you
    `npm run test:integration -- --testNamePattern="the rows the seed publishes"` and
    `--testNamePattern="the standard and the candidates the seed describes"` both exit 0. Paste both.
 5. The added lines carry no address-shaped string and no run of five or more consecutive digits, and
-   `npm run scan:exclusions` exits 0 with an empty finding list once that script exists.
+   `npm run scan:exclusions` exits 0 with an empty finding list.
 6. The pull-request description states which path you added and why the document did not already cover
    it.

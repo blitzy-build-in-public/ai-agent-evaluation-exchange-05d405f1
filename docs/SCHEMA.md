@@ -353,8 +353,11 @@ different file for a throwaway run. The `.adem/` directory is gitignored; the co
 first use, so a fresh checkout needs no step. Any SQLite client opens the file — nothing about it is
 private to better-sqlite3 — and the schema a reader finds there is the one this document describes.
 `npm run seed` loads the synthetic demo data through the exported `seedDatabase` of
-`apps/api/src/seed/seed-database.ts`, idempotently, and the integration suite uses an in-memory
-database instead of a file, so running the suite never touches a contributor's database. A write is
+`apps/api/src/seed/seed-database.ts` — **once, against a fresh database**: a file that already holds
+rows is refused rather than emptied, so a second run exits non-zero and changes nothing, and the
+remedy is another `ADEM_DB_PATH` or removing `.adem/adem.sqlite`. The integration suite uses an
+in-memory database instead of a file, so running the suite never touches a contributor's database.
+A write is
 visible in the `-wal` file until the writer checkpoints, so the file a reader opens without the
 `-wal` beside it can be behind the last few commits.
 

@@ -89,6 +89,5 @@ and the pull-request checklist; `docs/ROADMAP.md` for the milestone and priority
    packages/shield/src/index.ts` prints nothing, and `ls packages/shield/src packages/shield/src/policy`
    shows no file added — your change extends the worked example and the test beside it rather than
    adding a module, and no per-package runner configuration exists.
-6. Once `scripts/scan-exclusions.ts` exists, `npm run scan:exclusions` exits 0 with an empty finding
-   list; before that, check by hand that no string you added contains `@` or a run of five or more
-   consecutive digits.
+6. `npm run scan:exclusions` exits 0 with an empty finding list, and no string you added contains
+   `@` or a run of five or more consecutive digits.

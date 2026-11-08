@@ -28,10 +28,11 @@ including `packages/shared/migrations/0001`–`0012`, among them `0012_amount_in
 
 **Priority tier:** P0 — the infrastructure every other milestone is built on.
 
-**Exit condition.** From a clean checkout: `npm ci` exits 0, `npm run build` exits 0, and an empty
-unit run (`npm run test:unit` with no test file in the tree yet) succeeds; and the twelve migrations
-apply in filename order to an in-memory database, with the append-only triggers created on all nine
-append-only tables.
+**Exit condition.** From a clean checkout: `npm ci` exits 0, `npm run build` exits 0, and the unit leg
+behaves as `vitest.unit.config.ts` states — on a tree with no test file yet `npm run test:unit` reports
+`No test files found` and exits 1 (`passWithNoTests: false`), and it exits 0 as soon as one test file
+lands; and the twelve migrations apply in filename order to an in-memory database, with the append-only
+triggers created on all nine append-only tables.
 
 ## M2 — Exchange discovery (P0)
 
@@ -71,11 +72,11 @@ candidates), `packages/sgi-core/src/{standards,scoring,reports,proposals,appeals
 
 **Priority tier:** P0 — the Standard Gate Index, the deterministic evaluator and the sample badges.
 
-**Exit condition.** Criterion 3 and criterion 4 pass. Two runs over the same candidate fixture yield
-byte-identical per-case results and outcomes (`npm run test:unit -- packages/sgi-core`,
-`npm run test:integration -- --testNamePattern=evaluations`), and no route mutates a report, a case
-result or a governance event while an appeal ruling leaves the report identical
-(`npm run test:integration -- --testNamePattern=immutability`).
+**Exit condition.** The evaluator is reproducible and the report stores are append-only: two runs over
+the same candidate fixture yield byte-identical per-case results and outcomes
+(`npm run test:unit -- packages/sgi-core`, `npm run test:integration -- --testNamePattern=evaluations`),
+and no route mutates a report, a case result or a governance event while an appeal ruling leaves the
+report identical (`npm run test:integration -- --testNamePattern=immutability`).
 
 ## M4 — Collaboration and Shield (P1)
 
@@ -98,8 +99,8 @@ the starter tasks — are in place.
 **Priority tier:** P1 — Shield Basic, buyer challenges, collaboration, contributor documents and the
 extension seams.
 
-**Exit condition.** Criterion 5's Shield suite passes (`npm run test:unit -- packages/shield`),
-criterion 8's API half passes (`npm run test:integration -- --testNamePattern="route walk"`), and the
+**Exit condition.** The Shield decisions suite passes (`npm run test:unit -- packages/shield`), the
+API half of the route walk passes (`npm run test:integration -- --testNamePattern="route walk"`), and the
 example extension's own acceptance test passes
 (`npm run test:unit -- examples/extension-fixture-pack`) with `git diff --stat -- packages/sgi-core/src/scoring`
 empty for the change that adds it.
@@ -126,7 +127,7 @@ simulated amount carries a disclosure label, and the founder ledger's contract s
 **Priority tier:** P2 — the Academy, the opportunity index, the sponsor slot, and the commerce and
 fee ledgers.
 
-**Exit condition.** Criterion 6's ledger arithmetic passes (`npm run test:unit -- packages/commerce-sim`,
+**Exit condition.** The ledger arithmetic passes (`npm run test:unit -- packages/commerce-sim`,
 `npm run test:integration -- --testNamePattern=ledger`): an eligible transaction of 10,000 minor
 units allocates 25 with the default configuration, a full refund appends a reversal bringing the net
 allocation to 0, a partial refund of 4,000 reverses 10, a gate fee produces no allocation, and no

@@ -49,9 +49,11 @@ End to end, on synthetic seed data, with no manual setup:
    append-only audit feed and the three ledgers — and can never alter a measurement.
 
 Anyone may browse, read the documentation on this page and under `docs/`, read any evaluation report,
-and take ADEM Shield Basic without an account, because reads are public. The seed data is at least
-twelve listings across four categories, six demo accounts, three evaluated candidate fixtures,
-sponsored slots, threads, challenges and the one published standard version.
+work through the **Gate Readiness Academy** and answer its self-assessment — the result is computed
+locally and nothing is persisted — read the illustrative **opportunity index**, which states on every
+render that it is illustrative, and take ADEM Shield Basic without an account, because reads are public.
+The seed data is at least twelve listings across four categories, six demo accounts, three evaluated
+candidate fixtures, sponsored slots, threads, challenges and the one published standard version.
 
 ## What does not work here, and what is simulated
 
@@ -115,9 +117,9 @@ Three details save a first run:
   changes nothing. Delete `.adem/adem.sqlite` or point `ADEM_DB_PATH` at a new path to seed again.
   `npm start` applies the migrations but never seeds, so a fresh checkout shows the exchange only after
   the seed has run.
-- **The command sequence above is the documented path**, and it is the same four commands success
-  criterion 2 of the project's specification names: `npm install`, `npm run build`, `npm test`,
-  `npm start`.
+- **The command sequence above is the documented path** for a first run: `npm install`, `npm run build`,
+  `npm test`, `npm start`. All four are rows of the [command reference](#command-reference), which
+  documents every script the root `package.json` declares plus the two commands that are not scripts.
 
 ## Quick start with Docker
 
@@ -197,10 +199,13 @@ The six accounts a write may name are **synthetic seed rows**, and the UI shows 
 | --- | --- | --- |
 | `demo-developer` | developer | Listings, listing versions, evaluations of its own versions, appeals, challenge responses. |
 | `demo-developer-two` | developer | The same, as a second independent developer. |
-| `demo-buyer` | buyer | Inquiries, challenges, simulated checkouts. |
+| `demo-buyer` | buyer | Inquiries, challenges, challenge responses, simulated checkouts. |
 | `demo-buyer-two` | buyer | The same, as a second buyer. |
 | `demo-contributor` | contributor | Standards proposals, threads and posts. |
 | `demo-operator` | operator | Proposal reviews, appeal rulings, moderation actions, refunds, and the four operator reads. |
+
+Any resolvable demo account may start a thread and post to one: `POST /threads` and
+`POST /threads/{id}/posts` document no role and no `403`, so all six accounts may write there.
 
 A write carries the header `X-Demo-Account: <accountId>`, whose value is one of the seeded accounts'
 identifiers or handles, matched exactly. The header is a **synthetic role selector and never
@@ -408,7 +413,12 @@ and lockfiles, and the local git history, and it detects exactly four classes: m
 telephone-number patterns; credential material; and prohibited payment, analytics and advertising
 dependency names, matched against digests rather than names. It reports every finding with its file and
 line and deletes nothing, and it exits `2` rather than `0` when it could not reach a verdict at all, so
-a broken scanner is never mistaken for a clean tree. **It does not guarantee the absence of private
+a broken scanner is never mistaken for a clean tree. Two suppressions are stated in this command's
+own output and in `docs/REVIEW-CHECKLIST.md` §2: no mail-address finding is reported inside a
+lockfile or inside the deprecation notice npm copies verbatim from the registry, because both are
+upstream metadata the repository passes on rather than its own content, and none is reported on a git
+commit's `Author:` or `Committer:` line, because each commit carries the committing tool's identity
+rather than a person's address. **It does not guarantee the absence of private
 information.** It does not detect personal names; it does not detect the contextual disclosure of
 private or nonpublic information; and it does not detect references to private projects, products or
 datasets. A clean run is not evidence that the repository holds none of those, and no document, comment

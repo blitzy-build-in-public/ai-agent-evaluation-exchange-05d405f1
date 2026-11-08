@@ -16,11 +16,13 @@
  * **The read pages, and the bound is a decision rather than a detail.** The route answers with at
  * most `LISTING_PAGE_SIZE` items, while the index counts *supply across the published set*, so
  * reading page 1 alone would report a supply capped at 20 per category and present it as the
- * exchange's whole supply. The read therefore follows `total` page by page and stops at
- * `MAX_LISTING_PAGES`, so a `total` that is absurd, or a page that never advances, cannot make the
- * page spin. A bounded, best-effort total over the pages actually read is the honest figure to
- * index, and the page's own reading note states how the column was counted, so a reader is not
- * left to infer it.
+ * exchange's whole supply. The read itself belongs to `../catalogue-read`, whose one reader asks
+ * page 1 first — the read that reports `total` — and then asks the pages that cover that total
+ * together under its own twenty-five-page bound, so a `total` that is absurd, or a page that never
+ * advances, cannot make the page spin, and a catalogue larger than one page does not reach it one
+ * round-trip at a time. A bounded, best-effort total over the pages actually read is the honest
+ * figure to index, and the page's own reading note states how the column was counted, so a reader
+ * is not left to infer it.
  *
  * **The illustrative statement is unconditional, and it is the page's own.** It is rendered ahead
  * of every branch on the read's state, so it is present while the read is in flight, when it
@@ -52,10 +54,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { DEFAULT_LISTING_SORT, LISTING_PAGE_SIZE, SPONSORED_LABEL } from "@adem/shared";
-import type { ListingSearchQuery, ListingSearchResult, ListingSummary } from "@adem/shared";
+import { LISTING_PAGE_SIZE, SPONSORED_LABEL } from "@adem/shared";
 
-import { listListings } from "../api-client";
+import { readCatalogueListings } from "../catalogue-read";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import {
@@ -70,16 +71,6 @@ import {
   deriveOpportunityIndex,
 } from "../illustrative/opportunity-index";
 import type { OpportunityRow } from "../illustrative/opportunity-index";
-
-/**
- * How many pages of the public listing search one read follows before it stops.
- *
- * The bound exists so that the walk terminates on the data alone: `total` arrives as a number from
- * the service and a page that carried nothing would otherwise be asked for again for as long as
- * `total` claimed there was more. Twenty-five pages is five hundred listings, which is far beyond
- * the seeded set this foundation ships and still a finite, reachable end to the loop.
- */
-const MAX_LISTING_PAGES = 25;
 
 /** The route's heading. The page owns the document's single `<h1>` and this is its only text. */
 const HEADING = "Opportunity index";
@@ -137,48 +128,9 @@ const EMPTY_EXPLANATION =
   "There is no supply to index: no listing has been published yet, or none of the published listings carries a category this index can group by. Until a listing is published there is nothing for the fictional demand table to be set beside, so the index has no rows to show.";
 
 /**
- * Reads the public listing search page by page, up to {@link MAX_LISTING_PAGES}, and returns every
- * listing it collected.
- *
- * `GET /listings` is public and carries no identity, so this read sends no demo account; a caller
- * therefore needs no role and nothing to select. An empty result is the route's ordinary `200` with
- * `items: []` rather than an error, so the first page is always requested: it is the read that
- * reports whether the exchange carries any listing at all.
- *
- * The walk stops on the first page that carries nothing, on the page that reaches `total`, and at
- * the page bound — whichever comes first — so no combination of a wrong `total` and a short page can
- * keep it going. A `total` that is not a finite positive number is read as "no more than what has
- * already arrived", which ends the walk rather than extending it.
- */
-async function readListings(): Promise<readonly ListingSummary[]> {
-  const collected: ListingSummary[] = [];
-  let page = 1;
-  let hasMore = true;
-
-  while (hasMore && page <= MAX_LISTING_PAGES) {
-    const query: ListingSearchQuery = { sort: DEFAULT_LISTING_SORT, page };
-    const result: ListingSearchResult = await listListings(query);
-
-    // The walk is a `for...of` rather than index arithmetic, so nothing here depends on the page's
-    // length and the page's own array is read but never rearranged.
-    for (const listing of result.items) {
-      collected.push(listing);
-    }
-
-    const total =
-      Number.isFinite(result.total) && result.total > 0
-        ? Math.floor(result.total)
-        : collected.length;
-
-    hasMore = result.items.length > 0 && collected.length < total;
-    page += 1;
-  }
-
-  return collected;
-}
-
-/**
- * Builds the index rows: one public listing read, one derivation over what it collected.
+ * Builds the index rows: one read of the public listing search, asked page 1 first and then the
+ * pages that cover the reported total together under the shared reader's bound, and one derivation
+ * over what it collected.
  *
  * The derivation is called exactly once per read and its result is returned as it stands, so the
  * page adds no second definition of the index — no ordering, no rounding and no row of its own.
@@ -186,7 +138,7 @@ async function readListings(): Promise<readonly ListingSummary[]> {
  * figure, and there is nowhere in the contract that one could be fetched from.
  */
 async function readOpportunityRows(): Promise<readonly OpportunityRow[]> {
-  const listings = await readListings();
+  const listings = await readCatalogueListings();
   return deriveOpportunityIndex(listings, OPPORTUNITY_DEMAND_TABLE);
 }
 

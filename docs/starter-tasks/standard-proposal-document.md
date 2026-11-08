@@ -82,6 +82,5 @@ as a new version; `CONTRIBUTING.md` for the contribution path and the pull-reque
    governance rule is stated accurately — a new standard version is the only route by which criteria
    change, and an existing version and every applied migration are immutable — and no sentence claims
    certification, independent verification or a guaranteed pass.
-4. Once the exclusion scan is present in the tree, `npm run scan:exclusions` exits 0 with an empty
-   finding list; before that, check by hand that no string in your proposal holds an `@` or a run of
-   five or more consecutive digits.
+4. `npm run scan:exclusions` exits 0 with an empty finding list, and no string in your proposal holds
+   an `@` or a run of five or more consecutive digits.

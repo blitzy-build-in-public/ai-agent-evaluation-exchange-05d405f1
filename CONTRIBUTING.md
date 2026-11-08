@@ -229,6 +229,11 @@ value that clears a placeholder denylist, a length floor and an entropy gate); a
 payment, analytics and advertising dependency names, matched against a blocklist held as hashes. The
 command exits `0` on no finding, `1` on a finding and `2` when it could not reach a verdict at all,
 so a broken scanner is never mistaken for a clean tree.
+Two suppressions are stated in this command's own output and in `docs/REVIEW-CHECKLIST.md` §2: no
+mail-address finding is reported inside a lockfile or inside the deprecation notice npm copies
+verbatim from the registry, because both are upstream metadata the repository passes on rather than
+its own content, and none is reported on a git commit's `Author:` or `Committer:` line, because each
+commit carries the committing tool's identity rather than a person's address.
 
 **What it does not do, and may never be described as doing.** It does not detect personal names. It
 does not detect the contextual disclosure of private or nonpublic information. It does not detect

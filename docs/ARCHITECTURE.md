@@ -279,9 +279,11 @@ and nothing else in the workspace registers a plugin, a handler or a hook.
     without it.
   - `@fastify/static` serves the built UI from `apps/web/dist` when it exists. One not-found handler
     answers an `/api/` path, or a request whose last segment looks like a file, with the JSON envelope and
-    `404`, and every other path with the SPA entry and `200`, which is what lets the client router own deep
-    links. A checkout whose web build has not run yet is a supported state: the server answers for the API
-    alone rather than failing at start-up.
+    `404`, and every other path with the SPA entry and `200` **only for a document request** — `GET` or
+    `HEAD`; any other method on such a path is answered with the same JSON envelope and `404`. The
+    document request is what lets the client router own deep links without a mutation being answered with
+    the application shell and a `200`. A checkout whose web build has not run yet is a supported state:
+    the server answers for the API alone rather than failing at start-up.
   - Fastify 4 answers an unregistered path and an unregistered method on a registered path with the same
     `404`, and no group registers a method other than `GET` or `POST` — so an update or a delete of an
     append-only record is unreachable rather than refused.
