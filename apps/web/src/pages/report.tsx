@@ -72,6 +72,14 @@ import { createEvaluation, getReport, openAppeal } from "../api-client";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { SampleBadge } from "../components/sample-badge";
+import {
+  describeRetryWait,
+  isRecord,
+  readText,
+  readWriteFailure,
+  statusOf,
+  withFullStop,
+} from "../payload-reading";
 import { NotFound } from "./not-found";
 
 /** The heading of the page, and the label of the section that carries the report's identity. */
@@ -133,82 +141,6 @@ type WriteFailureReading =
       /** Whether the state offers the way back to browsing. */
       readonly offersBrowse: boolean;
     };
-
-/** The four facts a raised value carries, read defensively because the value is arbitrary. */
-interface WriteFailure {
-  readonly status: number;
-  readonly code: string;
-  readonly message: string;
-  readonly retryAfterSeconds: number | null;
-}
-
-/** Whether a raised value is an object facts can be read off. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-/** A property that is a non-empty string, or `null`: an empty property is not a fact. */
-function readText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
-}
-
-/**
- * A property that is a finite number, or `null`.
- *
- * `0` is kept rather than treated as absent: it is the status the client reports when no response was
- * received at all, which is a state both forms explain like any other.
- */
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-/** Narrows a raised value into the facts a sentence can be built from, or `null`. */
-function readWriteFailure(error: unknown): WriteFailure | null {
-  if (!isRecord(error)) {
-    return null;
-  }
-  const status = readNumber(error["status"]);
-  const code = readText(error["code"]);
-  const message = readText(error["message"]);
-  if (status === null || code === null || message === null) {
-    return null;
-  }
-  return {
-    status,
-    code,
-    message,
-    retryAfterSeconds: readNumber(error["retryAfterSeconds"]),
-  };
-}
-
-/** The HTTP status a raised value carries, or `null` — read for the read failure's `404` alone. */
-function statusOf(error: unknown): number | null {
-  if (!isRecord(error)) {
-    return null;
-  }
-  return readNumber(error["status"]);
-}
-
-/** A sentence that ends in its own full stop, so two sentences joined always read as two. */
-function withFullStop(sentence: string): string {
-  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
-}
-
-/**
- * The wait a throttled write states, built from the whole seconds a `Retry-After` carried.
- *
- * A missing, zero or negative value states that the wait is a moment, so a reader is never told to
- * wait for no time or for a negative one.
- */
-function describeRetryWait(retryAfterSeconds: number | null): string {
-  if (retryAfterSeconds === null || retryAfterSeconds < 1) {
-    return "Wait a moment, then send it again.";
-  }
-  const wholeSeconds = Math.ceil(retryAfterSeconds);
-  return wholeSeconds === 1
-    ? "Wait 1 second, then send it again."
-    : `Wait ${wholeSeconds} seconds, then send it again.`;
-}
 
 /**
  * The recorded output a report's per-case evidence holds for one case, used to prefill a retest.
@@ -276,7 +208,8 @@ interface RecordedOutputEntry {
 
 /** Whether a parsed value is a submission entry: an object carrying a case identifier and an output. */
 function isRecordedOutputEntry(value: unknown): value is RecordedOutputEntry {
-  if (!isRecord(value) || Array.isArray(value)) {
+  // A refusal is stated once: `isRecord` answers false for an array as well as for a primitive.
+  if (!isRecord(value)) {
     return false;
   }
   const caseId = readText(value["case_id"]);
@@ -374,12 +307,12 @@ const UNRESOLVED_VERSION_RETEST_SENTENCE =
 
 /** The sentence a throttled appeal renders. */
 function throttledAppealSentence(retryAfterSeconds: number | null): string {
-  return `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(retryAfterSeconds)} The reason you wrote has been kept.`;
+  return `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(retryAfterSeconds, "then send it again.")} The reason you wrote has been kept.`;
 }
 
 /** The sentence a throttled retest renders. */
 function throttledRetestSentence(retryAfterSeconds: number | null): string {
-  return `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(retryAfterSeconds)} The submission is still in the field.`;
+  return `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(retryAfterSeconds, "then send it again.")} The submission is still in the field.`;
 }
 
 /**

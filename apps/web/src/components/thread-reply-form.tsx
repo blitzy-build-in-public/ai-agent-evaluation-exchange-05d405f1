@@ -27,7 +27,8 @@ import type { ChangeEvent, FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { DEMO_AUTHENTICATION_LABEL, WRITE_RATE_LIMIT_MAX } from "@adem/shared";
 import type { Thread, ThreadPost } from "@adem/shared";
-import { ApiClientError, createPost, createThread } from "../api-client";
+import { createPost, createThread } from "../api-client";
+import { describeRetryWait, readWriteFailure } from "../payload-reading";
 
 /** The sentence the create form shows for a blank title, in place of a request. */
 const EMPTY_TITLE_MESSAGE = "Enter a title for the thread";
@@ -60,9 +61,9 @@ const THREAD_GONE_MESSAGE =
   "This thread is no longer on the board, so the reply was not posted. What you typed is still in the field, ready to be posted on another thread.";
 
 /**
- * The fallback for a failure that is not the api client's own typed error — a defect rather
- * than a refusal. Nothing is claimed about its cause beyond the fact that the write did not
- * complete.
+ * The fallback for a raised value the readers below cannot read as a failure at all — a defect
+ * rather than a refusal. Nothing is claimed about its cause beyond the fact that the write did
+ * not complete.
  */
 const UNEXPECTED_FAILURE_MESSAGE = "The write could not be completed. Try again.";
 
@@ -89,17 +90,22 @@ function regionFailure(message: string): WriteFailure {
 }
 
 /**
- * The throttled-write explanation, from the whole seconds a `Retry-After` reported. The count
- * of writes comes from the one definition the API contract uses, and an absent or spent count
- * falls back to "a moment" rather than to an instruction with no wait in it.
+ * The throttled-write explanation: this form's own "the allowance is spent" sentence, and the
+ * wait the response itself stated.
+ *
+ * The count of writes comes from the one definition the API contract uses. The wait no longer
+ * has a branch here at all: `../payload-reading` states it once for every form, and this file's
+ * own rule — a moment for an absent or spent count, one second in the singular, the seconds as
+ * given otherwise — is that module's rule. No delay is invented here, because the wait belongs to
+ * the service and arrives in a `Retry-After`.
+ *
+ * The module rounds a fractional wait up to the whole second a reader would count; a `Retry-After`
+ * carries whole seconds, so no sentence a service can reach is changed by that — every whole wait
+ * renders exactly as this form worded it before, the singular one included.
  */
 function describeRateLimit(retryAfterSeconds: number | null): string {
   const reached = `The write rate limit has been reached: ${WRITE_RATE_LIMIT_MAX} writes a minute is the whole allowance for a demo client.`;
-  if (retryAfterSeconds === null || retryAfterSeconds <= 0) {
-    return `${reached} Wait a moment, then try again.`;
-  }
-  const wait = retryAfterSeconds === 1 ? "1 second" : `${retryAfterSeconds} seconds`;
-  return `${reached} Wait ${wait}, then try again.`;
+  return `${reached} ${describeRetryWait(retryAfterSeconds, "then try again.")}`;
 }
 
 /**
@@ -108,34 +114,46 @@ function describeRateLimit(retryAfterSeconds: number | null): string {
  * No role refusal is rendered: this row accepts any resolvable demo account, so gating on a
  * role would refuse a write the contract allows, and a "wrong role" sentence would describe a
  * failure this form can never meet.
+ *
+ * The failure is read as the data it carries — its status, its code, its sentence and the wait it
+ * stated — rather than as an instance of the class that raised it, because it crossed a module
+ * boundary on its way here: a failure raised from another realm, or by a future client path, is
+ * explained exactly as the present one is. Only a value carrying none of those facts reaches the
+ * fallback.
  */
 function describeCreateFailure(error: unknown): WriteFailure {
-  if (!(error instanceof ApiClientError)) {
+  const failure = readWriteFailure(error);
+  if (failure === null) {
     return regionFailure(UNEXPECTED_FAILURE_MESSAGE);
   }
-  switch (error.status) {
+  switch (failure.status) {
     case 400:
       return { message: REFUSED_TITLE_MESSAGE, inField: true, threadGone: false };
     case 401:
       return regionFailure(NO_DEMO_ACCOUNT_MESSAGE);
     case 429:
-      return regionFailure(describeRateLimit(error.retryAfterSeconds));
+      return regionFailure(describeRateLimit(failure.retryAfterSeconds));
     default:
       // Every other failure the client raises already carries a sentence a page may render as it
       // stands — a transport failure, a server fault — and it carries no path, header or body.
-      return regionFailure(error.message);
+      return regionFailure(failure.message);
   }
 }
 
 /**
  * The explanation and the destination of a failed reply: {@link describeCreateFailure}'s cases
  * plus the `404` of a thread that is gone. There is no role refusal here for the same reason.
+ *
+ * Its failure is read the way {@link describeCreateFailure} reads one — as data rather than as an
+ * instance of the class that raised it — so a failure raised from another realm or by a future
+ * client path is recognised for the status it carries instead of losing it.
  */
 function describeReplyFailure(error: unknown): WriteFailure {
-  if (!(error instanceof ApiClientError)) {
+  const failure = readWriteFailure(error);
+  if (failure === null) {
     return regionFailure(UNEXPECTED_FAILURE_MESSAGE);
   }
-  switch (error.status) {
+  switch (failure.status) {
     case 400:
       return { message: REFUSED_REPLY_MESSAGE, inField: true, threadGone: false };
     case 401:
@@ -143,9 +161,9 @@ function describeReplyFailure(error: unknown): WriteFailure {
     case 404:
       return { message: THREAD_GONE_MESSAGE, inField: false, threadGone: true };
     case 429:
-      return regionFailure(describeRateLimit(error.retryAfterSeconds));
+      return regionFailure(describeRateLimit(failure.retryAfterSeconds));
     default:
-      return regionFailure(error.message);
+      return regionFailure(failure.message);
   }
 }
 
@@ -223,6 +241,10 @@ export function ThreadCreateForm(props: ThreadCreateFormProps): JSX.Element {
           type="text"
           value={title}
           onChange={handleTitleChange}
+          // The schema requires this field and the form refuses a blank value before it sends one, so
+          // the requirement is stated to assistive technology as well; `noValidate` above keeps the
+          // browser's own constraint check out of the submit path.
+          required
           aria-invalid={fieldError !== null}
           aria-describedby={fieldError === null ? titleHintId : `${titleHintId} ${titleErrorId}`}
           // Discussion content is free text that no browser or password manager has anything to
@@ -358,6 +380,10 @@ export function ThreadReplyForm(props: ThreadReplyFormProps): JSX.Element {
           rows={4}
           value={body}
           onChange={handleBodyChange}
+          // As with the title above: the contract requires this field and the form refuses a blank
+          // value before it sends one, so the requirement is stated here too, and `noValidate` keeps
+          // the browser's constraint check out of the submit path.
+          required
           aria-invalid={fieldError !== null}
           aria-describedby={fieldError === null ? bodyHintId : `${bodyHintId} ${bodyErrorId}`}
           // A reply is free text with no autofill purpose, so no browser or password manager is

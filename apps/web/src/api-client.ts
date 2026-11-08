@@ -12,14 +12,17 @@
  * build-time injected value and no absolute origin is read: the product needs no
  * configuration to run.
  *
- * **The demo account.** Every write — and the four operator-only reads — carries the
- * `X-Demo-Account` header, whose value is the selected synthetic account. It is a role
- * selector for a demonstration and never authentication of an identity: it is trivially
- * impersonable by design, which is why the server checks the role on every non-public
- * route and why the label "demo only, no production authentication" is visible wherever
- * the switcher appears. A write attempted with no account selected throws
+ * **The demo account.** Every write carries the `X-Demo-Account` header, whose value is
+ * the selected synthetic account, and so do the four operator-only reads, which require
+ * one. The public listing read carries it too, but only when an account is selected: a
+ * public row has to answer a reader who has selected none, which is why the header is
+ * optional there and why this module attaches it rather than refusing. The header is a
+ * role selector for a demonstration and never authentication of an identity: it is
+ * trivially impersonable by design, which is why the server checks the role on every
+ * non-public route and why the label "demo only, no production authentication" is visible
+ * wherever the switcher appears. A write attempted with no account selected throws
  * {@link ApiClientError} here, before any request is sent, so the failure reads as an
- * explanation rather than as a bare `401` from the server.
+ * explanation rather than as a bare `401` from the server; a public read never refuses.
  *
  * **One error shape.** Every non-2xx response is parsed as the API's single envelope
  * `{ error: { code, message } }` and raised as {@link ApiClientError}, carrying the status,
@@ -54,6 +57,8 @@ import {
   DEMO_ACCOUNT_HEADER,
   LISTING_PAGE_SIZE,
   LISTING_STATUSES,
+  PROPOSAL_STATUSES,
+  STANDARD_STATUSES,
 } from "@adem/shared";
 import type {
   Appeal,
@@ -106,6 +111,8 @@ import type {
   ThreadPostBody,
   Transaction,
 } from "@adem/shared";
+
+import { isRecord, readCount, readMember, readString, readText } from "./payload-reading";
 
 /**
  * The versioned prefix every route in this module is reached under. It is the API's own
@@ -314,11 +321,12 @@ interface ApiResponse {
 type HttpMethod = "GET" | "POST";
 
 /**
- * The parts of a request that vary: a read's query, a write's body, and whether the row is
- * non-public and therefore carries the demo account header.
+ * The parts of a request that vary: a read's query, a write's body, whether the row is
+ * non-public and therefore requires the demo account header, and whether the row is the
+ * public read that may be asked as the resolved demo account.
  *
  * Each key is omitted rather than passed as `undefined`, so `exactOptionalPropertyTypes`
- * makes every call site state which of the three applies.
+ * makes every call site state which of the four applies.
  */
 interface SendOptions {
   /** The serialised query of a read; omitted by every write. */
@@ -327,15 +335,24 @@ interface SendOptions {
   readonly body?: unknown;
   /** Whether the route requires the demo account header: every write, and four reads. */
   readonly demoAccount?: boolean;
+  /**
+   * Whether the row is the public read asked as the resolved demo account: the header is
+   * attached when one is selected and omitted when none is, because a public row must
+   * still answer a reader who has selected no account.
+   */
+  readonly optionalDemoAccount?: boolean;
 }
 
 /**
  * Sends one request and resolves with its status and parsed body.
  *
  * The request is built here and nowhere else: the versioned base path, the `accept` header,
- * the JSON content type on a write, and the demo account header — whose value comes from
- * {@link requireDemoAccountId}, so a request that needs an account is refused here before
- * anything is sent rather than answered by the server.
+ * the JSON content type on a write, and the demo account header. A route that requires the
+ * header takes its value from {@link requireDemoAccountId}, so such a request is refused
+ * here before anything is sent rather than answered by the server; the public read that
+ * {@link SendOptions.optionalDemoAccount} names takes it from
+ * {@link getSelectedDemoAccountId} and carries it only when an account is selected, since
+ * a public row is read by visitors who have selected none.
  *
  * Two failures are raised as {@link ApiClientError} and neither escapes as anything else: a
  * request that received no response at all, carrying {@link TRANSPORT_ERROR_CODE} and
@@ -347,6 +364,11 @@ async function send(method: HttpMethod, path: string, options: SendOptions = {})
   const headers: Record<string, string> = { accept: "application/json" };
   if (options.demoAccount === true) {
     headers[DEMO_ACCOUNT_HEADER] = requireDemoAccountId();
+  } else if (options.optionalDemoAccount === true) {
+    const accountId = getSelectedDemoAccountId();
+    if (accountId !== null) {
+      headers[DEMO_ACCOUNT_HEADER] = accountId;
+    }
   }
   if (options.body !== undefined) {
     headers["content-type"] = "application/json";
@@ -417,8 +439,8 @@ function envelopeOf(payload: unknown): ErrorEnvelope | null {
   if (!isRecord(error)) {
     return null;
   }
-  const code = text(error["code"]);
-  const message = text(error["message"]);
+  const code = readString(error["code"]);
+  const message = readString(error["message"]);
   if (code === "" || message === "") {
     return null;
   }
@@ -474,20 +496,16 @@ function errorForResponse(response: Response, payload: unknown): ApiClientError 
 /**
  * The typed error a response that cannot be read as its contract's shape is raised with:
  * the status it actually had, and a sentence that explains the client could not read it.
- * Raised for a success body that is not the entity it should be and for a list body that
- * carries no array, so a page shows an explanation rather than failing on an absent field.
+ * Raised for a success body that is not the entity it should be, for a list body that
+ * carries no array, and for a row whose required fields cannot be read, so a page shows an
+ * explanation rather than failing on an absent field or rendering a blank.
+ *
+ * Because it carries the status the response actually had, a caller can tell this failure
+ * from the service's own refusals: a refusal the service made always carries its own 4xx/5xx
+ * status, while this one carries the success status the unreadable answer arrived with.
  */
 function unreadableResponse(status: number): ApiClientError {
   return new ApiClientError(status, UNREADABLE_RESPONSE_CODE, UNREADABLE_RESPONSE_MESSAGE);
-}
-
-
-/**
- * Whether a value is a JSON object rather than an array, `null` or a primitive. Every read
- * below goes through it, so a payload of any other kind is handled rather than assumed.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** A payload as a record, or `null` when it is not one. */
@@ -577,41 +595,17 @@ function ownedCollection(
   if (ownerId === "") {
     return [];
   }
-  return siblings.filter((row: unknown): boolean => isRecord(row) && text(row[ownerField]) === ownerId);
-}
-
-/** A value as a string, and the empty string when it is not one. */
-function text(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * A value as a string, or `null` when it is absent or blank.
- *
- * This is what the listing payloads' report fields are read with: the contract states an
- * explicit `null` for a version with no report, and this module makes that `null` total so a
- * page renders the "No SGI report yet" state rather than an absent key.
- */
-function nullableText(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  return value.trim() === "" ? null : value;
-}
-
-/** A value as a non-negative whole number, or `null` when it is not one. */
-function integerOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+  return siblings.filter((row: unknown): boolean => isRecord(row) && readString(row[ownerField]) === ownerId);
 }
 
 /** A count read from a payload, falling back to a value the request already fixes. */
 function countOr(value: unknown, fallback: number): number {
-  return integerOrNull(value) ?? fallback;
+  return readCount(value) ?? fallback;
 }
 
 /** A count a response must state — the allocation rate the founder ledger is read with. */
 function requireCount(value: unknown, response: ApiResponse): number {
-  const count = integerOrNull(value);
+  const count = readCount(value);
   if (count === null) {
     throw unreadableResponse(response.status);
   }
@@ -627,7 +621,7 @@ function requireCount(value: unknown, response: ApiResponse): number {
  * {@link LISTING_STATUSES} is a response that cannot be read.
  */
 function listingStatusOf(value: unknown, response: ApiResponse): ListingStatus {
-  const status = text(value);
+  const status = readString(value);
   const match = LISTING_STATUSES.find((candidate: ListingStatus): boolean => candidate === status);
   if (match === undefined) {
     throw unreadableResponse(response.status);
@@ -641,7 +635,7 @@ function listingStatusOf(value: unknown, response: ApiResponse): ListingStatus {
  * search to nothing.
  */
 function appendFilter(params: URLSearchParams, name: string, value: string | undefined): void {
-  const filter = text(value).trim();
+  const filter = readString(value).trim();
   if (filter === "") {
     return;
   }
@@ -650,7 +644,7 @@ function appendFilter(params: URLSearchParams, name: string, value: string | und
 
 /** The page a search query states, and the first page when it states none. */
 function requestedPage(query: ListingSearchQuery): number {
-  const page = integerOrNull(query.page);
+  const page = readCount(query.page);
   return page === null || page < 1 ? 1 : page;
 }
 
@@ -711,9 +705,9 @@ function compareQuery(ids: readonly string[]): URLSearchParams {
 function normalizeCategory(value: unknown): Category {
   const record = recordOrNull(value) ?? {};
   return {
-    id: text(record["id"]),
-    slug: text(record["slug"]),
-    name: text(record["name"]),
+    id: readString(record["id"]),
+    slug: readString(record["slug"]),
+    name: readString(record["name"]),
   };
 }
 
@@ -729,19 +723,19 @@ function normalizeCategory(value: unknown): Category {
 function normalizeListingSummary(value: unknown): ListingSummary {
   const record = recordOrNull(value) ?? {};
   return {
-    id: text(record["id"]),
-    slug: text(record["slug"]),
-    title: text(record["title"]),
-    summary: text(record["summary"]),
-    developer_handle: text(record["developer_handle"]),
+    id: readString(record["id"]),
+    slug: readString(record["slug"]),
+    title: readString(record["title"]),
+    summary: readString(record["summary"]),
+    developer_handle: readString(record["developer_handle"]),
     category: normalizeCategory(record["category"]),
     pricing_model: record["pricing_model"] as PricingModel,
-    license_code: text(record["license_code"]),
-    version_string: text(record["version_string"]),
-    outcome: nullableText(record["outcome"]) as ReportOutcome | null,
-    standard_version_id: nullableText(record["standard_version_id"]),
-    label: nullableText(record["label"]) as ReportLabel | null,
-    limitation: nullableText(record["limitation"]),
+    license_code: readString(record["license_code"]),
+    version_string: readString(record["version_string"]),
+    outcome: readText(record["outcome"]) as ReportOutcome | null,
+    standard_version_id: readText(record["standard_version_id"]),
+    label: readText(record["label"]) as ReportLabel | null,
+    limitation: readText(record["limitation"]),
   };
 }
 
@@ -755,14 +749,14 @@ function normalizeListingDetail(response: ApiResponse): ListingDetail {
   const record = requireRecord(response);
   return {
     ...(record as unknown as ListingDetail),
-    developer_handle: text(record["developer_handle"]),
+    developer_handle: readString(record["developer_handle"]),
     category: normalizeCategory(record["category"]),
     versions: arrayOrEmpty(record["versions"]) as ListingVersion[],
     claims: arrayOrEmpty(record["claims"]) as ListingClaim[],
-    report_id: nullableText(record["report_id"]),
-    outcome: nullableText(record["outcome"]) as ReportOutcome | null,
-    standard_version_id: nullableText(record["standard_version_id"]),
-    label: nullableText(record["label"]) as ReportLabel | null,
+    report_id: readText(record["report_id"]),
+    outcome: readText(record["outcome"]) as ReportOutcome | null,
+    standard_version_id: readText(record["standard_version_id"]),
+    label: readText(record["label"]) as ReportLabel | null,
     offer_models: arrayOrEmpty(record["offer_models"]) as OfferModel[],
   };
 }
@@ -775,15 +769,15 @@ function normalizeListingDetail(response: ApiResponse): ListingDetail {
 function normalizeCompareEntry(value: unknown): CompareEntry {
   const record = recordOrNull(value) ?? {};
   return {
-    listing_id: text(record["listing_id"]),
-    title: text(record["title"]),
+    listing_id: readString(record["listing_id"]),
+    title: readString(record["title"]),
     claims: arrayOrEmpty(record["claims"]) as ListingClaim[],
-    report_id: nullableText(record["report_id"]),
-    outcome: nullableText(record["outcome"]) as ReportOutcome | null,
-    standard_version_id: nullableText(record["standard_version_id"]),
-    label: nullableText(record["label"]) as ReportLabel | null,
-    limitations: arrayOrEmpty(record["limitations"]).map(text),
-    license_code: text(record["license_code"]),
+    report_id: readText(record["report_id"]),
+    outcome: readText(record["outcome"]) as ReportOutcome | null,
+    standard_version_id: readText(record["standard_version_id"]),
+    label: readText(record["label"]) as ReportLabel | null,
+    limitations: arrayOrEmpty(record["limitations"]).map(readString),
+    license_code: readString(record["license_code"]),
     pricing_model: record["pricing_model"] as PricingModel,
   };
 }
@@ -919,12 +913,21 @@ export async function listListings(query: ListingSearchQuery): Promise<ListingSe
  * `GET /listings/{id}` (public): one listing with its version history, its claims and
  * limitations, the report its latest version carries and the offer models it makes.
  *
+ * The read is asked as the selected demo account when one is selected, which is what makes
+ * a hidden listing readable to the operator with the history it keeps. That changes nothing
+ * for anyone else: an absent selection, one naming no seeded account and an account whose
+ * role is not the operator all leave the public outcome as it is, where a hidden listing is
+ * a `404`. The row is public, so an absent selection is never a refusal here — unlike a
+ * write, this read raises no `401` of its own.
+ *
  * Raises {@link ApiClientError} for `404` — an unknown or removed listing, including a
- * hidden one, which the listing page renders as its absent state — and for a response whose
- * body cannot be read as a listing.
+ * hidden one read by anyone but the operator, which the listing page renders as its absent
+ * state — and for a response whose body cannot be read as a listing.
  */
 export async function getListing(id: string): Promise<ListingDetail> {
-  const response = await send("GET", `/listings/${encodeURIComponent(id)}`);
+  const response = await send("GET", `/listings/${encodeURIComponent(id)}`, {
+    optionalDemoAccount: true,
+  });
   return normalizeListingDetail(response);
 }
 
@@ -1081,7 +1084,7 @@ export async function listChallenges(): Promise<ChallengeListItem[]> {
         record["responses"],
         siblings,
         "challenge_id",
-        text(record["id"]),
+        readString(record["id"]),
       ) as ChallengeResponse[],
     };
   });
@@ -1138,7 +1141,7 @@ export async function listThreads(): Promise<ThreadListItem[]> {
     const record = recordOrNull(raw) ?? {};
     return {
       ...entityRow<Thread>(raw),
-      posts: ownedCollection(record["posts"], siblings, "thread_id", text(record["id"])) as ThreadPost[],
+      posts: ownedCollection(record["posts"], siblings, "thread_id", readString(record["id"])) as ThreadPost[],
     };
   });
 }
@@ -1169,6 +1172,120 @@ export async function createPost(threadId: string, body: ThreadPostBody): Promis
 }
 
 
+/**
+ * One catalogue row's standard, read field by field, or a raised failure when a field this
+ * client has to state cannot be read.
+ *
+ * `id`, `code` and `title` are what a catalogue entry is addressed and labelled by, so a row
+ * that states none of them is reported rather than rendered as a nameless entry; a blank
+ * `summary` is an ordinary state the page renders without one.
+ */
+function standardRowFrom(raw: unknown, response: ApiResponse): Standard {
+  const record = recordOrNull(raw) ?? {};
+  const id = readText(record["id"]);
+  const code = readText(record["code"]);
+  const title = readText(record["title"]);
+  if (id === null || code === null || title === null) {
+    throw unreadableResponse(response.status);
+  }
+  return {
+    id,
+    code,
+    title,
+    summary: readString(record["summary"]),
+  };
+}
+
+/**
+ * One standard version, read field by field, or a raised failure when a field a reader is
+ * shown cannot be read.
+ *
+ * Every field here is rendered by the standards page — the identity list, the status
+ * sentence, the four thresholds and the rubric reference — which is why a version that states
+ * none of them is reported rather than returned with blanks where its criteria belong. The
+ * stored `definition_json` is read as text and no more: the row's columns are the criteria,
+ * and a serialized copy parsed here would be a second authority for the same rule.
+ */
+function standardVersionRowFrom(raw: unknown, response: ApiResponse): StandardVersion {
+  const record = recordOrNull(raw) ?? {};
+  const id = readText(record["id"]);
+  const standardId = readText(record["standard_id"]);
+  const versionLabel = readText(record["version_label"]);
+  const status = readMember(record["status"], STANDARD_STATUSES);
+  const totalCases = readCount(record["total_cases"]);
+  const criticalCases = readCount(record["critical_cases"]);
+  const passThresholdMatches = readCount(record["pass_threshold_matches"]);
+  const criticalFailuresAllowed = readCount(record["critical_failures_allowed"]);
+  const rubricReference = readText(record["rubric_reference"]);
+  const publishedAt = readText(record["published_at"]);
+  if (
+    id === null ||
+    standardId === null ||
+    versionLabel === null ||
+    status === null ||
+    totalCases === null ||
+    criticalCases === null ||
+    passThresholdMatches === null ||
+    criticalFailuresAllowed === null ||
+    rubricReference === null ||
+    publishedAt === null
+  ) {
+    throw unreadableResponse(response.status);
+  }
+  return {
+    id,
+    standard_id: standardId,
+    version_label: versionLabel,
+    status,
+    total_cases: totalCases,
+    critical_cases: criticalCases,
+    pass_threshold_matches: passThresholdMatches,
+    critical_failures_allowed: criticalFailuresAllowed,
+    rubric_reference: rubricReference,
+    definition_json: readString(record["definition_json"]),
+    published_at: publishedAt,
+  };
+}
+
+/**
+ * One standard proposal, read field by field, or a raised failure when a field a reader is
+ * shown cannot be read.
+ *
+ * The status is what the review trail is read from, and it is taken from the closed
+ * vocabulary rather than from a word of this client's own: a proposal whose status names no
+ * member of it is reported rather than shown under a decision the service never recorded.
+ */
+function standardProposalRowFrom(raw: unknown, response: ApiResponse): StandardProposal {
+  const record = recordOrNull(raw) ?? {};
+  const id = readText(record["id"]);
+  const standardId = readText(record["standard_id"]);
+  const proposerAccountId = readText(record["proposer_account_id"]);
+  const title = readText(record["title"]);
+  const rationale = readText(record["rationale"]);
+  const status = readMember(record["status"], PROPOSAL_STATUSES);
+  const createdAt = readText(record["created_at"]);
+  if (
+    id === null ||
+    standardId === null ||
+    proposerAccountId === null ||
+    title === null ||
+    rationale === null ||
+    status === null ||
+    createdAt === null
+  ) {
+    throw unreadableResponse(response.status);
+  }
+  return {
+    id,
+    standard_id: standardId,
+    proposer_account_id: proposerAccountId,
+    title,
+    rationale,
+    status,
+    created_at: createdAt,
+  };
+}
+
 
 /**
  * `GET /standards` (public): the standards catalogue, each standard with the versions
@@ -1181,7 +1298,12 @@ export async function createPost(threadId: string, body: ThreadPostBody): Promis
  * thresholds and a proposal's review status without reading the wire, and a standard with no
  * proposal yet renders that as an ordinary state rather than an absent key.
  *
- * Raises {@link ApiClientError} for a response that carries no standards to read.
+ * Every field is read here and once, so no page normalises a standard, a version or a
+ * proposal again: a row that states none of the fields this client carries is raised as an
+ * unreadable response rather than dropped, and a page therefore reads a typed value.
+ *
+ * Raises {@link ApiClientError} for a response that carries no standards to read, and for one
+ * whose standard, version or proposal rows cannot be read.
  */
 export async function listStandards(): Promise<StandardListItem[]> {
   const response = await send("GET", "/standards");
@@ -1190,16 +1312,15 @@ export async function listStandards(): Promise<StandardListItem[]> {
   const proposals = payload === null ? [] : arrayOrEmpty(payload["proposals"]);
   return requireArray(response, ["items", "standards"]).map((raw: unknown): StandardListItem => {
     const record = recordOrNull(raw) ?? {};
-    const standardId = text(record["id"]);
+    const standard = standardRowFrom(raw, response);
     return {
-      ...entityRow<Standard>(raw),
-      versions: ownedCollection(record["versions"], versions, "standard_id", standardId) as StandardVersion[],
-      proposals: ownedCollection(
-        record["proposals"],
-        proposals,
-        "standard_id",
-        standardId,
-      ) as StandardProposal[],
+      ...standard,
+      versions: ownedCollection(record["versions"], versions, "standard_id", standard.id).map(
+        (entry: unknown): StandardVersion => standardVersionRowFrom(entry, response),
+      ),
+      proposals: ownedCollection(record["proposals"], proposals, "standard_id", standard.id).map(
+        (entry: unknown): StandardProposal => standardProposalRowFrom(entry, response),
+      ),
     };
   });
 }
@@ -1209,16 +1330,22 @@ export async function listStandards(): Promise<StandardListItem[]> {
  * thresholds the evaluator read and the rubric reference a report cites.
  *
  * The identifier is the standard's row id or the contract label `SGI-SO-1.0.0`, both of
- * which the standards page uses. Raises {@link ApiClientError} for `404` — `unknown_standard`
- * for an identifier naming no standard, and `not_found` for a version it does not publish —
- * and for a response that cannot be read as a version.
+ * which the standards page uses. The version is read field by field before it is returned, so
+ * a page renders the criteria the answer stated rather than reading that answer itself.
+ *
+ * Raises {@link ApiClientError} for `404` — `unknown_standard` for an identifier naming no
+ * standard, and `not_found` for a version it does not publish — and for a response that
+ * carries no version this client can read: a version states its identifier, its standard, its
+ * label, its status, its four thresholds and its rubric reference, and an answer that states
+ * none of them is reported rather than returned with blanks.
  */
 export async function getStandardVersion(standardId: string, version: string): Promise<StandardVersion> {
   const response = await send(
     "GET",
     `/standards/${encodeURIComponent(standardId)}/versions/${encodeURIComponent(version)}`,
   );
-  return entityFrom<StandardVersion>(response, ["standard_version", "version"]);
+  const entity = entityFrom<unknown>(response, ["standard_version", "version"]);
+  return standardVersionRowFrom(entity, response);
 }
 
 /**
@@ -1315,9 +1442,9 @@ export async function refundTransaction(
  * rather than defaulting it, so a ledger view never shows an allocation beside a rate it did
  * not actually use.
  *
- * These are the operator-only reads, which is why this is one of the four reads that carries
- * the demo account header. Raises {@link ApiClientError} for `403` when the resolved account
- * is not an operator and for a response whose ledger body cannot be read.
+ * These are the operator-only reads, which is why this read requires the demo account
+ * header. Raises {@link ApiClientError} for `403` when the resolved account is not an
+ * operator and for a response whose ledger body cannot be read.
  */
 export async function listLedger(
   ledger: LedgerName,
@@ -1361,7 +1488,7 @@ export async function moderateListing(
   );
   const record = requireRecord(response);
   const listing = isRecord(record["listing"]) ? record["listing"] : record;
-  const resolvedId = text(listing["id"]);
+  const resolvedId = readString(listing["id"]);
   const event = record["event"];
   return {
     listing_id: resolvedId === "" ? listingId : resolvedId,

@@ -26,12 +26,11 @@
  *     rendered. The order, the statuses and the response counts are therefore always the
  *     service's, and this page holds no copy of a row it edited itself.
  *
- *   - **The create form reports nothing to its parent, so its announced outcome is observed.** The
- *     form is a sibling component whose props are fixed to the listing it writes against; it
- *     cannot tell this page that a challenge was posted. It does announce every outcome in its own
- *     polite status region, and that announcement is observed on a ref, because the read it
- *     triggers is public and idempotent: a refused post costs one redundant read and can never
- *     produce a wrong state.
+ *   - **The create form reports its post through its own callback.** The form owns the write and
+ *     hands this page the challenge it created through `onCreated`, so the board is re-read when a
+ *     challenge was posted and left alone when a post was refused or was still in flight. Watching
+ *     the form's rendering for an outcome would fire on its refusal and in-flight notices as well,
+ *     and would reach into a child's rendering for an event the child can report itself.
  *
  *   - **Every outcome a reader can meet is rendered in words.** A blank board, a challenge no one
  *     has answered, a selection naming no challenge on the board, a refused write, a spent write
@@ -56,6 +55,8 @@ import type { ChallengeListItem } from "../api-client";
 import { ChallengeForm } from "../components/challenge-form";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
+import { Timestamp, describeRetryWait, readString, readWriteFailure, withFullStop } from "../payload-reading";
+import type { WriteFailureFacts } from "../payload-reading";
 
 /** The route this page is served at: the target of every link that selects or clears a challenge. */
 const CHALLENGES_PATH = "/challenges";
@@ -130,16 +131,6 @@ interface ResponseFailureReading {
   readonly offersBoard: boolean;
 }
 
-/** A property that is a string, and the empty string for any other value. */
-function readText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/** A sentence that ends with its own full stop, so two sentences joined always read as two. */
-function withFullStop(sentence: string): string {
-  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
-}
-
 /**
  * A challenge's question as text, and a sentence in its place when the board states none.
  *
@@ -148,13 +139,13 @@ function withFullStop(sentence: string): string {
  * only case that needs a substitute.
  */
 function readQuestion(value: unknown): string {
-  const question = readText(value);
+  const question = readString(value);
   return question.trim() === "" ? "A challenge whose question the board does not record" : question;
 }
 
 /** A response's text, with the same substitute for a response the board states without one. */
 function readResponseBody(value: unknown): string {
-  const body = readText(value);
+  const body = readString(value);
   return body.trim() === "" ? "A response whose text the board does not record" : body;
 }
 
@@ -186,8 +177,8 @@ function describeResponseCount(count: number): string {
 
 /** The one line a picker option shows: the listing's title and the handle of its developer. */
 function describeListingChoice(listing: ListingSummary): string {
-  const title = readText(listing.title).trim();
-  const handle = readText(listing.developer_handle).trim();
+  const title = readString(listing.title).trim();
+  const handle = readString(listing.developer_handle).trim();
   const named = title === "" ? "a listing with no title recorded" : title;
   return handle === "" ? named : `${named} — by ${handle}`;
 }
@@ -201,7 +192,7 @@ function describeListingChoice(listing: ListingSummary): string {
 function readListingChoices(items: readonly ListingSummary[]): readonly ListingChoice[] {
   const choices: ListingChoice[] = [];
   for (const item of items) {
-    const id = readText(item.id).trim();
+    const id = readString(item.id).trim();
     if (id === "") {
       continue;
     }
@@ -232,74 +223,12 @@ function readSelectedChallengeId(searchParams: URLSearchParams): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-/** An ISO-8601 UTC instant as the API writes it, which is the only shape rendered as a `<time>`. */
-const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?Z$/;
-
-/** One instant ready to render: the machine-readable value when it is one, and the text beside it. */
-interface InstantReading {
-  /** The value for `<time datetime>`, or `null` when the record states no parseable instant. */
-  readonly dateTime: string | null;
-  /** The text a reader sees: a date and a time in UTC, or what the record does state. */
-  readonly text: string;
-}
-
-/**
- * An instant as text a reader can compare between rows.
- *
- * The stored value is an ISO-8601 UTC string and it is rendered as one — the date, the time and the
- * `UTC` the value is in — rather than through a locale- and timezone-dependent formatter, so two
- * readers in two places read the same instant, and nothing here depends on the machine's clock or
- * settings.
- */
-function readInstant(value: unknown): InstantReading {
-  const instant = readText(value).trim();
-  if (!ISO_INSTANT_PATTERN.test(instant)) {
-    return {
-      dateTime: null,
-      text: instant === "" ? "a time the record does not state" : instant,
-    };
-  }
-  return { dateTime: instant, text: `${instant.slice(0, 10)} ${instant.slice(11, 16)} UTC` };
-}
-
-/**
- * One recorded instant: a `<time>` carrying the machine-readable value when the record holds one,
- * and its text either way. A record that states no parseable instant renders as words rather than
- * as an empty element or as `null`.
- */
-function Timestamp(props: { readonly value: unknown }): JSX.Element {
-  const reading = readInstant(props.value);
-  if (reading.dateTime === null) {
-    return <>{reading.text}</>;
-  }
-  return <time dateTime={reading.dateTime}>{reading.text}</time>;
-}
-
-/**
- * The facts a refused write is reduced to: the status it was answered with, the service's stable
- * code, its sentence, and — on a throttled write — the whole seconds a `Retry-After` stated.
- *
- * Structural on purpose, as the create form reads a refusal and for the same reason: a failure
- * crosses the client boundary, so it is read as data rather than as an instance of the class that
- * raised it.
- */
-interface ResponseWriteFailure {
-  /** The status the write was answered with, or `0` when no response was received at all. */
-  readonly status: number;
-  /** The stable code: the service's, or this form's own marker for a response never sent. */
-  readonly code: string;
-  /** A sentence this form can render as it stands. */
-  readonly message: string;
-  /** Whole seconds to wait, from a `Retry-After`; `null` when the response stated none. */
-  readonly retryAfterSeconds: number | null;
-}
-
 /**
  * This form's own refusal of a blank response, in the shape a service refusal arrives in, so one
  * reading renders both. Its code is this form's marker rather than the service's, which is how a
  * response that was never sent and a response the service refused stay two different outcomes.
  */
-const BLANK_RESPONSE_FAILURE: ResponseWriteFailure = Object.freeze({
+const BLANK_RESPONSE_FAILURE: WriteFailureFacts = Object.freeze({
   status: 400,
   code: LOCAL_BLANK_RESPONSE_CODE,
   message: BLANK_RESPONSE_SENTENCE,
@@ -319,56 +248,6 @@ const REFUSED_RESPONSE_READING: ResponseFailureReading = Object.freeze({
   statusMessage: REFUSED_RESPONSE_STATUS,
   offersBoard: false,
 });
-
-/** Whether a raised value is an object facts can be read off. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-/** A property that is a non-empty string, or `null`: an empty property is not a fact. */
-function readNonEmptyText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
-}
-
-/**
- * A property that is a finite number, or `null`.
- *
- * `0` is kept rather than treated as absent: it is the status the client reports when no response
- * was received at all, which is a state this form explains like any other.
- */
-function readFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-/** Narrows a raised value into the facts a sentence can be built from, or `null`. */
-function readWriteFailure(error: unknown): ResponseWriteFailure | null {
-  if (!isRecord(error)) {
-    return null;
-  }
-  const status = readFiniteNumber(error["status"]);
-  const code = readNonEmptyText(error["code"]);
-  const message = readNonEmptyText(error["message"]);
-  if (status === null || code === null || message === null) {
-    return null;
-  }
-  return { status, code, message, retryAfterSeconds: readFiniteNumber(error["retryAfterSeconds"]) };
-}
-
-/**
- * The wait a throttled write states, from the whole seconds a `Retry-After` carried.
- *
- * A missing, zero or negative value states that the wait is a moment, so a reader is never told to
- * wait for no time or for a negative one.
- */
-function describeRetryWait(retryAfterSeconds: number | null): string {
-  if (retryAfterSeconds === null || retryAfterSeconds < 1) {
-    return "Wait a moment, then post the response again.";
-  }
-  const wholeSeconds = Math.ceil(retryAfterSeconds);
-  return wholeSeconds === 1
-    ? "Wait 1 second, then post the response again."
-    : `Wait ${wholeSeconds} seconds, then post the response again.`;
-}
 
 /**
  * Reads a failed response write into what the form renders, and `null` when nothing has failed.
@@ -418,7 +297,7 @@ function describeRespondFailure(error: unknown): ResponseFailureReading | null {
     case 429:
       return {
         fieldMessage: null,
-        statusMessage: `The write rate limit has been reached: ${WRITE_RATE_LIMIT_MAX} writes a minute is the whole allowance for a demo client. ${describeRetryWait(failure.retryAfterSeconds)} The text you typed has been kept.`,
+        statusMessage: `The write rate limit has been reached: ${WRITE_RATE_LIMIT_MAX} writes a minute is the whole allowance for a demo client. ${describeRetryWait(failure.retryAfterSeconds, "then post the response again.")} The text you typed has been kept.`,
         offersBoard: false,
       };
     default:
@@ -598,7 +477,6 @@ export function Challenges(): JSX.Element {
   const [pendingListingId, setPendingListingId] = useState<string>("");
 
   const listingPickerRef = useRef<HTMLSelectElement | null>(null);
-  const createFormRegionRef = useRef<HTMLDivElement | null>(null);
 
   const reloadBoard = useCallback((): void => {
     setBoardReadCount((count: number): number => count + 1);
@@ -614,14 +492,13 @@ export function Challenges(): JSX.Element {
     listingChoices.find((choice: ListingChoice): boolean => choice.id === pendingListingId) ??
     listingChoices[0];
   const chosenListingId = chosenChoice === undefined ? "" : chosenChoice.id;
-  const isCreateFormRendered = !isChoicesLoading && choicesError === null && chosenListingId !== "";
 
   const selectedChallenge =
     selectedChallengeId === null
       ? null
       : (challenges.find((row: ChallengeListItem): boolean => row.id === selectedChallengeId) ??
         null);
-  const selectedRowId = selectedChallenge === null ? "" : readText(selectedChallenge.id);
+  const selectedRowId = selectedChallenge === null ? "" : readString(selectedChallenge.id);
 
   // A selection the board does not hold is its own state, but only once the board has answered:
   // during a read, and after a read that failed, the board has said nothing about the selection.
@@ -687,25 +564,6 @@ export function Challenges(): JSX.Element {
       isCancelled = true;
     };
   }, [choicesReadCount]);
-
-  // The create form reports nothing to this page — its props are fixed to the listing it writes
-  // against — so its announcement is observed instead: it renders every outcome, a posted challenge
-  // or a refusal, into its own status region, and a change there re-reads the public board. The
-  // read is idempotent, so a refusal costs one redundant read and no wrong state, and a read
-  // already in flight is discarded by its own cancelled flag rather than queued behind this one.
-  useEffect(() => {
-    const region = createFormRegionRef.current;
-    if (region === null) {
-      return;
-    }
-    const observer = new MutationObserver((): void => {
-      reloadBoard();
-    });
-    observer.observe(region, { childList: true, characterData: true, subtree: true });
-    return (): void => {
-      observer.disconnect();
-    };
-  }, [reloadBoard, isCreateFormRendered]);
 
   const handleListingChange = (event: ChangeEvent<HTMLSelectElement>): void => {
     setPendingListingId(event.target.value);
@@ -790,9 +648,7 @@ export function Challenges(): JSX.Element {
                 the developer whose listing it is can answer it.
               </p>
             </div>
-            <div ref={createFormRegionRef}>
-              <ChallengeForm listingId={chosenListingId} />
-            </div>
+            <ChallengeForm listingId={chosenListingId} onCreated={reloadBoard} />
           </>
         )}
       </section>
@@ -821,8 +677,8 @@ export function Challenges(): JSX.Element {
         {challenges.length === 0 ? null : (
           <ul className="item-list">
             {challenges.map((challenge: ChallengeListItem, index: number): JSX.Element => {
-              const challengeId = readText(challenge.id);
-              const listingId = readText(challenge.listing_id);
+              const challengeId = readString(challenge.id);
+              const listingId = readString(challenge.listing_id);
               const isSelected = challengeId !== "" && challengeId === selectedChallengeId;
               return (
                 <li
@@ -872,13 +728,13 @@ export function Challenges(): JSX.Element {
             <p>
               Status: <strong>{describeStatus(selectedChallenge.status)}</strong>. Asked{" "}
               <Timestamp value={selectedChallenge.created_at} />{" "}
-              {readText(selectedChallenge.listing_id) === "" ? (
+              {readString(selectedChallenge.listing_id) === "" ? (
                 <>about the listing this challenge concerns.</>
               ) : (
                 <>
                   about{" "}
-                  <Link to={listingHref(readText(selectedChallenge.listing_id))}>
-                    {describeListingReference(readText(selectedChallenge.listing_id))}
+                  <Link to={listingHref(readString(selectedChallenge.listing_id))}>
+                    {describeListingReference(readString(selectedChallenge.listing_id))}
                   </Link>
                   .
                 </>
@@ -897,7 +753,7 @@ export function Challenges(): JSX.Element {
                 <h3>Responses</h3>
                 <ul className="item-list">
                   {selectedChallenge.responses.map((response, index: number): JSX.Element => {
-                    const responseId = readText(response.id);
+                    const responseId = readString(response.id);
                     return (
                       <li
                         className="item-list__item"

@@ -35,6 +35,7 @@ import type { ChangeEvent, FormEvent } from "react";
 import { DEMO_AUTHENTICATION_LABEL } from "@adem/shared";
 import type { StandardProposal } from "@adem/shared";
 import { submitProposal } from "../api-client";
+import { isRecord, readNumber, readText } from "../payload-reading";
 
 /** Props for {@link StandardsProposalForm}. */
 export interface StandardsProposalFormProps {
@@ -138,26 +139,7 @@ interface FieldRefusal {
 
 /** A property of a caught value, or `undefined` when the value is not an object. */
 function readProperty(value: unknown, key: string): unknown {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  return (value as Readonly<Record<string, unknown>>)[key];
-}
-
-/** A non-blank string property of a caught value, or `null`. */
-function readString(value: unknown): string | null {
-  if (typeof value !== "string" || value.trim() === "") {
-    return null;
-  }
-  return value;
-}
-
-/** A finite number property of a caught value, or `null`. */
-function readNumber(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return null;
-  }
-  return value;
+  return isRecord(value) ? value[key] : undefined;
 }
 
 /** A refusal that concerns fields: the region points the reader at the field to correct. */
@@ -221,15 +203,15 @@ function explainFailure(failure: unknown): FailureExplanation | null {
     return null;
   }
 
-  const titleMessage = readString(readProperty(failure, "titleMessage"));
-  const rationaleMessage = readString(readProperty(failure, "rationaleMessage"));
+  const titleMessage = readText(readProperty(failure, "titleMessage"));
+  const rationaleMessage = readText(readProperty(failure, "rationaleMessage"));
   if (titleMessage !== null || rationaleMessage !== null) {
     return explanationForFields(titleMessage, rationaleMessage);
   }
 
   const status = readNumber(readProperty(failure, "status"));
-  const code = readString(readProperty(failure, "code"));
-  const message = readString(readProperty(failure, "message"));
+  const code = readText(readProperty(failure, "code"));
+  const message = readText(readProperty(failure, "message"));
 
   if (status === 401) {
     return formExplanation(NO_DEMO_ACCOUNT_EXPLANATION);

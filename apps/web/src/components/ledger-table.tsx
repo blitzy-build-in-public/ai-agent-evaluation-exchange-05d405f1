@@ -15,6 +15,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, RefObject } from "react";
 import { refundTransaction } from "../api-client";
+import { isRecord, readCount, statusOf } from "../payload-reading";
 import { FOUNDER_ALLOCATION_CONTRACT_LABEL, SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
 import type {
   FounderAllocationLedgerReadResult,
@@ -370,22 +371,17 @@ function parseRefundAmount(value: string): number | null {
   return Number.isSafeInteger(minorUnits) && minorUnits > 0 ? minorUnits : null;
 }
 
-/** The status a failure carries, or `0` when it carries none — the client's code for no response. */
-function statusOf(failure: unknown): number {
-  if (typeof failure !== "object" || failure === null) {
-    return 0;
-  }
-  const status = (failure as { readonly status?: unknown }).status;
-  return typeof status === "number" ? status : 0;
-}
-
-/** The `Retry-After` whole seconds a throttled failure carries, or `null` when it states none. */
+/**
+ * The `Retry-After` whole seconds a throttled failure carries, or `null` when it states none.
+ *
+ * The wait is read only as a whole number of seconds above zero: a fraction cannot be waited out as
+ * stated, and a wait of zero asks for no time at all, which the sentence below answers with a
+ * moment instead.
+ */
 function retryAfterSecondsOf(failure: unknown): number | null {
-  if (typeof failure !== "object" || failure === null) {
-    return null;
-  }
-  const seconds = (failure as { readonly retryAfterSeconds?: unknown }).retryAfterSeconds;
-  return typeof seconds === "number" && Number.isInteger(seconds) && seconds > 0 ? seconds : null;
+  const stated = isRecord(failure) ? failure["retryAfterSeconds"] : undefined;
+  const seconds = readCount(stated);
+  return seconds !== null && seconds > 0 ? seconds : null;
 }
 
 /**
@@ -393,7 +389,8 @@ function retryAfterSecondsOf(failure: unknown): number | null {
  * never a status code, a response body, a URL or a stack trace.
  */
 function describeRefundFailure(failure: unknown): string {
-  switch (statusOf(failure)) {
+  // A failure carrying no status at all is the client's own no-response state, which its `0` names.
+  switch (statusOf(failure) ?? 0) {
     case 400:
       return REFUND_INVALID_AMOUNT_MESSAGE;
     case 401:

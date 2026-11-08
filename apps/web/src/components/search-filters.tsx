@@ -1,14 +1,13 @@
 /**
- * The listings search, filter and paging controls: the query box, the four filters, the ordering and
- * the page control.
+ * The listings search and filter controls: the query box, the four filters and the ordering.
  *
  * **The URL is the state.** Every control reads its value from the query string and writes a changed
  * value straight back to it, so a filtered view is a link a buyer can send, the back button steps
  * through the filters that were applied, and the listings page can state an empty result together
- * with the filters that produced it. A `q`, `category`, `license`, `model`, `standard`, `sort` or
- * `page` kept anywhere else would not survive a copy of the address.
+ * with the filters that produced it. A `q`, `category`, `license`, `model`, `standard` or `sort` kept
+ * anywhere else would not survive a copy of the address.
  *
- * Three rules the controls keep.
+ * Two rules the controls keep.
  *
  * - **A changed filter drops `page`.** A stale page number against a narrower result set shows an
  *   empty list that reads as "no such listing" when the truth is "not on this page". Page 1 is the
@@ -16,26 +15,22 @@
  *   then carries only the filters that produced it.
  * - **Clearing a filter removes its parameter** rather than writing an empty value, so the page can
  *   tell an absent filter from a cleared one.
- * - **How many results one page holds is never a parameter.** It is the fixed `LISTING_PAGE_SIZE`;
- *   this component reads it only to state the range and the last page, and the contract's query
- *   schema accepts no field for it.
+ *
+ * **Paging belongs to the results region, and carries one control.** That region states the range and
+ * the last page and holds the pager, so this form offers one action per control: a second
+ * Previous/Next pair or a page-number box here would move the same `page` parameter under a second
+ * vocabulary, and a reader could not tell which of the two the page follows.
  *
  * Presentation only: no request, no storage, no cookie. The category, license and standard options
  * arrive as props because the contract exposes no endpoint that lists categories or licenses — the
- * page derives those from what it already received. A page number this component can refuse is
- * refused here with a message tied to its own field; a whole request the server refuses is the page's
- * to render, and the form takes no native validation so that message stays the only feedback.
+ * page derives those from what it already received. The form takes no native validation, and a whole
+ * request the server refuses is the page's to render.
  */
 
 import { useCallback, useEffect, useId, useState } from "react";
-import type { ChangeEvent, FormEvent, KeyboardEvent } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import {
-  DEFAULT_LISTING_SORT,
-  LISTING_PAGE_SIZE,
-  LISTING_SORTS,
-  PRICING_MODELS,
-} from "@adem/shared";
+import { DEFAULT_LISTING_SORT, LISTING_SORTS, PRICING_MODELS } from "@adem/shared";
 import type { ListingSort, PricingModel } from "@adem/shared";
 
 /**
@@ -48,16 +43,12 @@ const LICENSE_PARAM = "license";
 const MODEL_PARAM = "model";
 const STANDARD_PARAM = "standard";
 const SORT_PARAM = "sort";
+
+/** The paging parameter: this component never writes it, it only drops a stale one. */
 const PAGE_PARAM = "page";
 
 /** How long the query box waits after the last keystroke before it writes the URL. */
 const QUERY_DEBOUNCE_MS = 300;
-
-/** The message a page number that is not a positive integer produces, tied to the page field. */
-const PAGE_ERROR_MESSAGE = "Enter a page number of 1 or more";
-
-/** The one character class the page field accepts as a keystroke. */
-const DIGIT_PATTERN = /^[0-9]$/;
 
 /** Human-readable labels for the closed vocabularies, keyed by the value the contract carries. */
 const PRICING_MODEL_LABELS: Readonly<Record<PricingModel, string>> = {
@@ -80,7 +71,7 @@ export interface FilterOption {
 }
 
 /**
- * Props for {@link SearchFilters}. All four are required: `exactOptionalPropertyTypes` is on, so a
+ * Props for {@link SearchFilters}. All three are required: `exactOptionalPropertyTypes` is on, so a
  * prop the page cannot supply would have to be omitted rather than passed as `undefined`, and an
  * empty option list is a value the page can state plainly.
  */
@@ -91,8 +82,6 @@ export interface SearchFiltersProps {
   readonly licenses: readonly FilterOption[];
   /** Standard version identifiers the page derived from its own listings result and listStandards. */
   readonly standards: readonly FilterOption[];
-  /** The total from the search result, for the paging control's range and last-page logic. */
-  readonly total: number;
 }
 
 /** Whether a query value is one of the orderings the contract accepts. */
@@ -103,22 +92,6 @@ function isListingSort(value: string | null): value is ListingSort {
 /** Whether a query value is one of the pricing models the contract accepts. */
 function isPricingModel(value: string | null): value is PricingModel {
   return PRICING_MODELS.some((model: PricingModel): boolean => model === value);
-}
-
-/**
- * The 1-based page number a query value names, and `1` for anything else.
- *
- * A value outside the contract still has to leave every control in a state a reader can see, so the
- * page field shows the page such a request falls back to rather than a number the URL cannot mean.
- * The URL itself is left as it stands: the request the page builds from it is where a value the
- * server refuses is answered.
- */
-function readPageNumber(value: string | null): number {
-  if (value === null || value === "") {
-    return 1;
-  }
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 1 ? parsed : 1;
 }
 
 /**
@@ -134,22 +107,6 @@ function optionsWithActive(
     return options;
   }
   return [...options, { value: active, label: active }];
-}
-
-/**
- * What the pager states about the page it is on: the range the current page covers, or the
- * explanation an empty page needs. With no results at all it makes no range claim beyond that.
- */
-function describePage(total: number, page: number, lastPage: number): string {
-  if (total === 0) {
-    return "No results";
-  }
-  if (page > lastPage) {
-    return `No results on page ${page}. The last page is ${lastPage}.`;
-  }
-  const first = (page - 1) * LISTING_PAGE_SIZE + 1;
-  const last = page * LISTING_PAGE_SIZE > total ? total : page * LISTING_PAGE_SIZE;
-  return `Page ${page} of ${lastPage}: showing ${first}-${last} of ${total} results.`;
 }
 
 /** The pricing-model options, in the order the contract lists them. */
@@ -174,12 +131,10 @@ function renderOptions(options: readonly FilterOption[]): JSX.Element[] {
 }
 
 /**
- * The filter bar above the listings: the query box, the four filters, the ordering and the page
- * control, all held in the URL.
+ * The filter bar above the listings: the query box, the four filters and the ordering, all held in
+ * the URL. Paging is the results region's own control, so nothing here writes the page number.
  *
- * Rendering and the query string only — it sends no request, stores nothing, and reports the one
- * mistake it can see for itself: a page number that is not a positive integer, against the field
- * that carries it.
+ * Rendering and the query string only — it sends no request and stores nothing.
  */
 export function SearchFilters(props: SearchFiltersProps): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -193,28 +148,21 @@ export function SearchFilters(props: SearchFiltersProps): JSX.Element {
   const standard = searchParams.get(STANDARD_PARAM) ?? "";
   const sortParam = searchParams.get(SORT_PARAM);
   const sort: ListingSort = isListingSort(sortParam) ? sortParam : DEFAULT_LISTING_SORT;
-  const page = readPageNumber(searchParams.get(PAGE_PARAM));
-
-  // A caller could hand this component a total it cannot page through; the last page and the range
-  // are computed from a non-negative one, so both stay sane whatever arrives.
-  const total = Number.isFinite(props.total) && props.total > 0 ? Math.floor(props.total) : 0;
-  const lastPage = total === 0 ? 1 : Math.ceil(total / LISTING_PAGE_SIZE);
 
   const [queryInput, setQueryInput] = useState<string>(query);
-  const [pageInput, setPageInput] = useState<string>(String(page));
-  const [pageError, setPageError] = useState<string | null>(null);
 
   const commit = useCallback(
     (key: string, value: string): void => {
       const next = new URLSearchParams(searchParams);
-      if (value === "" || (key === PAGE_PARAM && value === "1")) {
+      if (value === "") {
         next.delete(key);
       } else {
         next.set(key, value);
       }
-      if (key !== PAGE_PARAM) {
-        next.delete(PAGE_PARAM);
-      }
+      // A changed filter drops the page: a stale page number against a narrower result set shows an
+      // empty list that reads as "no such listing" when the truth is "not on this page". Page 1 is the
+      // server's own default, so the parameter is omitted rather than written.
+      next.delete(PAGE_PARAM);
       // An identical write would only add a history entry the reader has to step back through.
       if (next.toString() === searchParams.toString()) {
         return;
@@ -244,11 +192,6 @@ export function SearchFilters(props: SearchFiltersProps): JSX.Element {
     };
   }, [queryInput, query, commit]);
 
-  useEffect((): void => {
-    setPageInput(String(page));
-    setPageError(null);
-  }, [page]);
-
   const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
     commit(QUERY_PARAM, queryInput);
@@ -263,57 +206,12 @@ export function SearchFilters(props: SearchFiltersProps): JSX.Element {
     commit(event.target.name, event.target.value);
   };
 
-  const handlePageNumberChange = (event: ChangeEvent<HTMLInputElement>): void => {
-    const raw = event.target.value;
-    setPageInput(raw);
-    if (raw.trim() === "") {
-      // An emptied box is a value on its way in, not a mistake to report.
-      setPageError(null);
-      return;
-    }
-    const parsed = Number(raw);
-    if (!Number.isInteger(parsed) || parsed < 1) {
-      setPageError(PAGE_ERROR_MESSAGE);
-      return;
-    }
-    setPageError(null);
-    commit(PAGE_PARAM, String(parsed));
-  };
-
-  const handlePageNumberKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    // A number field discards a character it cannot hold and fires no change event, so the keystroke
-    // is the only place that refusal can be seen; anything that is not a single character, and every
-    // paste or editing shortcut, is left to the field itself.
-    if (event.ctrlKey || event.metaKey || event.altKey) {
-      return;
-    }
-    if (event.key.length === 1 && !DIGIT_PATTERN.test(event.key)) {
-      setPageError(PAGE_ERROR_MESSAGE);
-    }
-  };
-
-  const handlePreviousPage = (): void => {
-    commit(PAGE_PARAM, String(Math.max(1, page - 1)));
-  };
-
-  const handleNextPage = (): void => {
-    commit(PAGE_PARAM, String(Math.min(lastPage, page + 1)));
-  };
-
   const queryFieldId = `${idPrefix}-q`;
   const categoryFieldId = `${idPrefix}-category`;
   const licenseFieldId = `${idPrefix}-license`;
   const modelFieldId = `${idPrefix}-model`;
   const standardFieldId = `${idPrefix}-standard`;
   const sortFieldId = `${idPrefix}-sort`;
-  const pageFieldId = `${idPrefix}-page`;
-  const pageHintId = `${idPrefix}-page-hint`;
-  const pageErrorId = `${idPrefix}-page-error`;
-
-  const pageHint =
-    total === 0
-      ? "There is nothing to page through yet."
-      : `Enter a page number from 1 to ${lastPage}.`;
 
   return (
     <form
@@ -400,54 +298,6 @@ export function SearchFilters(props: SearchFiltersProps): JSX.Element {
         <select id={sortFieldId} name={SORT_PARAM} value={sort} onChange={handleFilterChange}>
           {renderOptions(SORT_OPTIONS)}
         </select>
-      </div>
-
-      <div className={pageError === null ? "field" : "field field--error"}>
-        <label className="field__label" htmlFor={pageFieldId}>
-          Page
-        </label>
-        <input
-          id={pageFieldId}
-          type="number"
-          min={1}
-          step={1}
-          inputMode="numeric"
-          value={pageInput}
-          onChange={handlePageNumberChange}
-          onKeyDown={handlePageNumberKeyDown}
-          aria-invalid={pageError !== null}
-          aria-describedby={pageError === null ? pageHintId : pageErrorId}
-        />
-        {pageError === null ? (
-          <p className="field__hint" id={pageHintId}>
-            {pageHint}
-          </p>
-        ) : (
-          <p className="field__error" id={pageErrorId}>
-            {pageError}
-          </p>
-        )}
-        <div className="field__group">
-          <button
-            type="button"
-            className="button button--secondary"
-            onClick={handlePreviousPage}
-            disabled={page <= 1}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            className="button button--secondary"
-            onClick={handleNextPage}
-            disabled={page >= lastPage}
-          >
-            Next
-          </button>
-        </div>
-        <p className="status-region" role="status">
-          {describePage(total, page, lastPage)}
-        </p>
       </div>
 
       <button type="submit" className="button button--primary">

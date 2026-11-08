@@ -40,26 +40,19 @@ import type { ChangeEvent, FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { createChallenge } from "../api-client";
 import type { Challenge } from "@adem/shared";
+import { describeRetryWait, readWriteFailure, withFullStop } from "../payload-reading";
+import type { WriteFailureFacts } from "../payload-reading";
 
-/** Props for {@link ChallengeForm}. */
+/**
+ * Props for {@link ChallengeForm}. The listing the challenge is about is required; the callback
+ * is optional, and a caller that does not need the created challenge omits it rather than passing
+ * `undefined`.
+ */
 export interface ChallengeFormProps {
   /** The listing the challenge is about; sent as `listing_id` in the POST /challenges body. */
   readonly listingId: string;
-}
-
-/**
- * The facts a refused write is reduced to: the status it was answered with, the service's
- * stable code, its sentence, and — on a throttled write — the whole seconds a `Retry-After`
- * stated.
- *
- * Structural on purpose: the failure crosses the client boundary, so this component reads it
- * as data rather than depending on the class that raised it.
- */
-interface ChallengeWriteFailure {
-  readonly status: number;
-  readonly code: string;
-  readonly message: string;
-  readonly retryAfterSeconds: number | null;
+  /** Run with the created challenge, so the page can read the board again. */
+  readonly onCreated?: (challenge: Challenge) => void;
 }
 
 /**
@@ -110,74 +103,14 @@ const REFUSED_QUESTION_READING: ChallengeFailureReading = Object.freeze({
   offersBrowse: false,
 });
 
-/** Whether a raised value is an object facts can be read off. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-/** A property that is a non-empty string, or `null`: an empty property is not a fact. */
-function readText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
-}
-
-/**
- * A property that is a finite number, or `null`.
- *
- * `0` is kept rather than treated as absent: it is the status the client reports when no
- * response was received at all, which is a state this form explains like any other.
- */
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-/** Narrows a raised value into the facts a sentence can be built from, or `null`. */
-function readWriteFailure(error: unknown): ChallengeWriteFailure | null {
-  if (!isRecord(error)) {
-    return null;
-  }
-  const status = readNumber(error["status"]);
-  const code = readText(error["code"]);
-  const message = readText(error["message"]);
-  if (status === null || code === null || message === null) {
-    return null;
-  }
-  return {
-    status,
-    code,
-    message,
-    retryAfterSeconds: readNumber(error["retryAfterSeconds"]),
-  };
-}
-
 /** The local blank check, in the shape a refusal arrives in, so one reading renders both. */
-function missingQuestionFailure(): ChallengeWriteFailure {
+function missingQuestionFailure(): WriteFailureFacts {
   return {
     status: 400,
     code: LOCAL_MISSING_QUESTION_CODE,
     message: BLANK_QUESTION_SENTENCE,
     retryAfterSeconds: null,
   };
-}
-
-/** A sentence that ends in its own full stop, so two sentences joined always read as two. */
-function withFullStop(sentence: string): string {
-  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
-}
-
-/**
- * The wait a throttled write states, built from the whole seconds a `Retry-After` carried.
- *
- * A missing, zero or negative value states that the wait is a moment, so the reader is never
- * told to wait for no time or for a negative one.
- */
-function describeRetryWait(retryAfterSeconds: number | null): string {
-  if (retryAfterSeconds === null || retryAfterSeconds < 1) {
-    return "Wait a moment, then post the question again.";
-  }
-  const wholeSeconds = Math.ceil(retryAfterSeconds);
-  return wholeSeconds === 1
-    ? "Wait 1 second, then post the question again."
-    : `Wait ${wholeSeconds} seconds, then post the question again.`;
 }
 
 /**
@@ -225,7 +158,7 @@ function describeFailure(error: unknown): ChallengeFailureReading | null {
     case 429:
       return {
         questionMessage: null,
-        statusMessage: `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(failure.retryAfterSeconds)} The text you typed has been kept.`,
+        statusMessage: `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(failure.retryAfterSeconds, "then post the question again.")} The text you typed has been kept.`,
         offersBrowse: false,
       };
     default:
@@ -242,7 +175,8 @@ function describeFailure(error: unknown): ChallengeFailureReading | null {
  *
  * Rendering and one write. It holds the question being typed, whether a write is in flight,
  * the failure the client raised and the challenge the write created — and nothing else, no
- * field of which is stored, shared or carried across a reload.
+ * field of which is stored, shared or carried across a reload. A post that succeeded is
+ * reported to the page through `onCreated`, so the board the page reads is the service's.
  */
 export function ChallengeForm(props: ChallengeFormProps): JSX.Element {
   const idPrefix = useId();
@@ -285,6 +219,7 @@ export function ChallengeForm(props: ChallengeFormProps): JSX.Element {
       const created = await createChallenge({ listing_id: props.listingId, question });
       setQuestion("");
       setPostedChallenge(created);
+      props.onCreated?.(created);
     } catch (caught: unknown) {
       setError(caught);
     } finally {

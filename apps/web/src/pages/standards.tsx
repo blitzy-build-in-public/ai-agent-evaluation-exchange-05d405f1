@@ -39,11 +39,11 @@
  * it resolves to are therefore both named as text, and no link on this page leaves the product — every
  * link it renders is an internal route or an anchor within this page.
  *
- * **The proposals come from the catalogue read, narrowed defensively.** The contract names no
- * proposals route, so the proposals arrive with the catalogue, and the shape that carries them is the
- * client's normalised one rather than a field this page may assume. Every entry is therefore read
- * structurally and an entry whose status is outside the closed vocabulary is left out rather than
- * rendered as a word the product does not use.
+ * **The proposals come from the catalogue read, as the client normalised them.** The contract names no
+ * proposals route, so the proposals arrive with the catalogue, and the shape that carries them is
+ * settled in `../api-client`, which reads every field of every standard, version and proposal it
+ * returns: this page therefore reads a typed value and normalises no payload of its own, and a row the
+ * client cannot read is reported by that read rather than handed to a page to leave out.
  *
  * **A review moves a status and appends an event; it changes no criterion.** Accepting a proposal does
  * not publish a version, alter a threshold or alter a report — a change to a pass rule still has to be
@@ -74,10 +74,8 @@ import {
   BADGE_SCOPE,
   DEMO_AUTHENTICATION_LABEL,
   PROPOSAL_REVIEW_STATUSES,
-  PROPOSAL_STATUSES,
   REPORT_LABEL_SAMPLE,
   REPORT_LABEL_VERIFIED_IN_DEMO,
-  STANDARD_STATUSES,
   SYNTHETIC_CURRENCY_LABEL,
   WRITE_RATE_LIMIT_MAX,
 } from "@adem/shared";
@@ -96,6 +94,7 @@ import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { StandardsProposalForm } from "../components/standards-proposal-form";
 import { findDemoAccount } from "../data/demo-accounts";
+import { isRecord, readNumber, statusOf } from "../payload-reading";
 
 /**
  * The route this page is mounted at. It is spelled here rather than shared, because the page is its
@@ -355,214 +354,34 @@ const UNKNOWN_VERSION_HEADING = "That version is not published under this standa
 const NO_VERSION_HEADING = "This standard publishes no version yet";
 const MISSING_VERSION_HEADING = "That version could not be read";
 
+/**
+ * The heading and explanation of a version the service answered this address with, but which this page
+ * could not read.
+ *
+ * No action is offered, and none would help: a published version row is append-only, so the same
+ * address reads the same answer however often it is asked. What is unaffected is said too, because the
+ * catalogue is a different read and is still on screen below.
+ */
+const UNREADABLE_VERSION_HEADING = "That version's answer could not be read";
+const UNREADABLE_VERSION_EXPLANATION =
+  "The service answered this address, but not with a version this page can read: a version states its identifier, its standard, its label, its status, its four thresholds and its rubric reference, and this answer did not state them all. Asking again cannot change it — a version is appended when it is published and never rewritten, so the same address reads the same answer — and the catalogue below is unaffected and still read from the service.";
+
+/**
+ * The explanation of a catalogue the service answered this address with, but which this page could
+ * not read.
+ *
+ * It is what the notice beside the catalogue carries as its detail, and it is added for that one case
+ * alone: the notice's own sentence describes a fault on the service's side, and what happened here is
+ * that the answer arrived and could not be read as a catalogue. The retry stays, because a catalogue
+ * is a live public read whose answer may legitimately differ on a second attempt — unlike a version's
+ * answer, which is appended when it is published and which no control can change.
+ */
+const UNREADABLE_CATALOGUE_EXPLANATION =
+  "The service answered this address, but not with a catalogue this page can read: a standard states its identifier, its code and its title, and every version and proposal under it states the fields this page renders, and this answer did not state them all. The catalogue is a live read rather than a published record, so asking again may answer differently — unlike a version's answer, which no control can change — and that is why this notice keeps its retry.";
+
 /** The heading of the rubric paragraph, and of the paragraph about what a report carries. */
 const RUBRIC_HEADING = "The rubric this version cites";
 const REPORT_MEANING_HEADING = "What a report against this version carries";
-
-/**
- * Whether a value is a JSON object rather than an array, `null` or a primitive. Every value read off a
- * payload goes through it, so a shape of any other kind is handled rather than assumed.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** A value as a non-blank string, or `null` when it is absent, blank or not a string. */
-function readText(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  return value.trim() === "" ? null : value;
-}
-
-/** A value as a string, and the empty string when it is not one — for a field the page may render blank. */
-function readString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * A value as a whole, non-negative number, or `null`.
- *
- * The four counts a version publishes are rendered as they arrive, so a value that is a fraction, a
- * negative or not a number at all is refused here rather than printed as a threshold no report could
- * have been scored against.
- */
-function readCount(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
-}
-
-/** A finite number, for the status and the wait a refused call carries. */
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-/** A value as a member of a closed vocabulary, or `null` when it names no member of it. */
-function readMember<T extends string>(value: unknown, vocabulary: readonly T[]): T | null {
-  return typeof value === "string" && (vocabulary as readonly string[]).includes(value)
-    ? (value as T)
-    : null;
-}
-
-/** A value as a member of the standard-status vocabulary. */
-function readStandardStatus(value: unknown): StandardStatus | null {
-  return readMember(value, STANDARD_STATUSES);
-}
-
-/**
- * One version as the page renders it, or `null` when an entry cannot be rendered in full.
- *
- * The fields are read structurally rather than taken on trust, because the shape that carries a
- * version is the API client's normalised one: an entry this page could not address or could not state
- * a threshold for is left out rather than rendered with blanks, since the whole of what this section
- * does is state exactly these numbers.
- */
-function narrowVersion(value: unknown): StandardVersion | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const id = readText(value["id"]);
-  const standardId = readText(value["standard_id"]);
-  const versionLabel = readText(value["version_label"]);
-  const status = readStandardStatus(value["status"]);
-  const totalCases = readCount(value["total_cases"]);
-  const criticalCases = readCount(value["critical_cases"]);
-  const passThresholdMatches = readCount(value["pass_threshold_matches"]);
-  const criticalFailuresAllowed = readCount(value["critical_failures_allowed"]);
-  const rubricReference = readText(value["rubric_reference"]);
-  const publishedAt = readText(value["published_at"]);
-  if (
-    id === null ||
-    standardId === null ||
-    versionLabel === null ||
-    status === null ||
-    totalCases === null ||
-    criticalCases === null ||
-    passThresholdMatches === null ||
-    criticalFailuresAllowed === null ||
-    rubricReference === null ||
-    publishedAt === null
-  ) {
-    return null;
-  }
-  return {
-    id,
-    standard_id: standardId,
-    version_label: versionLabel,
-    status,
-    total_cases: totalCases,
-    critical_cases: criticalCases,
-    pass_threshold_matches: passThresholdMatches,
-    critical_failures_allowed: criticalFailuresAllowed,
-    rubric_reference: rubricReference,
-    definition_json: readString(value["definition_json"]),
-    published_at: publishedAt,
-  };
-}
-
-/** The versions a standard's row carries, in the order the read returned them, entries narrowed. */
-function narrowVersions(value: unknown): readonly StandardVersion[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const versions: StandardVersion[] = [];
-  for (const entry of value) {
-    const version = narrowVersion(entry);
-    if (version !== null) {
-      versions.push(version);
-    }
-  }
-  return versions;
-}
-
-/**
- * One proposal as the page renders it, or `null` when an entry cannot be rendered.
- *
- * An entry whose `status` is outside {@link PROPOSAL_STATUSES} is dropped rather than shown under a
- * word the product does not use: the status is what the review trail is read from, and a status
- * invented on the page would state a decision the service never recorded.
- */
-function narrowProposal(value: unknown): StandardProposal | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const id = readText(value["id"]);
-  const standardId = readText(value["standard_id"]);
-  const proposerAccountId = readText(value["proposer_account_id"]);
-  const title = readText(value["title"]);
-  const rationale = readText(value["rationale"]);
-  const status = readMember(value["status"], PROPOSAL_STATUSES);
-  const createdAt = readText(value["created_at"]);
-  if (
-    id === null ||
-    standardId === null ||
-    proposerAccountId === null ||
-    title === null ||
-    rationale === null ||
-    status === null ||
-    createdAt === null
-  ) {
-    return null;
-  }
-  return {
-    id,
-    standard_id: standardId,
-    proposer_account_id: proposerAccountId,
-    title,
-    rationale,
-    status,
-    created_at: createdAt,
-  };
-}
-
-/** The proposals a standard's row carries, in the order the read returned them, entries narrowed. */
-function narrowProposals(value: unknown): readonly StandardProposal[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const proposals: StandardProposal[] = [];
-  for (const entry of value) {
-    const proposal = narrowProposal(entry);
-    if (proposal !== null) {
-      proposals.push(proposal);
-    }
-  }
-  return proposals;
-}
-
-/**
- * The catalogue as the page renders it: every standard whose code and identifier can be addressed,
- * each with its own versions and proposals narrowed in turn.
- *
- * A row without a code or an identifier is dropped, because a standard the page cannot link to or ask
- * the service about cannot be read at all, while a row whose summary is blank is kept and simply
- * renders without one.
- */
-function narrowStandards(value: unknown): readonly StandardListItem[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const standards: StandardListItem[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const id = readText(entry["id"]);
-    const code = readText(entry["code"]);
-    const title = readText(entry["title"]);
-    if (id === null || code === null || title === null) {
-      continue;
-    }
-    standards.push({
-      id,
-      code,
-      title,
-      summary: readString(entry["summary"]),
-      versions: narrowVersions(entry["versions"]),
-      proposals: narrowProposals(entry["proposals"]),
-    });
-  }
-  return standards;
-}
 
 /**
  * The reference a standard is addressed by: its code, which is the identifier people quote, and its
@@ -818,19 +637,17 @@ type VersionRead =
   | { readonly status: "loading"; readonly key: string }
   | { readonly status: "ready"; readonly key: string; readonly version: StandardVersion }
   | { readonly status: "missing"; readonly key: string }
+  /**
+   * The answer arrived and could not be read as a version. The client raises that unreadable success
+   * body with the status the response actually had, so a raised status in the 2xx range is what tells
+   * this state from the refusals the service itself made, each of which carries its own 4xx/5xx status.
+   */
+  | { readonly status: "unreadable"; readonly key: string }
   | { readonly status: "failed"; readonly key: string; readonly failure: unknown };
 
 /** The key one version read is stored and compared by. */
 function versionReadKey(standardRef: string, versionRef: string): string {
   return `${standardRef}\u0000${versionRef}`;
-}
-
-/** The HTTP status a raised value carries, or `null` — read for the read failure's `404` alone. */
-function statusOf(error: unknown): number | null {
-  if (!isRecord(error)) {
-    return null;
-  }
-  return readNumber(error["status"]);
 }
 
 /**
@@ -978,6 +795,20 @@ function CatalogueItem(props: {
 }
 
 /**
+ * Whether a raised value is this page's client reporting that an answer arrived but could not be read.
+ *
+ * The client raises an unreadable success body with the status the response actually had, so a raised
+ * status in the 2xx range is that report and no other: a refusal the service itself made always
+ * carries its own `4xx`/`5xx` status. Both of this page's reads apply it, because both can meet it
+ * and neither may state a service fault where the answer was simply unreadable — the catalogue read
+ * states it beside its notice, and the version read tells that case from the version's own refusal.
+ */
+function isUnreadableAnswer(failure: unknown): boolean {
+  const status = statusOf(failure);
+  return status !== null && status >= 200 && status < 300;
+}
+
+/**
  * The catalogue: every standard the service holds, the state of the read that produced them, and the
  * two ways that read ends without rows.
  *
@@ -1006,7 +837,15 @@ function CatalogueSection(props: {
       </div>
 
       {props.read.failure === null ? null : (
-        <ErrorNotice error={props.read.failure} onRetry={props.onRetry} />
+        <ErrorNotice
+          error={props.read.failure}
+          onRetry={props.onRetry}
+          detail={
+            isUnreadableAnswer(props.read.failure) ? (
+              <p>{UNREADABLE_CATALOGUE_EXPLANATION}</p>
+            ) : undefined
+          }
+        />
       )}
 
       {standards === null ? null : standards.length === 0 ? (
@@ -1045,7 +884,7 @@ function catalogueAction(): JSX.Element {
  * Five states reach this section and each is rendered as what it is rather than as a failure: the
  * catalogue still being read, a catalogue holding no standard, an address naming a standard or a
  * version that does not exist, a standard that publishes no version yet, and — the ordinary case — a
- * resolved version whose read is loading, missing, refused or answered.
+ * resolved version whose read is loading, missing, unreadable, refused or answered.
  */
 function VersionSection(props: {
   readonly selection: Selection;
@@ -1138,6 +977,16 @@ function SelectedVersion(props: {
         heading={MISSING_VERSION_HEADING}
         explanation={`The service answered that it holds no version for the pair this page asked about: standard "${standardRef}" and version "${versionRef}". An identifier an older link carries, or a catalogue that has changed since, reaches this state rather than an empty version.`}
         action={catalogueAction()}
+        headingLevel={3}
+      />
+    );
+  }
+
+  if (read.status === "unreadable") {
+    return (
+      <EmptyState
+        heading={UNREADABLE_VERSION_HEADING}
+        explanation={UNREADABLE_VERSION_EXPLANATION}
         headingLevel={3}
       />
     );
@@ -1680,7 +1529,14 @@ export function Standards(): JSX.Element {
         if (cancelled) {
           return;
         }
-        setStandards(narrowStandards(rows));
+        // The rows are stored as the client normalised them: the shape of a standards payload is
+        // settled in `../api-client`, which raises rather than drops a row it cannot read. This read
+        // keeps its retry on purpose — it is a public read of the whole catalogue, whose answer may
+        // legitimately differ on a second attempt — while the version read below separates the one
+        // answer that arrived unreadable, where asking again cannot change anything. An answer the
+        // client received and could not read is named for the reader here too, so the notice beside
+        // this region does not imply a fault on the service's side in place of a reading failure.
+        setStandards(rows);
         setIsCatalogueLoading(false);
       },
       (failure: unknown): void => {
@@ -1719,24 +1575,30 @@ export function Standards(): JSX.Element {
         if (cancelled) {
           return;
         }
-        const narrowed = narrowVersion(version);
-        // A version whose fields cannot be read is reported as a failure rather than rendered with
-        // blanks: this section exists to state these numbers, and a blank would state nothing.
-        setVersionRead(
-          narrowed === null
-            ? { status: "failed", key, failure: null }
-            : { status: "ready", key, version: narrowed },
-        );
+        setVersionRead({ status: "ready", key, version });
       },
       (failure: unknown): void => {
         if (cancelled) {
           return;
         }
-        // `404` is the contract's "unknown standard or unknown version", so it is answered with the
-        // explanation that names what could not be found rather than with a retry that cannot succeed.
-        setVersionRead(
-          statusOf(failure) === 404 ? { status: "missing", key } : { status: "failed", key, failure },
-        );
+        // Three readings, told apart by the status the raised value carries. `404` is the contract's
+        // "unknown standard or unknown version", answered with the explanation that names what could
+        // not be found rather than with a retry that cannot succeed. A status in the 2xx range is this
+        // page's client reporting that the answer arrived but could not be read as a version: the
+        // client raises an unreadable success body with the status the response actually had, and it
+        // is the only failure shape it raises with a success status, because every refusal the service
+        // itself made carries its own 4xx/5xx status. Anything else is such a refusal, which the notice
+        // renders with its retry.
+        const status = statusOf(failure);
+        if (status === 404) {
+          setVersionRead({ status: "missing", key });
+          return;
+        }
+        if (isUnreadableAnswer(failure)) {
+          setVersionRead({ status: "unreadable", key });
+          return;
+        }
+        setVersionRead({ status: "failed", key, failure });
       },
     );
 

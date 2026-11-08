@@ -39,7 +39,9 @@
  */
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { ApiClientError, createCheckoutSimulation } from "../api-client";
+import { createCheckoutSimulation } from "../api-client";
+import { readWriteFailure } from "../payload-reading";
+import type { WriteFailureFacts } from "../payload-reading";
 import { OFFER_MODELS, SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
 import type { OfferModel, Transaction } from "@adem/shared";
 
@@ -78,64 +80,12 @@ function describeOfferModel(model: OfferModel): string {
 }
 
 /**
- * The four facts an explanation of a failed checkout is built from: what the service answered
- * with, the stable code it named, the sentence it sent and — on a throttled write — how long it
- * asked the client to wait. None of them is a response, a body or a URL, so an explanation can
- * carry all four without leaking any of those.
- */
-interface FailureFacts {
-  readonly status: number;
-  readonly code: string;
-  readonly message: string;
-  readonly retryAfterSeconds: number | null;
-}
-
-/**
- * Reads the four facts off a thrown value, or answers `null` when the value carries none of
- * them. {@link ApiClientError} is recognised as itself; anything else is recognised by its
- * shape, so a failure that crossed a module boundary is still explained rather than swallowed.
- */
-function failureFactsFrom(error: unknown): FailureFacts | null {
-  if (error instanceof ApiClientError) {
-    return {
-      status: error.status,
-      code: error.code,
-      message: error.message,
-      retryAfterSeconds: error.retryAfterSeconds,
-    };
-  }
-
-  if (typeof error !== "object" || error === null) {
-    return null;
-  }
-
-  const candidate = error as {
-    readonly status?: unknown;
-    readonly code?: unknown;
-    readonly message?: unknown;
-    readonly retryAfterSeconds?: unknown;
-  };
-
-  if (typeof candidate.status !== "number" || typeof candidate.code !== "string") {
-    return null;
-  }
-
-  return {
-    status: candidate.status,
-    code: candidate.code,
-    message: typeof candidate.message === "string" ? candidate.message : "",
-    retryAfterSeconds:
-      typeof candidate.retryAfterSeconds === "number" ? candidate.retryAfterSeconds : null,
-  };
-}
-
-/**
  * The refusal the panel raises for itself when a submit arrives with no offer selected. It is
  * stated in the service's own terms — a `400` carrying `validation_error` — so that the
  * explanation a reader sees is the same shape whichever side refused the attempt, while the
  * request is never sent.
  */
-const NO_OFFER_SELECTED_FAILURE: FailureFacts = Object.freeze({
+const NO_OFFER_SELECTED_FAILURE: WriteFailureFacts = Object.freeze({
   status: 400,
   code: "validation_error",
   message: "No offer model was selected, so no simulated transaction was created.",
@@ -147,7 +97,7 @@ const NO_OFFER_SELECTED_FAILURE: FailureFacts = Object.freeze({
  * branch says what happened and what to do about it, in plain words, and no branch shows a
  * status code, a stack trace or a response body.
  */
-function describeNextStep(facts: FailureFacts): string {
+function describeNextStep(facts: WriteFailureFacts): string {
   switch (facts.status) {
     case 400:
       return "Choose one of the offer models this listing makes, then run the simulated checkout again.";
@@ -176,7 +126,7 @@ function describeNextStep(facts: FailureFacts): string {
  * still explained rather than rendered as it stands.
  */
 function describeFailure(error: unknown): string {
-  const facts = failureFactsFrom(error);
+  const facts = readWriteFailure(error);
 
   if (facts === null) {
     return "The simulated checkout could not be completed, and nothing was recorded. Try again.";
@@ -184,6 +134,8 @@ function describeFailure(error: unknown): string {
 
   const nextStep = describeNextStep(facts);
 
+  // A failure is read only when its sentence is non-blank, so the next step alone below stands for
+  // facts a caller hands in by other means.
   return facts.message === "" ? nextStep : `${facts.message} ${nextStep}`;
 }
 

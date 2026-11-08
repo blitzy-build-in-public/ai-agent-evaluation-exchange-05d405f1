@@ -95,6 +95,7 @@ import { InquiryForm } from "../components/inquiry-form";
 import { ModerationActions } from "../components/moderation-actions";
 import { SampleBadge } from "../components/sample-badge";
 import { findDemoAccount } from "../data/demo-accounts";
+import { Timestamp, isRecord } from "../payload-reading";
 import { NotFound } from "./not-found";
 
 /**
@@ -375,11 +376,6 @@ interface OperatorEdit {
   readonly keptBecauseNotReturned: boolean;
 }
 
-/** Whether a value is a JSON object rather than an array, `null` or a primitive. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 /**
  * The HTTP status a thrown value carries, or `null` when it carries none.
  *
@@ -409,49 +405,6 @@ function readFailureState(error: unknown): ReadState {
     return { kind: "missing" };
   }
   return { kind: "failed", error };
-}
-
-/** An ISO-8601 UTC instant as the API writes it, which is the only shape rendered as a `<time>`. */
-const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?Z$/;
-
-/** One instant ready to render: the machine-readable value when it is one, and the text beside it. */
-interface InstantReading {
-  /** The value for `<time datetime>`, or `null` when the record states no parseable instant. */
-  readonly dateTime: string | null;
-  /** The text a reader sees: a date and a time in UTC, or what the record does state. */
-  readonly text: string;
-}
-
-/**
- * A published instant as text a reader can compare between rows.
- *
- * The stored value is an ISO-8601 UTC string and it is rendered as one — the date, the time and the
- * `UTC` the value is in — rather than through a locale- and timezone-dependent formatter, so two
- * readers in two places read the same instant and nothing depends on the machine's settings. The
- * rule the evaluator's own determinism rests on applies to the UI's displays of stored data too.
- */
-function readInstant(value: unknown): InstantReading {
-  const instant = typeof value === "string" ? value.trim() : "";
-  if (!ISO_INSTANT_PATTERN.test(instant)) {
-    return {
-      dateTime: null,
-      text: instant === "" ? "a time the record does not state" : instant,
-    };
-  }
-  return { dateTime: instant, text: `${instant.slice(0, 10)} ${instant.slice(11, 16)} UTC` };
-}
-
-/**
- * One recorded instant: a `<time>` carrying the machine-readable value when the record holds one,
- * and its text either way. A record that states no parseable instant renders as words rather than
- * as an empty element or as `null`.
- */
-function Timestamp(props: { readonly value: unknown }): JSX.Element {
-  const reading = readInstant(props.value);
-  if (reading.dateTime === null) {
-    return <>{reading.text}</>;
-  }
-  return <time dateTime={reading.dateTime}>{reading.text}</time>;
 }
 
 /** Whether a developer-written field carries text, so an empty one is explained rather than blank. */
@@ -997,8 +950,10 @@ function ListingContent(props: {
  * It owns the route's single `<main>` landmark and its single `<h1>`, so the shell — which renders
  * the header, the navigation, the demonstration banner and the account switcher — must not wrap it
  * in another landmark. Reading a listing needs no demo account, so the one request this page makes
- * is public and carries no header; the writes it offers carry the selected synthetic account, which
- * `../api-client` attaches and which a reader selects in the shell.
+ * is the public listing read, which `../api-client` asks as the selected synthetic account when one
+ * is selected — that is how the operator reads a hidden listing with the history it keeps — and as
+ * nobody when none is; the writes it offers carry that account too, which a reader selects in the
+ * shell.
  *
  * Three readings of one address are the address's own rather than failures of a request: an address
  * that names no listing (or one taken out of public view) renders the absent-state page, a listing

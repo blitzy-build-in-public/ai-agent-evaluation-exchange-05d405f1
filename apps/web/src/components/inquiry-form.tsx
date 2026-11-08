@@ -48,6 +48,7 @@ import type { ChangeEvent, FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type { Inquiry } from "@adem/shared";
 import { createInquiry } from "../api-client";
+import { readWriteFailure } from "../payload-reading";
 
 /**
  * Props for {@link InquiryForm}: the one listing the inquiry is about.
@@ -123,22 +124,6 @@ class EmptyMessageError extends Error {
 }
 
 /**
- * The facts a failure raised by `../api-client` carries, read structurally.
- *
- * The client documents them as its own error's fields; reading them by shape rather than by
- * class keeps this form working if the client ever raises an equivalent failure from another
- * path. `code` is the client's stable code and is part of what identifies the shape, while the
- * explanations below key off `status`, which the contract makes total over the client's own
- * fallback codes. `status` is `0` when no response was received at all.
- */
-interface ClientFailure {
-  readonly status: number;
-  readonly code: string;
-  readonly message: string;
-  readonly retryAfterSeconds: number | null;
-}
-
-/**
  * What the form renders about a failure: the sentence itself, whether the message field is the
  * thing at fault, and whether a route back to browsing belongs beside the sentence.
  */
@@ -146,41 +131,6 @@ interface FailureExplanation {
   readonly text: string;
   readonly fieldIsInvalid: boolean;
   readonly offersBrowse: boolean;
-}
-
-/** Whether a value is a JSON object rather than an array, `null` or a primitive. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * A thrown value read as the failure facts it carries, or `null` when it carries none of them.
- *
- * The three required facts are read by type, so a value of any other shape — a bare string, a
- * primitive, an object with no `status` — is not mistaken for a client failure and the render
- * falls back to a generic explanation. The retry wait is kept only as a whole non-negative
- * count of seconds, because that is the form the advice below can state.
- */
-function readClientFailure(value: unknown): ClientFailure | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const status = value["status"];
-  const code = value["code"];
-  const message = value["message"];
-  if (typeof status !== "number" || typeof code !== "string" || typeof message !== "string") {
-    return null;
-  }
-  const retryAfter = value["retryAfterSeconds"];
-  return {
-    status,
-    code,
-    message,
-    retryAfterSeconds:
-      typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter >= 0
-        ? Math.floor(retryAfter)
-        : null,
-  };
 }
 
 /**
@@ -217,6 +167,8 @@ function describeSeconds(seconds: number): string {
  */
 function explainValidation(failureMessage: string): string {
   const sentence = failureMessage.trim();
+  // A blank sentence is refused as a failure's message, so the empty arm below stands only for a
+  // caller that states its own sentence by hand.
   const reason = sentence === "" ? "" : ` ${sentence}`;
   return `The inquiry was not accepted as it was sent, so nothing was recorded.${reason} Check the message and send it again.`;
 }
@@ -235,7 +187,7 @@ function explainFailure(failure: unknown): FailureExplanation {
   if (failure instanceof EmptyMessageError) {
     return { text: EMPTY_MESSAGE_ERROR, fieldIsInvalid: true, offersBrowse: false };
   }
-  const clientFailure = readClientFailure(failure);
+  const clientFailure = readWriteFailure(failure);
   if (clientFailure === null) {
     return { text: GENERIC_FAILURE_TEXT, fieldIsInvalid: false, offersBrowse: false };
   }

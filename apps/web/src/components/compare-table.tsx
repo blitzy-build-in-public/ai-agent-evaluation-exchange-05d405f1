@@ -198,15 +198,16 @@ export function CompareTable(props: CompareTableProps): JSX.Element | null {
   return (
     <div className="compare-table">
       {props.entries.map((entry: CompareEntry, index: number): JSX.Element => {
-        // The block's position is part of the id, so a comparison that names the same listing
-        // twice — which still renders two blocks, one per entry received — does not emit the same
-        // id twice and leave its `aria-labelledby` resolving ambiguously. The compare page renders
-        // this table once, so uniqueness inside the table is uniqueness on the page.
+        // The block's position is part of its id and of its key, because a comparison may name the
+        // same listing twice and still renders one block per entry received: without the position
+        // the two blocks would emit one id and leave `aria-labelledby` resolving ambiguously, and
+        // would reach React as two children sharing a key. The compare page renders this table
+        // once, so uniqueness inside the table is uniqueness on the page.
         const headingId = `compare-listing-${index}-${entry.listing_id}`;
 
         return (
           <section
-            key={entry.listing_id}
+            key={`${entry.listing_id}-${index}`}
             className="compare-table__listing"
             aria-labelledby={headingId}
           >

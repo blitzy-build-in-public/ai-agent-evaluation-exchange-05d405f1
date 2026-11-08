@@ -66,6 +66,7 @@ import { ErrorNotice } from "../components/error-notice";
 import { LedgerTable } from "../components/ledger-table";
 import { findDemoAccount } from "../data/demo-accounts";
 import type { DemoAccount } from "../data/demo-accounts";
+import { describeRetryWait, isRecord, readText, readWriteFailure, statusOf } from "../payload-reading";
 import {
   DEFAULT_LISTING_SORT,
   FOUNDER_ALLOCATION_CONTRACT_LABEL,
@@ -680,90 +681,11 @@ const NO_REASON_NOTE = "no reason was recorded";
 
 
 /**
- * The facts a failed call carries, read structurally from the value it raised.
- *
- * `api-client.ts` raises `ApiClientError` with exactly these four, but the value that reaches a form
- * is `unknown`: narrowing it here is what lets a form build a sentence without importing the client's
- * class, and a value that is not an error at all yields `null` so the form renders its own generic
- * sentence instead of nothing.
- */
-interface WriteFailure {
-  readonly status: number;
-  readonly code: string;
-  readonly message: string;
-  readonly retryAfterSeconds: number | null;
-}
-
-/** Whether a raised value is an object facts can be read off. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-/** A property that is a non-empty string, or `null`: an empty property is not a fact. */
-function readText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
-}
-
-/**
- * A property that is a finite number, or `null`.
- *
- * `0` is kept rather than treated as absent: it is the status the client reports when no response was
- * received at all, which is a state these forms explain like any other.
- */
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-/** Narrows a raised value into the facts a sentence can be built from, or `null`. */
-function readWriteFailure(error: unknown): WriteFailure | null {
-  if (!isRecord(error)) {
-    return null;
-  }
-  const status = readNumber(error["status"]);
-  const code = readText(error["code"]);
-  const message = readText(error["message"]);
-  if (status === null || code === null || message === null) {
-    return null;
-  }
-  return {
-    status,
-    code,
-    message,
-    retryAfterSeconds: readNumber(error["retryAfterSeconds"]),
-  };
-}
-
-/** The HTTP status a raised value carries, or `null` — read to tell a role refusal from the rest. */
-function statusOf(error: unknown): number | null {
-  if (!isRecord(error)) {
-    return null;
-  }
-  return readNumber(error["status"]);
-}
-
-/**
- * The wait a throttled write states, built from the whole seconds its `Retry-After` carried.
- *
- * The delay belongs to the service and only its response knows when the window resets, so no delay
- * is invented here: a missing, zero or negative value says the wait is a moment rather than telling a
- * reader to wait for no time.
- */
-function describeRetryWait(retryAfterSeconds: number | null): string {
-  if (retryAfterSeconds === null || retryAfterSeconds < 1) {
-    return "Wait a moment, then send it again.";
-  }
-  const wholeSeconds = Math.ceil(retryAfterSeconds);
-  return wholeSeconds === 1
-    ? "Wait 1 second, then send it again."
-    : `Wait ${wholeSeconds} seconds, then send it again.`;
-}
-
-/**
  * The sentence a throttled write renders: what the limit is, how long the response says to wait, and
  * what the reader keeps, which is the one part each form states in its own words.
  */
 function throttledSentence(kept: string, retryAfterSeconds: number | null): string {
-  return `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(retryAfterSeconds)} ${kept}`;
+  return `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(retryAfterSeconds, "then send it again.")} ${kept}`;
 }
 
 /**
@@ -1023,7 +945,8 @@ interface RecordedOutputEntry {
  * for.
  */
 function isRecordedOutputEntry(value: unknown): value is RecordedOutputEntry {
-  if (!isRecord(value) || Array.isArray(value)) {
+  // A refusal is stated once: `isRecord` answers false for an array as well as for a primitive.
+  if (!isRecord(value)) {
     return false;
   }
   const caseId = readText(value["case_id"]);

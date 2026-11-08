@@ -1104,7 +1104,6 @@ export function ListingsPage(): JSX.Element {
           categories={categoryOptions}
           licenses={licenseOptions}
           standards={standardOptions}
-          total={total}
         />
 
         {/* The standard filter's options come from a read of their own. When it fails, the filter
