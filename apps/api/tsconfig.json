@@ -14,7 +14,6 @@
   "references": [
     { "path": "../../packages/shared" },
     { "path": "../../packages/sgi-core" },
-    { "path": "../../packages/commerce-sim" },
-    { "path": "../../packages/sgi-fixtures" }
+    { "path": "../../packages/commerce-sim" }
   ]
 }

@@ -15,10 +15,13 @@ import { defineConfig } from 'vitest/config';
  * The snapshot update mode is not settable from this file: Vitest 1.6 derives it during
  * config resolution from `update`, the UPDATE_SNAPSHOT variable and CI, overriding any
  * `snapshotOptions` block a config carries — which is a type error against InlineConfig
- * as well as inert. `update: false` records the intent in the only input a config file
- * has, and CI, which is where the test workflow runs `npm test`, resolves the mode to
- * `none`, so a missing, mismatched or obsolete baseline fails the run instead of being
- * rewritten. Regenerating a baseline stays an explicit act: `vitest run --update`.
+ * as well as inert. `update: false` is Vitest's own default, kept as the one statement of
+ * intent a config file can make. The mode it resolves to turns on CI: where CI is set, as
+ * it is for the test workflow's `npm test`, the mode is `none`, so a missing, mismatched
+ * or obsolete baseline fails the run instead of being rewritten; without it, as in a
+ * `npm run test:unit`, the mode is `"new"`, so that local run would record a baseline.
+ * No snapshot exists in the tree today, so nothing is at risk until a suite adds one, and
+ * regenerating a baseline stays an explicit act: `vitest run --update`.
  *
  * There is no coverage block: the dependency inventory holds no coverage package, and
  * coverage of the pure scoring, policy and ledger functions is a review guideline rather

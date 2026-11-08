@@ -346,6 +346,39 @@ interface LocatedDocument {
 }
 
 /**
+ * Refuses an identifier that is not a single path segment.
+ *
+ * Every path this module reads is composed by joining an identifier to
+ * {@link fixturesRoot}, and `node:path` resolves `..` as it joins, so an
+ * identifier such as `../other` would name a file outside the fixtures
+ * directory. It is refused here, before a caller's identifier reaches a path of
+ * its own, and no shape beyond that one segment is required: a case-set
+ * directory's name and a candidate's file name are each one segment, so a pack
+ * naming them differently from this one still loads.
+ *
+ * A value that is not a string at all is refused by the same rule and with the
+ * same message, because this is the boundary a caller outside these types
+ * reaches: reading the value as an unknown first keeps a refusal in place where
+ * inspecting it directly would raise the language's own `TypeError` instead.
+ */
+function assertIdentifierSegment(identifier: string, subject: string): void {
+  const value: unknown = identifier;
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value === "." ||
+    value === ".." ||
+    value.includes("/") ||
+    value.includes("\\")
+  ) {
+    fail(
+      `${subject} "${String(value)}" is not a single path segment: it must not be empty, "." or "..", nor contain "/" or "\\"`,
+      fixturesRoot,
+    );
+  }
+}
+
+/**
  * Finds the one case-set directory holding `relativePath`.
  *
  * Nothing names a version here, so a match in no directory and a match in more
@@ -383,6 +416,7 @@ function locateCaseSetDocument(relativePath: string, subject: string): LocatedDo
  * standard publishes rather than against a second reading of the same file.
  */
 function readCaseSet(directoryName: string): CaseSet {
+  assertIdentifierSegment(directoryName, "the case-set directory name");
   const label = "cases.json";
   const filePath = join(fixturesRoot, directoryName, label);
   const document = readJsonObject(filePath, label);
@@ -491,6 +525,12 @@ function readCandidate(
   const candidateIdValue = document["candidate_id"];
   if (!isNonEmptyString(candidateIdValue)) {
     return fail(`${label} declares no non-empty string candidate_id`, filePath);
+  }
+  if (candidateIdValue !== candidateId) {
+    return fail(
+      `${label} declares candidate_id "${candidateIdValue}" but was requested as candidate "${candidateId}"`,
+      filePath,
+    );
   }
 
   const candidateVersionId = document["candidate_version_id"];
@@ -641,15 +681,17 @@ function readExpectedOutcomes(filePath: string): ExpectedOutcomes {
  * identifier names.
  *
  * Returns the case set as its document states it. It refuses — throwing a plain
- * `Error` whose message begins `sgi-fixtures:` and names the absolute path — when
- * the file cannot be read or is not a JSON object; when an undeclared key appears
- * at the document's top level or in a case; when `standard_version_id` is not the
- * requested identifier; when `cases` is not a non-empty array; when `total_cases`
- * or `critical_cases` is not a non-negative integer or disagrees with that array;
- * when a case `id` is empty, not a string or repeated; when a `severity` is
- * outside `critical` and `standard`; when a case's `input` lacks its two non-empty
- * strings; or when a case carries no JSON `expected_output`. It never returns
- * partial data and never falls back to a default case set.
+ * `Error` whose message begins `sgi-fixtures:` and names the path it concerns —
+ * when the requested identifier is not a single path segment, so it can name no
+ * directory outside `fixtures/`; when the file cannot be read or is not a JSON
+ * object; when an undeclared key appears at the document's top level or in a case;
+ * when `standard_version_id` is not the requested identifier; when `cases` is not
+ * a non-empty array; when `total_cases` or `critical_cases` is not a non-negative
+ * integer or disagrees with that array; when a case `id` is empty, not a string or
+ * repeated; when a `severity` is outside `critical` and `standard`; when a case's
+ * `input` lacks its two non-empty strings; or when a case carries no JSON
+ * `expected_output`. It never returns partial data and never falls back to a
+ * default case set.
  */
 export function loadCaseSet(standardVersionId: string): CaseSet {
   return readCaseSet(standardVersionId);
@@ -659,14 +701,16 @@ export function loadCaseSet(standardVersionId: string): CaseSet {
  * Reads one candidate submission by its identifier, from the `candidates/`
  * directory of whichever case-set directory holds its file.
  *
- * Returns the submission as recorded. It refuses when no case-set directory holds
- * `candidates/<candidateId>.json`, when more than one holds it — naming every
- * directory that matched — and on any structural defect: an unreadable file, a
- * document that is not a JSON object, an undeclared key at the top level or in a
- * recorded output, a `candidate_id` or `candidate_version_id` that is missing,
- * empty or not a string, a `standard_version_id` that does not match its
- * directory, a `recorded_outputs` that is not an array, a repeated `case_id`, or a
- * `case_id` the case set of that standard does not define.
+ * Returns the submission as recorded. It refuses when `candidateId` is not a
+ * single path segment, so no identifier can name a file outside `fixtures/`; when
+ * no case-set directory holds `candidates/<candidateId>.json`, when more than one
+ * holds it — naming every directory that matched — and on any structural defect:
+ * an unreadable file, a document that is not a JSON object, an undeclared key at
+ * the top level or in a recorded output, a `candidate_id` or `candidate_version_id`
+ * that is missing, empty or not a string, a `candidate_id` that is not the
+ * identifier the submission was requested by, a `standard_version_id` that does
+ * not match its directory, a `recorded_outputs` that is not an array, a repeated
+ * `case_id`, or a `case_id` the case set of that standard does not define.
  *
  * **Incomplete coverage is not a defect here.** A submission may legitimately
  * answer fewer cases than its standard defines — the API turns a missing fixture
@@ -674,6 +718,7 @@ export function loadCaseSet(standardVersionId: string): CaseSet {
  * submission covers is deliberately unchecked by this loader.
  */
 export function loadCandidate(candidateId: string): CandidateSubmission {
+  assertIdentifierSegment(candidateId, "the candidate identifier");
   const located = locateCaseSetDocument(
     `candidates/${candidateId}.json`,
     `candidate "${candidateId}"`,

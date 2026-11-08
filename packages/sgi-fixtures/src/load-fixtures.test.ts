@@ -275,6 +275,43 @@ describe("the SGI-SO-1.0.0 fixture pack", () => {
         id: "seed-delta",
         act: () => loadCandidate("seed-delta"),
       },
+      {
+        subject: "a candidate identifier carrying a parent segment",
+        id: "../seed-alpha",
+        act: () => loadCandidate("../seed-alpha"),
+      },
+      {
+        subject: "a candidate identifier carrying an inner parent segment",
+        id: "x/../seed-alpha",
+        act: () => loadCandidate("x/../seed-alpha"),
+      },
+      {
+        subject: "an empty candidate identifier",
+        id: "",
+        act: () => loadCandidate(""),
+      },
+      {
+        subject: "a candidate identifier that is a parent segment",
+        id: "..",
+        act: () => loadCandidate(".."),
+      },
+      {
+        // A caller outside this module's types can reach the boundary with a value that is not a
+        // string at all; the refusal it receives must stay the module's own rather than a TypeError.
+        subject: "a candidate identifier that is not a string",
+        id: "undefined",
+        act: () => loadCandidate(undefined as unknown as string),
+      },
+      {
+        subject: "a case-set identifier carrying a parent segment",
+        id: "../SGI-SO-1.0.0",
+        act: () => loadCaseSet("../SGI-SO-1.0.0"),
+      },
+      {
+        subject: "an empty case-set identifier",
+        id: "",
+        act: () => loadCaseSet(""),
+      },
     ])("refuses $subject and names $id", ({ id, act }) => {
       expect(act).toThrow(/^sgi-fixtures:/);
 

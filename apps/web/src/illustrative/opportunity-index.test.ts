@@ -12,9 +12,9 @@
  * founder allocation — and a second one here would be a second place for a half to be resolved. And
  * an empty supply is the ordinary `[]` the page explains, not an error.
  *
- * No snapshot and no golden file is written: the unit configuration resolves the snapshot update
- * mode to `none`, under which a baseline missing from the repository fails the run instead of being
- * recorded.
+ * This suite writes no snapshot and no golden file: the unit configuration's snapshot update mode is
+ * `none` only under CI, where a baseline missing from the repository fails the run instead of being
+ * recorded, and `"new"` otherwise, where a local run would record one.
  *
  * The fixtures are synthetic and inline, and the demand tables the arithmetic is asserted against
  * are written here rather than read from `OPPORTUNITY_DEMAND_TABLE`, so every expected integer
