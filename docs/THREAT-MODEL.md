@@ -171,8 +171,11 @@ here.
   labelled simulation, and a payment integration would create a money path the product deliberately does
   not have.
 - **Real personal data of any kind**, including contact details and financial information. None is
-  collected, and none may be added: the demo identities are fictional and the audit feed holds no
-  request body, header value or network address.
+  collected, and none may be added: the demo identities are fictional, and the audit feed holds no
+  request body, header value or network address. A write that states a ground does record that ground:
+  a moderation action's reason, an appeal opened or ruled with one, stored in the row's `reason` column
+  as the `audit_events` row of `docs/SCHEMA.md` documents, and null where the write states none. That
+  stated ground is the only request text the feed holds, and it is not personal data.
 - **Isolation, sandboxing or safe execution of third-party agent code.** The evaluator compares recorded
   values as data and runs nothing, and isolation has not been reviewed, so execution of submitted code
   is out of scope until it is.
