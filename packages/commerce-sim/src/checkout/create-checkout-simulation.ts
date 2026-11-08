@@ -35,9 +35,9 @@
  * `recordFounderAllocation` by the product's single rounding point
  * (`../ledgers/allocate`), so this module multiplies nothing, rounds nothing and formats nothing. A
  * gate-evaluation fee is charged per completed evaluation, PASS or FAIL, in the gate-fee ledger by
- * `recordGateFeeCharge`, whose only caller is the evaluation route; a marketplace transaction is
- * never eligible for one, no member of the input could carry one, and that writer is not reached
- * from this file. The amount is the amount the listing's own offer was made at:
+ * `recordGateFeeCharge`; a marketplace transaction is never eligible for one, no member of the
+ * input could carry one, and that writer is not reached from this file. The amount is the amount the
+ * listing's own offer was made at:
  * {@link CreateCheckoutSimulationInput} declares no amount member at all, so a client cannot name
  * the price of its own simulated purchase.
  *

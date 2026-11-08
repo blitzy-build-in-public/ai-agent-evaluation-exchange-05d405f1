@@ -4,14 +4,15 @@
  * reproducible SGI report, and `GET /evaluations/{id}` (public) reads it back with its per-case
  * evidence.
  *
- * **This file owns the two rows and derives nothing they report.** It is the only writer of
- * `evaluation_reports` and `report_case_results` — through `@adem/sgi-core`'s `insertReport` — and
- * the only caller of the gate-evaluation fee `@adem/commerce-sim` records, and every value the
- * report states comes from a single domain call: the per-case results, the matched and total
- * counts, the critical failures, the failing case ids and the `PASS`/`FAIL` outcome come from
- * `scoreSubmission`, the label from `deriveReportLabel`, the rubric reference from `buildReport`,
- * the fee from `recordGateFeeCharge`. No arithmetic is written here and no threshold is restated:
- * the pass rule is read from the stored standard version's own criteria.
+ * **This file owns the two rows and derives nothing they report.** It writes `evaluation_reports`
+ * and `report_case_results` through `@adem/sgi-core`'s `insertReport` and records the
+ * gate-evaluation fee `@adem/commerce-sim` charges for the evaluation, for every evaluation its own
+ * route serves; the seed (`apps/api/src/seed/seed-database.ts`) is the tree's other caller of both,
+ * once per seeded report, and every value the report states comes from a single domain call: the
+ * per-case results, the matched and total counts, the critical failures, the failing case ids and the
+ * `PASS`/`FAIL` outcome come from `scoreSubmission`, the label from `deriveReportLabel`, the rubric
+ * reference from `buildReport`, the fee from `recordGateFeeCharge`. No arithmetic is written here and
+ * no threshold is restated: the pass rule is read from the stored standard version's own criteria.
  *
  * **The steps run in one fixed order**, because that order decides which status a caller is
  * answered with: the write rate limit, the request schemas, the demo account (`401`), the role

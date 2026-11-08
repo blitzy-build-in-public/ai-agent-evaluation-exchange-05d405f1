@@ -45,8 +45,9 @@
  * **No report is read and no HTTP concern lives here.** The evaluation report is referenced by its
  * identifier as a plain column value: this module imports nothing from another workspace, queries no
  * evaluation report and joins nothing. Whether a fee is recorded for a given request, and what status
- * that request is answered with, is the route's decision — the API's evaluation route
- * (`apps/api/src/routes/evaluations.ts`) is this function's only caller, and nothing inside this
+ * that request is answered with, is the API's decision, and the API calls this function from two
+ * places: its evaluation route (`apps/api/src/routes/evaluations.ts`), once per completed evaluation,
+ * and its seed (`apps/api/src/seed/seed-database.ts`), once per seeded report. Nothing inside this
  * package invokes it.
  *
  * The database handle belongs to the caller (ports and adapters): this module opens no connection,
