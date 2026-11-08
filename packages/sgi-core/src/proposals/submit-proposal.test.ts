@@ -66,28 +66,34 @@ interface StoredProposalRow {
 }
 
 /**
- * The tables the submission path must not read, each because it belongs to another owner or answers
- * another question: a listing and its versions are the API layer's, an account is the demo
- * session's, a category is browse metadata, and the sponsored slots and the audit feed are
- * commercial and write-log data no governance path may consult. A prepared statement naming any of
- * them would mean this module had begun resolving the submitting session itself.
+ * The tables the submission path owns, and the whole of what its prepared statements may name: this
+ * package's catalogue (`standards`, and the `standard_versions` published beneath it) and the
+ * proposal row it inserts. Every other table belongs to another owner — a listing and its versions
+ * to the API layer, an account to the demo session, a category to browse metadata, the commercial
+ * and write-log tables to their own workspaces — so a statement naming one of them would mean this
+ * module had begun resolving the submitting session itself. The permitted side is named rather than
+ * the forbidden one on purpose: a table added to the schema later fails this case without an edit to
+ * it.
  */
-const TABLES_THE_SUBMISSION_PATH_MUST_NOT_READ = [
-  "accounts",
-  "listings",
-  "listing_versions",
-  "categories",
-  "sponsored_slots",
-  "audit_events",
-] as const;
+const TABLES_THE_SUBMISSION_PATH_OWNS: readonly string[] = [
+  "standards",
+  "standard_versions",
+  "standard_proposals",
+];
 
 let db: Database.Database;
 
 /** Applies every migration in filename order, which is the order the runner applies them. */
 function applyMigrations(database: Database.Database): void {
-  for (const file of readdirSync(migrationsDir)
+  const files = readdirSync(migrationsDir)
     .filter((name) => name.endsWith(".sql"))
-    .sort()) {
+    .sort();
+
+  // Fail loudly rather than test nothing: a path that resolved to an empty directory would leave
+  // every case below asserting against no schema at all.
+  expect(files.length).toBeGreaterThan(0);
+
+  for (const file of files) {
     database.exec(readFileSync(join(migrationsDir, file), "utf8"));
   }
 }
@@ -132,6 +138,12 @@ function countGovernanceEvents(): number {
 function triggerCount(table: string): number {
   const rows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?").all(table);
   return rows.length;
+}
+
+/** Every table one prepared statement names, by the keyword that precedes it. */
+function tablesNamedBy(source: string): string[] {
+  const named = source.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+([A-Za-z_][A-Za-z0-9_]*)/gi);
+  return [...named].map((match) => (match[1] ?? "").toLowerCase());
 }
 
 /**
@@ -204,6 +216,9 @@ describe("submitProposal", () => {
 
     expect(proposal.proposalId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(proposal.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    // The round-trip is what fixes the form: a string matching the pattern but not returning itself
+    // would still be a timestamp this contract does not accept.
+    expect(new Date(proposal.createdAt).toISOString()).toBe(proposal.createdAt);
     expect(Number.isNaN(Date.parse(proposal.createdAt))).toBe(false);
     expect(firstProposalRow().created_at).toBe(proposal.createdAt);
   });
@@ -351,6 +366,7 @@ describe("submitProposal", () => {
     expect((failure as InvalidProposalError).field).toBe("title");
     expect((failure as InvalidProposalError).message).toContain("title");
     expect(readProposalRows()).toHaveLength(0);
+    expect(countGovernanceEvents()).toBe(0);
   });
 
   it.each(["", " ", "\n\t  "])("refuses %j as a rationale, writing nothing", (rationale) => {
@@ -427,6 +443,7 @@ describe("submitProposal", () => {
     expect((failure as UnknownStandardError).reference).toBe(UNKNOWN_STANDARD_REFERENCE);
     expect((failure as UnknownStandardError).message).toContain(UNKNOWN_STANDARD_REFERENCE);
     expect(readProposalRows()).toHaveLength(0);
+    expect(countGovernanceEvents()).toBe(0);
   });
 });
 
@@ -475,7 +492,7 @@ describe("the statements submitProposal prepares", () => {
     expect(mutations).toEqual([]);
   });
 
-  it("prepares no statement that reads a table belonging to another owner", () => {
+  it("prepares statements against the tables this path owns and no other", () => {
     installPrepareRecorder();
 
     submitProposal(db, {
@@ -489,12 +506,11 @@ describe("the statements submitProposal prepares", () => {
     // session would mean reading the demo session's accounts here, and reading the listing layer's
     // tables would put another owner's data in this package. The write route supplies the account id
     // and the contract already answered both questions before this function was reached, so a
-    // statement naming one of these tables fails this case.
-    const forbiddenReads = TABLES_THE_SUBMISSION_PATH_MUST_NOT_READ.filter((table) =>
-      preparedStatements.some((source) => new RegExp(`\\b${table}\\b`, "i").test(source)),
-    );
+    // statement naming a table outside the catalogue and the proposal row fails this case.
+    const namedTables = [...new Set(preparedStatements.flatMap(tablesNamedBy))];
 
-    expect(forbiddenReads).toEqual([]);
+    expect(namedTables).not.toHaveLength(0);
+    expect(namedTables.filter((table) => !TABLES_THE_SUBMISSION_PATH_OWNS.includes(table))).toEqual([]);
   });
 
   it("prepares no statement at all for a blank member", () => {

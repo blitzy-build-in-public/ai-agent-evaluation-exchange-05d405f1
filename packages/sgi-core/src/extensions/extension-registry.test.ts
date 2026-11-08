@@ -21,9 +21,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadCandidate, loadCaseSet } from "@adem/sgi-fixtures";
-import { compareRecordedOutput } from "../scoring/compare-recorded-output";
+import type { CaseSet } from "@adem/sgi-fixtures";
+import { scoreSubmission } from "../scoring/score-submission";
 
 import type { EvaluatorCheck } from "./evaluator-check";
+import type { ExtensionRegistry } from "./extension-registry";
 import type { FixturePack } from "./fixture-pack";
 import type { ListingCategory } from "./listing-category";
 import { EvaluatorCheckValidationError } from "./evaluator-check";
@@ -41,15 +43,47 @@ const EXTENSION_CHECK_ID = "community-extension-check";
 const EXTENSION_CATEGORY_SLUG = "community-extension-tools";
 
 /**
- * A pack satisfying the seam. `loadCaseSet` is never called by the registry or by any guard, so
- * building one costs nothing until a test asks for the case set.
+ * A case set of this file's own, holding one case and no critical case.
+ *
+ * Built inline rather than loaded: what a pack's `loadCaseSet` returns is the pack's own business,
+ * and the registry stores the contribution and deliberately never calls it, so a contribution may
+ * bring cases no fixture file holds. The two counts restate the array beside them, which is the
+ * internal consistency the scoring path checks once such a pack is actually scored.
  */
-function makeFixturePack(id: string, standardVersionId: string = STANDARD_VERSION_ID): FixturePack {
+function makeOwnCaseSet(standardVersionId: string = STANDARD_VERSION_ID): CaseSet {
+  return {
+    standard_version_id: standardVersionId,
+    total_cases: 1,
+    critical_cases: 0,
+    cases: [
+      {
+        id: "x-001",
+        severity: "standard",
+        input: {
+          instruction: "Restate the source as a JSON object holding one field, named summary.",
+          source: "A fictional shipment notice covering one staged pallet.",
+        },
+        expected_output: { summary: "One staged pallet." },
+      },
+    ],
+  };
+}
+
+/**
+ * A pack satisfying the seam. `loadCaseSet` is never called by the registry or by any guard, so
+ * building one costs nothing until a test asks for the case set; `caseSetSource` is the seam a test
+ * varies when it needs a pack whose cases are its own rather than the shipped ones.
+ */
+function makeFixturePack(
+  id: string,
+  standardVersionId: string = STANDARD_VERSION_ID,
+  caseSetSource: () => CaseSet = () => loadCaseSet(standardVersionId),
+): FixturePack {
   return {
     id,
     standardVersionId,
     title: `Fixture pack ${id}`,
-    loadCaseSet: () => loadCaseSet(standardVersionId),
+    loadCaseSet: caseSetSource,
   };
 }
 
@@ -117,6 +151,23 @@ describe("createExtensionRegistry", () => {
     expect(registry.listEvaluatorChecks()).toEqual([]);
     expect(registry.listListingCategories()).toEqual([]);
     expect(registry.getFixturePack(STANDARD_VERSION_ID)).toBeNull();
+  });
+
+  it("holds a contribution that brings its own cases without displacing the shipped case set", () => {
+    const registry = createExtensionRegistry();
+    const ownCaseSet = makeOwnCaseSet();
+    registry.registerFixturePack(
+      makeFixturePack(EXTENSION_PACK_ID, STANDARD_VERSION_ID, () => ownCaseSet),
+    );
+
+    const pack = registry.getFixturePack(EXTENSION_PACK_ID);
+    if (pack === null) {
+      throw new Error(`expected ${EXTENSION_PACK_ID} to resolve from the registry`);
+    }
+
+    expect(pack.loadCaseSet()).toBe(ownCaseSet);
+    expect(registry.getFixturePack(SGI_SO_1_0_0.fixtureSetId)).toBeNull();
+    expect(loadCaseSet(SGI_SO_1_0_0.fixtureSetId).total_cases).toBe(SGI_SO_1_0_0.totalCases);
   });
 
   it("returns a registry that holds no state shared with another registry", () => {
@@ -367,51 +418,114 @@ describe("malformed registrations", () => {
   });
 });
 
-describe("snapshot accessors", () => {
-  it("returns a frozen array from every accessor", () => {
-    const registry = createExtensionRegistry();
-    registry.registerFixturePack(makeFixturePack("pack-a"));
-    registry.registerEvaluatorCheck(makeEvaluatorCheck("check-a"));
-    registry.registerListingCategory(makeListingCategory("logistics-tools"));
+/**
+ * The three accessors, each with the one registration it snapshots and the one it takes afterwards,
+ * so the snapshot contract is asserted for every kind rather than for one of them: the three
+ * members are three separate closures over three separate arrays, and a defect in one of them — a
+ * returned live array, or one frozen array shared between two kinds — is invisible through the
+ * other two.
+ */
+interface SnapshotAccessor {
+  /** The kind, for the test's own name. */
+  readonly kind: string;
+  /** Registers the one contribution this accessor's snapshot should hold. */
+  readonly register: (registry: ExtensionRegistry) => void;
+  /** Registers a second contribution of the same kind, after a snapshot was taken. */
+  readonly registerAnother: (registry: ExtensionRegistry) => void;
+  /** Reads this accessor's snapshot. */
+  readonly snapshot: (registry: ExtensionRegistry) => readonly unknown[];
+  /** The second contribution, which is what a mutation attempt would push. */
+  readonly added: unknown;
+}
 
-    expect(Object.isFrozen(registry.listFixturePacks())).toBe(true);
-    expect(Object.isFrozen(registry.listEvaluatorChecks())).toBe(true);
-    expect(Object.isFrozen(registry.listListingCategories())).toBe(true);
+/** The second contribution of each kind, registered only after a snapshot has been taken. */
+const secondPack = makeFixturePack("pack-b");
+const secondCheck = makeEvaluatorCheck("check-b");
+const secondCategory = makeListingCategory("data-pipelines");
+
+const snapshotAccessors: readonly SnapshotAccessor[] = [
+  {
+    kind: "fixture packs",
+    register: (registry) => {
+      registry.registerFixturePack(makeFixturePack("pack-a"));
+    },
+    registerAnother: (registry) => {
+      registry.registerFixturePack(secondPack);
+    },
+    snapshot: (registry) => registry.listFixturePacks(),
+    added: secondPack,
+  },
+  {
+    kind: "evaluator checks",
+    register: (registry) => {
+      registry.registerEvaluatorCheck(makeEvaluatorCheck("check-a"));
+    },
+    registerAnother: (registry) => {
+      registry.registerEvaluatorCheck(secondCheck);
+    },
+    snapshot: (registry) => registry.listEvaluatorChecks(),
+    added: secondCheck,
+  },
+  {
+    kind: "listing categories",
+    register: (registry) => {
+      registry.registerListingCategory(makeListingCategory("logistics-tools"));
+    },
+    registerAnother: (registry) => {
+      registry.registerListingCategory(secondCategory);
+    },
+    snapshot: (registry) => registry.listListingCategories(),
+    added: secondCategory,
+  },
+];
+
+describe("snapshot accessors", () => {
+  it.each(snapshotAccessors)("freezes the array the $kind accessor returns", (accessor) => {
+    const registry = createExtensionRegistry();
+    accessor.register(registry);
+
+    expect(Object.isFrozen(accessor.snapshot(registry))).toBe(true);
   });
 
-  it("returns a distinct array with equal contents on each call", () => {
+  it.each(snapshotAccessors)("returns a distinct, equal $kind array on each call", (accessor) => {
     const registry = createExtensionRegistry();
-    registry.registerFixturePack(makeFixturePack("pack-a"));
+    accessor.register(registry);
 
-    const first = registry.listFixturePacks();
-    const second = registry.listFixturePacks();
+    const first = accessor.snapshot(registry);
+    const second = accessor.snapshot(registry);
 
     expect(second).not.toBe(first);
     expect(second).toEqual(first);
   });
 
-  it("refuses a mutation of the array it returned, leaving the registry unchanged", () => {
+  it.each(snapshotAccessors)("refuses a mutation of the $kind array it returned", (accessor) => {
     const registry = createExtensionRegistry();
-    registry.registerFixturePack(makeFixturePack("pack-a"));
+    accessor.register(registry);
 
-    const snapshot = registry.listFixturePacks();
+    const snapshot = accessor.snapshot(registry);
 
+    // The cast is what gives this assertion its meaning: the declared type is `readonly`, so the
+    // only way to reach the runtime freeze is to smuggle a write past the compiler. ESM is always
+    // strict mode, so the write throws rather than being silently dropped.
     expect(() => {
-      (snapshot as unknown as FixturePack[]).push(makeFixturePack("pack-b"));
+      (snapshot as unknown as unknown[]).push(accessor.added);
     }).toThrow(TypeError);
-    expect(registry.listFixturePacks().map((pack) => pack.id)).toEqual(["pack-a"]);
+    expect(accessor.snapshot(registry)).toHaveLength(1);
   });
 
-  it("does not grow an array obtained before a later registration", () => {
-    const registry = createExtensionRegistry();
-    registry.registerFixturePack(makeFixturePack("pack-a"));
+  it.each(snapshotAccessors)(
+    "does not grow a $kind array obtained before a later registration",
+    (accessor) => {
+      const registry = createExtensionRegistry();
+      accessor.register(registry);
 
-    const beforeLaterRegistration = registry.listFixturePacks();
-    registry.registerFixturePack(makeFixturePack("pack-b"));
+      const beforeLaterRegistration = accessor.snapshot(registry);
+      accessor.registerAnother(registry);
 
-    expect(beforeLaterRegistration.map((pack) => pack.id)).toEqual(["pack-a"]);
-    expect(registry.listFixturePacks().map((pack) => pack.id)).toEqual(["pack-a", "pack-b"]);
-  });
+      expect(beforeLaterRegistration).toHaveLength(1);
+      expect(accessor.snapshot(registry)).toHaveLength(2);
+    },
+  );
 });
 
 /**
@@ -432,27 +546,32 @@ describe("seam acceptance: a registered contribution needs no scoring edit", () 
     for (const name of scoringFiles) {
       const source = readFileSync(join(scoringDirectory, name), "utf8");
 
-      expect(source).not.toContain(EXTENSION_PACK_ID);
-      expect(source).not.toContain(EXTENSION_CHECK_ID);
-      expect(source).not.toContain(EXTENSION_CATEGORY_SLUG);
+      // The file name rides with each assertion, so a failure names the scoring module that has
+      // reached for an extension rather than leaving the reader to infer it from the source shown.
+      expect(source, `${name} must not name a registered extension`).not.toContain(EXTENSION_PACK_ID);
+      expect(source, `${name} must not name a registered extension`).not.toContain(EXTENSION_CHECK_ID);
+      expect(source, `${name} must not name a registered extension`).not.toContain(
+        EXTENSION_CATEGORY_SLUG,
+      );
     }
   });
 });
 
 /**
- * The behavioural half of the same assertion: the case set a registered pack hands the scoring path
- * is the shipped one, and the shipped comparison judges a real seed candidate match for match on
- * every case of it.
+ * The behavioural half of the same assertion, in the form the seam's acceptance actually turns on:
+ * the case set a registered pack hands over is scored by the shipped entry point
+ * `../scoring/score-submission`, which is where the pass rule, the totals, the failing-case
+ * derivation and the drift checks between the criteria, the case set and the submission all live.
  *
- * The per-case judging below calls the shipped comparison primitive itself —
- * `../scoring/compare-recorded-output`, the module that decides every case of an ordinary evaluation
- * — rather than a comparison written here, because the seam's claim is precisely that a contribution
- * is judged by the shipped path and restating that path in the test would prove nothing about it.
- * The pass rule that turns a run's matches into an outcome is not restated here either: it belongs
- * to the scoring entry point and to the standard version it is read from.
+ * Nothing of that path is restated here: the run's coverage is asserted against the shipped set's
+ * own size, and its second run is compared with its first rather than expected case by case. The
+ * seam's only contact with that deterministic path is the typed `ScoreSubmissionOptions.checks`
+ * option, which an ordinary evaluation leaves empty — the calls below supply no checks, so every
+ * case is decided inside `src/scoring/` and nothing in that folder had to change for a registered
+ * contribution to be scored.
  */
-describe("seam acceptance: the registered pack is judged by the shipped path", () => {
-  it("hands the scoring path the shipped case set and matches every seed case through it", () => {
+describe("seam acceptance: the registered pack is scored by the shipped path", () => {
+  it("scores a seed candidate through the case set a registered pack hands over", () => {
     const registry = createExtensionRegistry();
     registry.registerFixturePack({
       id: EXTENSION_PACK_ID,
@@ -471,20 +590,21 @@ describe("seam acceptance: the registered pack is judged by the shipped path", (
     expect(caseSet.total_cases).toBe(SGI_SO_1_0_0.totalCases);
 
     const submission = loadCandidate("seed-alpha");
-    const recordedOutputs = new Map(
-      submission.recorded_outputs.map((recorded) => [recorded.case_id, recorded.output]),
-    );
-    const judge = () =>
-      caseSet.cases.map((fixtureCase) =>
-        compareRecordedOutput(fixtureCase.expected_output, recordedOutputs.get(fixtureCase.id)),
-      );
+    const first = scoreSubmission(SGI_SO_1_0_0, caseSet, submission);
+    const second = scoreSubmission(SGI_SO_1_0_0, pack.loadCaseSet(), submission);
 
-    const results = judge();
+    // Twenty is the shipped case set's own size, and a matched count equal to the total is a run
+    // that missed nothing: neither number is a threshold this file restates.
+    expect(first.standardVersionId).toBe(SGI_SO_1_0_0.versionLabel);
+    expect(first.totalCount).toBe(20);
+    expect(first.matchedCount).toBe(first.totalCount);
+    expect(first.criticalFailures).toBe(0);
+    expect(first.failingCaseIds).toEqual([]);
+    expect(first.outcome).toBe("PASS");
 
-    expect(results).toHaveLength(SGI_SO_1_0_0.totalCases);
-    expect(results.filter((result) => !result.match)).toEqual([]);
-
-    // The reproducibility the evaluation promises: the same fixture judged twice compares equal.
-    expect(judge()).toEqual(results);
+    // The reproducibility the evaluation promises, applied to a registered contribution: the same
+    // fixture scored twice yields identical per-case results and the same outcome.
+    expect(second.caseResults).toEqual(first.caseResults);
+    expect(second.outcome).toBe(first.outcome);
   });
 });

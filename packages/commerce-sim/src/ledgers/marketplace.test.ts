@@ -77,7 +77,7 @@ const CONFIG = resolveCommerceConfig();
  * simulation is configured with must never appear in this ledger.
  */
 const CHANGED_CONFIG = resolveCommerceConfig({
-  gateFeeMinorUnits: 7777,
+  gateFeeMinorUnits: 20000,
   founderAllocationRateBasisPoints: 1,
 });
 

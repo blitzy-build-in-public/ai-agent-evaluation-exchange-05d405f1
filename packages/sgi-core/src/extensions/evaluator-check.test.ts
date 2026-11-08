@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { loadCandidate, loadCaseSet } from "@adem/sgi-fixtures";
-import type { CandidateSubmission, FixtureCase, JsonValue } from "@adem/sgi-fixtures";
+import type { JsonValue } from "@adem/sgi-fixtures";
 
 import { canonicalize } from "../scoring/canonical-json";
 import { compareRecordedOutput } from "../scoring/compare-recorded-output";
 import type { CaseComparison } from "../scoring/compare-recorded-output";
+import { scoreSubmission } from "../scoring/score-submission";
+import type { CaseResult, ScoredSubmission } from "../scoring/score-submission";
 import { SGI_SO_1_0_0 } from "../standards/sgi-so-1.0.0";
 import { EvaluatorCheckValidationError, validateEvaluatorCheck } from "./evaluator-check";
 import type { EvaluatorCheck } from "./evaluator-check";
@@ -123,6 +125,16 @@ describe("validateEvaluatorCheck", () => {
     },
   );
 
+  it("refuses an array candidate on id rather than on a positional member", () => {
+    // An empty array is not refused as a non-object: `typeof []` is "object" and it is not null, so the
+    // guard reads its absent `id` and reports that member.
+    const error = catchSeamError([]);
+
+    expect(error).toBeInstanceOf(EvaluatorCheckValidationError);
+    expect(error.code).toBe("seam_validation");
+    expect(error.field).toBe("id");
+  });
+
   it("refuses an empty object on id rather than on a sentinel field", () => {
     const error = catchSeamError({});
 
@@ -179,6 +191,7 @@ describe("validateEvaluatorCheck", () => {
     { override: { appliesTo: [""] }, label: "holding an empty id" },
     { override: { appliesTo: ["   "] }, label: "holding a whitespace-only id" },
     { override: { appliesTo: ["so-001", null] }, label: "holding a null id" },
+    { override: { appliesTo: ["so-001", 7] }, label: "holding a numeric id alongside a valid one" },
   ])("refuses an appliesTo that is $label", ({ override }) => {
     const error = catchSeamError({ ...validCheck, ...override });
 
@@ -265,124 +278,106 @@ describe("validateEvaluatorCheck", () => {
   });
 });
 
-describe("the evaluator-check seam", () => {
+describe("a validated check, scored through the seam", () => {
   const caseSet = loadCaseSet(SGI_SO_1_0_0.fixtureSetId);
-  const alpha = loadCandidate("seed-alpha");
-
-  /** The output a candidate recorded for one case, or `undefined` when it recorded none. */
-  function recordedFor(candidate: CandidateSubmission, caseId: string): JsonValue | undefined {
-    return candidate.recorded_outputs.find((recorded) => recorded.case_id === caseId)?.output;
-  }
+  const submission = loadCandidate("seed-alpha");
 
   /**
-   * Decides one case the way the scoring path does when it is handed one check: the check answers the
-   * cases it declares, and the canonical comparison answers the rest.
+   * The case the check below declares. It has to be a case the canonical comparison matches and one
+   * whose failure is not `critical`, or the assertion on the outcome could not tell a check that
+   * changes one verdict from a check that changes the pass rule.
+   *
+   * `seed-alpha` records `so-017`'s four keys in a different order from the expected output, a
+   * difference no reader of the JSON can observe, so the canonical comparison matches it.
    */
-  function decide(fixtureCase: FixtureCase, check?: EvaluatorCheck): CaseComparison {
-    const recorded = recordedFor(alpha, fixtureCase.id);
+  const DECLARED_CASE_ID = "so-017";
 
-    if (check !== undefined && check.appliesTo.includes(fixtureCase.id)) {
-      return check.compare(fixtureCase.expected_output, recorded);
-    }
-
-    return compareRecordedOutput(fixtureCase.expected_output, recorded);
-  }
-
-  /** A check that refuses a recording which is not a JSON array, its own rule on top of canonical equality. */
-  function arrayOnlyCheck(caseId: string): EvaluatorCheck {
-    return validateEvaluatorCheck({
-      id: "array-only-check",
-      title: "Array-only recording check",
-      appliesTo: [caseId],
-      compare: (expected: JsonValue, actual: JsonValue | undefined): CaseComparison => {
-        const expectedCanonical = canonicalize(expected);
-
-        if (actual === undefined) {
-          return { match: false, expectedCanonical, actualCanonical: "", reason: "absent" };
-        }
-
-        const actualCanonical = canonicalize(actual);
-        const match = Array.isArray(actual) && actualCanonical === expectedCanonical;
-
-        return { match, expectedCanonical, actualCanonical, reason: match ? "match" : "mismatch" };
-      },
-    });
-  }
-
-  it("accepts the shipped fixture values, so a delegating check reproduces the canonical verdicts", () => {
-    const delegating = validateEvaluatorCheck({
-      id: "delegating-check",
-      title: "Delegating check",
-      appliesTo: caseSet.cases.map((fixtureCase) => fixtureCase.id),
-      compare: (expected: JsonValue, actual: JsonValue | undefined): CaseComparison =>
-        compareRecordedOutput(expected, actual),
-    });
-
-    const delegated = caseSet.cases.map((fixtureCase) => decide(fixtureCase, delegating));
-
-    expect(delegated).toEqual(caseSet.cases.map((fixtureCase) => decide(fixtureCase)));
-  });
-
-  it("passes an absent recording through as a defined input rather than a failure", () => {
-    const delegating = validateEvaluatorCheck({
-      id: "delegating-check",
-      title: "Delegating check",
-      appliesTo: ["so-001"],
-      compare: (expected: JsonValue, actual: JsonValue | undefined): CaseComparison =>
-        compareRecordedOutput(expected, actual),
-    });
-
-    expect(delegating.compare({ status: "received" }, undefined)).toEqual({
+  /**
+   * A check that refuses every recording for the case it declares, built through the guard rather than
+   * written as a bare literal so that its verdict travels the seam's whole path: registration, then
+   * `ScoreSubmissionOptions.checks`.
+   *
+   * Its verdict carries both canonical strings, which is what keeps a report's per-case evidence
+   * intact when a contributed check answers a case.
+   */
+  const refusingCheck = validateEvaluatorCheck({
+    id: "community-check",
+    title: "Recording-shape check",
+    appliesTo: [DECLARED_CASE_ID],
+    compare: (expected: JsonValue, actual: JsonValue | undefined): CaseComparison => ({
       match: false,
-      expectedCanonical: canonicalize({ status: "received" }),
-      actualCanonical: "",
-      reason: "absent",
-    });
-  });
-
-  it("changes the verdict of exactly the case a validated check declares, and nothing else", () => {
-    const builtIn = caseSet.cases.map((fixtureCase) => decide(fixtureCase));
-    expect(builtIn.every((comparison) => comparison.match)).toBe(true);
-
-    const targetIndex = caseSet.cases.findIndex(
-      (fixtureCase) => fixtureCase.severity === "standard" && decide(fixtureCase).match,
-    );
-    const target = caseSet.cases[targetIndex];
-
-    if (target === undefined) {
-      throw new Error("the shipped case set declares no matching standard-severity case to declare");
-    }
-
-    const check = arrayOnlyCheck(target.id);
-    const withCheck = caseSet.cases.map((fixtureCase) => decide(fixtureCase, check));
-
-    const changedCaseIds = caseSet.cases
-      .filter((fixtureCase, index) => withCheck[index]?.match !== builtIn[index]?.match)
-      .map((fixtureCase) => fixtureCase.id);
-
-    expect(check.appliesTo).toEqual([target.id]);
-    expect(changedCaseIds).toEqual([target.id]);
-
-    const matchedBuiltIn = builtIn.filter((comparison) => comparison.match).length;
-    const matchedWithCheck = withCheck.filter((comparison) => comparison.match).length;
-
-    expect(matchedBuiltIn).toBe(SGI_SO_1_0_0.totalCases);
-    expect(matchedWithCheck).toBe(matchedBuiltIn - 1);
-
-    // The verdict is the whole record, so the report's per-case evidence survives a contributed check:
-    // the two canonical strings are the ones the canonical comparison produced, and they agree because
-    // the recording itself matches canonically — the check's stricter rule is what makes it a non-match.
-    expect(withCheck[targetIndex]).toEqual({
-      match: false,
-      expectedCanonical: builtIn[targetIndex]?.expectedCanonical,
-      actualCanonical: builtIn[targetIndex]?.actualCanonical,
+      expectedCanonical: canonicalize(expected),
+      actualCanonical: actual === undefined ? "" : canonicalize(actual),
       reason: "mismatch",
-    });
+    }),
+  });
 
-    // The versioned criteria are untouched by the check and remain the only deciders: the case it
-    // answers is not a `critical` one, so exactly one match is lost and no critical failure is added,
-    // and the surviving count still clears the threshold the standard version publishes.
-    expect(target.severity).toBe("standard");
-    expect(matchedWithCheck).toBeGreaterThanOrEqual(SGI_SO_1_0_0.passThresholdMatches);
+  /** The run the product itself performs: no checks, so the canonical comparison decides every case. */
+  const builtIn = scoreSubmission(SGI_SO_1_0_0, caseSet, submission);
+
+  /** The same submission, with the one declared case answered by a contributed check. */
+  const checked = scoreSubmission(SGI_SO_1_0_0, caseSet, submission, { checks: [refusingCheck] });
+
+  /** The result for one case, failing the test rather than reading an absent result as `undefined`. */
+  function resultFor(scored: ScoredSubmission, caseId: string): CaseResult {
+    const found = scored.caseResults.find((caseResult) => caseResult.caseId === caseId);
+
+    if (found === undefined) {
+      throw new Error(`the scored run carries no result for case "${caseId}"`);
+    }
+
+    return found;
+  }
+
+  it("matches every case when no check is supplied, which is what the checked run is compared to", () => {
+    expect(builtIn.matchedCount).toBe(caseSet.total_cases);
+    expect(builtIn.totalCount).toBe(caseSet.total_cases);
+    expect(builtIn.criticalFailures).toBe(0);
+    expect(builtIn.failingCaseIds).toEqual([]);
+    expect(builtIn.outcome).toBe("PASS");
+  });
+
+  it("fails the case the check declares and leaves that case's evidence as it was", () => {
+    const declaredBuiltIn = resultFor(builtIn, DECLARED_CASE_ID);
+    const declared = resultFor(checked, DECLARED_CASE_ID);
+
+    // The built-in comparison matches this case although its keys are recorded in another order, so the
+    // non-match below can only come from the contributed check.
+    expect(declaredBuiltIn.match).toBe(true);
+    expect(declared.match).toBe(false);
+
+    // Field for field the same result, apart from the verdict: the check reported the canonical text of
+    // both sides, so the evidence a report stores is unchanged by who decided the case.
+    expect(declared).toEqual({ ...declaredBuiltIn, match: false });
+  });
+
+  it("loses exactly one match and leaves the outcome to the versioned thresholds", () => {
+    // The pass rule is read from `SGI_SO_1_0_0`'s own fields rather than from a literal here: the check
+    // changes one case's verdict, and the standard version's `passThresholdMatches` and
+    // `criticalFailuresAllowed` still decide `PASS`/`FAIL`, which is what makes a contributed check an
+    // addition to the scoring path rather than a change to it. The declared case is a `standard`
+    // severity one, so the single lost match adds no critical failure and the surviving count still
+    // clears the threshold the version publishes.
+    expect(resultFor(checked, DECLARED_CASE_ID).severity).toBe("standard");
+
+    expect(checked.matchedCount).toBe(builtIn.matchedCount - 1);
+    expect(checked.criticalFailures).toBe(0);
+    expect(checked.failingCaseIds).toEqual([DECLARED_CASE_ID]);
+    expect(checked.matchedCount).toBeGreaterThanOrEqual(SGI_SO_1_0_0.passThresholdMatches);
+    expect(checked.outcome).toBe("PASS");
+  });
+
+  it("leaves every case the check does not declare exactly as the built-in run scored it", () => {
+    const others = checked.caseResults.filter(
+      (caseResult) => caseResult.caseId !== DECLARED_CASE_ID,
+    );
+    const othersBuiltIn = builtIn.caseResults.filter(
+      (caseResult) => caseResult.caseId !== DECLARED_CASE_ID,
+    );
+
+    // Every case but the declared one, in the same order and with the same verdict: a check is consulted
+    // for exactly the cases it declares and for no others.
+    expect(others).toHaveLength(caseSet.total_cases - 1);
+    expect(others).toEqual(othersBuiltIn);
   });
 });
