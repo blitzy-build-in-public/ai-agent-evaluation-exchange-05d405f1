@@ -414,11 +414,12 @@ telephone-number patterns; credential material; and prohibited payment, analytic
 dependency names, matched against digests rather than names. It reports every finding with its file and
 line and deletes nothing, and it exits `2` rather than `0` when it could not reach a verdict at all, so
 a broken scanner is never mistaken for a clean tree. Two suppressions are stated in this command's
-own output and in `docs/REVIEW-CHECKLIST.md` §2: no mail-address finding is reported inside a
-lockfile or inside the deprecation notice npm copies verbatim from the registry, because both are
-upstream metadata the repository passes on rather than its own content, and none is reported on a git
-commit's `Author:` or `Committer:` line, because each commit carries the committing tool's identity
-rather than a person's address. **It does not guarantee the absence of private
+own output and in `docs/REVIEW-CHECKLIST.md` §2: no mail-address finding is reported inside the
+deprecation notice npm copies verbatim from the registry, because that notice is upstream metadata the
+repository passes on rather than its own content, and none is reported on a git commit's `Author:` or
+`Committer:` line, because each commit carries the committing tool's identity rather than a person's
+address. An address written anywhere else, a lockfile's own lines included, is reported.
+**It does not guarantee the absence of private
 information.** It does not detect personal names; it does not detect the contextual disclosure of
 private or nonpublic information; and it does not detect references to private projects, products or
 datasets. A clean run is not evidence that the repository holds none of those, and no document, comment

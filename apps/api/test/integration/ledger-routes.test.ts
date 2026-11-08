@@ -790,8 +790,9 @@ describe("the operator ledger reads and the simulated commerce arithmetic", () =
       const reversalRowsBefore = founderRowsOf(server, transaction.id).length;
 
       // One minor unit more than the refund rows leave. The domain derives the net remaining from
-      // those rows on every call — no balance is stored anywhere — and refuses before its transaction
-      // opens, which is what makes the deltas below the proof that a refusal writes nothing at all.
+      // those rows on every call — no balance is stored anywhere — and decides the refusal inside the
+      // same transaction it would append from, which is what makes the deltas below the proof that a
+      // refusal writes nothing at all.
       const refused = await refund(server, transaction.id, AMOUNT_PAST_NET_REMAINING_MINOR_UNITS);
       expectFailure(refused, 422, "exceeds_net_remaining");
 

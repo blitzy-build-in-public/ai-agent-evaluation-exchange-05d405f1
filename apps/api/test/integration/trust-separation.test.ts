@@ -4,11 +4,12 @@
  * because neither direction can see what the other sees.
  *
  * **The static half** walks every import specifier and sponsorship token of `packages/sgi-core/`
- * through the sibling `./boundary-check` and reads the workspace manifests, so an edge that no test
+ * through the sibling `./boundary-check` and judges every workspace manifest, so an edge that no test
  * exercises is still caught: the import graph is a property of the whole tree rather than of the
  * code paths a suite happens to call. `sgi-core` may import `@adem/shared`, `@adem/sgi-fixtures`
- * and `better-sqlite3` and nothing commercial, and no manifest may declare an edge back into
- * `packages/sgi-core` or into the API workspace.
+ * and `better-sqlite3` and nothing commercial, and no manifest may declare an edge its own row does
+ * not permit: none to `@adem/api`, `@adem/web` or an `apps/` path, none to `@adem/commerce-sim`
+ * outside `apps/api`, and none to either SGI package outside the workspaces its row allows.
  *
  * **The behavioural half** captures the three seeded reports, the linked evidence each badge-bearing
  * listing exposes for its newest version, and the organic result payload; then varies sponsorship —
@@ -35,14 +36,20 @@
  * reordering of the organic results is one of the three things the criterion protects, and an
  * equality assertion over two parsed objects would not observe it.
  *
- * **Its footprint.** Nothing is written to disk, no second connection is opened — the harness's
- * in-memory handle is the only one — and no seeded row is modified. The only writes are the two
- * additive `sponsored_slots` rows and the simulated checkout, which appends to its own tables. No
- * identifier is hard-coded: seeded reports, candidate versions and accounts all come from the
- * harness's accessors.
+ * **Its footprint.** The one manifest tree the coverage case builds is a throwaway under the system
+ * temporary directory, removed in that case's own `finally`; apart from it nothing is written to
+ * disk, no second connection is opened — the harness's in-memory handle is the only one — and no
+ * seeded row is modified. The only writes to the harness's database are the two additive
+ * `sponsored_slots` rows and the simulated checkout, which appends to its own tables. No identifier
+ * is hard-coded: seeded reports, candidate versions and accounts all come from the harness's
+ * accessors.
  */
 
 import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -501,12 +508,85 @@ describe("trust separation", () => {
       expect(violations, forbiddenEdgeReport(violations)).toEqual([]);
     });
 
-    it("covers the SGI manifest's own dependency blocks, which a walk of the source cannot see", () => {
-      // The manifest half reports on `packages/sgi-core/package.json` alone, while every other
-      // workspace may legitimately declare `@adem/commerce-sim`: the API workspace does, by design.
+    it("covers every workspace manifest's own dependency blocks, which a walk of the source cannot see", () => {
+      // The manifest half holds every enumerated manifest to the allowance its own workspace's row
+      // states, and on this repository that is the whole of it: the API workspace declares
+      // `@adem/commerce-sim` and `@adem/sgi-core` by design, the example extension declares both SGI
+      // packages by design, and no manifest declares an edge none of the rows permits.
       const violations = checkWorkspaceManifests();
 
       expect(violations, forbiddenEdgeReport(violations)).toEqual([]);
+    });
+
+    it("reports an edge any workspace's row forbids, not only the SGI manifest's", () => {
+      // The widening this case proves: a forbidden edge is reported wherever its manifest declares it,
+      // so `apps/web` may reach no domain package, `packages/commerce-sim` may not reach
+      // `@adem/sgi-core`, and no workspace may declare a path into `apps/` whichever way its value
+      // names the tree — `file:apps/api` writing the segment, `file:../../apps/api` resolving into
+      // it. The tree is a throwaway under the system temporary directory, removed in the `finally`
+      // below either way.
+      const root = mkdtempSync(join(tmpdir(), "adem-boundary-manifests-"));
+      const writeManifest = (relativePath: string, manifest: Record<string, unknown>): void => {
+        const absolutePath = join(root, relativePath);
+        mkdirSync(dirname(absolutePath), { recursive: true });
+        writeFileSync(absolutePath, `${JSON.stringify(manifest, null, 2)}\n`);
+      };
+      const renderedViolations = (): readonly string[] =>
+        checkWorkspaceManifests(pathToFileURL(root))
+          .map(
+            (violation) =>
+              `${relative(root, violation.absolutePath)}[${violation.rule}]${violation.specifier}`,
+          )
+          .sort();
+
+      try {
+        writeManifest("package.json", { name: "adem", private: true });
+        writeManifest("packages/sgi-core/package.json", { name: "@adem/sgi-core", private: true });
+        writeManifest("apps/web/package.json", {
+          name: "@adem/web",
+          private: true,
+          dependencies: { "@adem/commerce-sim": "0.1.0" },
+        });
+        writeManifest("packages/commerce-sim/package.json", {
+          name: "@adem/commerce-sim",
+          private: true,
+          dependencies: { "@adem/sgi-core": "0.1.0" },
+        });
+        writeManifest("packages/shared/package.json", {
+          name: "@adem/shared",
+          private: true,
+          dependencies: { "api-client": "file:../../apps/api" },
+        });
+        writeManifest("packages/sgi-fixtures/package.json", {
+          name: "@adem/sgi-fixtures",
+          private: true,
+          dependencies: { "gate-tools": "file:apps/api" },
+        });
+
+        expect(renderedViolations()).toEqual([
+          "apps/web/package.json[manifest-edge-to-commerce-sim]@adem/commerce-sim",
+          "packages/commerce-sim/package.json[manifest-edge-to-sgi-core]@adem/sgi-core",
+          "packages/sgi-fixtures/package.json[manifest-edge-to-apps-api]gate-tools: file:apps/api",
+          "packages/shared/package.json[manifest-edge-to-apps-api]api-client: file:../../apps/api",
+        ]);
+
+        // The positive control: the same tree with those four entries removed reports nothing, so the
+        // four edges above are what the check found rather than the shape of the tree it was given.
+        writeManifest("apps/web/package.json", { name: "@adem/web", private: true });
+        writeManifest("packages/commerce-sim/package.json", {
+          name: "@adem/commerce-sim",
+          private: true,
+        });
+        writeManifest("packages/shared/package.json", { name: "@adem/shared", private: true });
+        writeManifest("packages/sgi-fixtures/package.json", {
+          name: "@adem/sgi-fixtures",
+          private: true,
+        });
+
+        expect(renderedViolations()).toEqual([]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
 
     it("finds an edge when it is pointed at real code that holds one, so an empty answer means it read", () => {

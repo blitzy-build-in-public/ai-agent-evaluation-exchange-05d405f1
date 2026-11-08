@@ -11,15 +11,24 @@ in `scripts/deps-report.ts`, or the allowlist data — and run `npm run deps:rep
 
 ## Licence allowlist
 
-Every entry is checked against the allowlist in `scripts/license-allowlist.json`:
+Every entry is checked against the allowlist in `scripts/license-allowlist.json`. That
+data file holds the list Success criteria 11 fixes:
 
 - `0BSD`
 - `Apache-2.0`
 - `BSD-2-Clause`
 - `BSD-3-Clause`
-- `BlueOak-1.0.0`
 - `ISC`
 - `MIT`
+
+Every licence the data file admits beyond that list is recorded there as an amendment,
+with the reason the tree needs it and the entries that carry it:
+
+- `BlueOak-1.0.0` — A permissive, OSI-approved licence carried by the four packages the runtime
+  graph reaches through glob under @fastify/static, a pinned row of the closed dependency inventory,
+  so the row cannot be removed without departing from that inventory. Carried by `jackspeak@3.4.3`,
+  `minipass@7.1.3`, `package-json-from-dist@1.0.1` and `path-scurry@1.11.1`, each in the runtime
+  graph.
 
 A licence listed as a development-only exception passes only in the development graph, never in
 the runtime graph, because a licence permitted for development must not be distributed:

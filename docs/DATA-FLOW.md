@@ -354,10 +354,13 @@ transaction is already fully refunded, `422` when the amount exceeds the net rem
 unknown transaction, and `400` for an amount that is not a whole count of at least one minor unit (the
 shared schema deliberately admits `0`, so a refund of nothing reaches the domain and is refused there,
 because a row stating that nothing was refunded would record an act that did not happen). All four
-refusals are decided before the transaction opens. An accepted refund writes one `refunds` row and the
-two `ledger_entries` reversal rows the refund rules — the marketplace reversal of the charge and the
-founder-allocation reversal of the allocation that charge produced — proportionally to the refunded
-amount, inside one transaction, plus the route's audit row. Nothing already stored is edited or removed:
+refusals write nothing: the invalid-amount refusal is decided before the transaction opens, and the
+other three are decided inside the transaction that appends the refund and its reversal pair, so an
+append that landed between a read and the insert cannot go unnoticed. An accepted refund writes one
+`refunds` row and the two `ledger_entries` reversal rows the refund rules — the marketplace reversal of
+the charge and the founder-allocation reversal of the allocation that charge produced — proportionally
+to the refunded amount, inside one transaction, plus the route's audit row. Nothing already stored is
+edited or removed:
 `transactions`, `refunds` and `ledger_entries` are three of the nine append-only tables, and the operator
 reads the net position back by reading the rows.
 

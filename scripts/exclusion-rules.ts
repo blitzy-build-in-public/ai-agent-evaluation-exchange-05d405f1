@@ -2,10 +2,10 @@
  * The exclusion scan's rules: what counts as a violation, and nothing else.
  *
  * `scripts/scan-exclusions.ts` owns the walking, the ignore set, the git-history read, the exit code
- * and the output format. This module owns the four detectable classes as data, one matcher each, the
- * provider-digest hashing both sides must agree on, and the limitations the scan prints with its
- * findings. Keeping the rules apart from the scanner is what lets the planted self-test fire one
- * class at a time.
+ * and the output format. This module owns the four detectable classes as data — five rules, one
+ * matcher each — the provider-digest hashing both sides must agree on, and the limitations the scan
+ * prints with its findings. Keeping the rules apart from the scanner is what lets the planted
+ * self-test fire one class at a time.
  *
  * Precision beats recall throughout. The scan is supplementary to the manual review in
  * `docs/REVIEW-CHECKLIST.md`, so a rule that cries wolf costs more than a rule that misses, and the
@@ -342,9 +342,9 @@ const GIT_METADATA_ADDRESS_PATTERN = /^(?:Author|Committer):\s[^<>]*<[^<>]+>\s*$
 
 /**
  * The deprecation-notice field npm copies verbatim from the registry into a lockfile. One such
- * notice names the package maintainer, so the address belongs to upstream registry metadata the
- * repository hands on rather than to the repository's own content, and the lockfile stays as npm
- * wrote it and is never hand-edited: `npm ci` installs from it without rewriting it.
+ * notice names the package maintainer, so the address it carries is upstream registry metadata the
+ * repository passes on rather than the repository's own content. Every other line of a lockfile is
+ * checked like any other text.
  */
 const LOCKFILE_DEPRECATION_FIELD_PATTERN = /"deprecated"\s*:\s*"/;
 
@@ -356,9 +356,9 @@ const LOCKFILE_DEPRECATION_FIELD_PATTERN = /"deprecated"\s*:\s*"/;
  * a shape with no dot in its domain, a domain label that is not alphanumeric with inner hyphens, a
  * domain carrying an underscore, an IP-literal domain, a top-level label that is not 2 to 63
  * letters, an occurrence that continues a longer local part or scope, the address line of a git
- * commit header, and an address inside a lockfile or inside an upstream deprecation notice — both
- * of which carry a third party's identity rather than the repository's own. A hand-written manifest
- * and every text file are still checked in full.
+ * commit header, and an address inside the upstream deprecation notice npm copies into a lockfile —
+ * the one shape that carries a third party's identity rather than the repository's own. A lockfile's
+ * own lines, a hand-written manifest and every text file are checked in full.
  *
  * The candidate is attempted at one position at a time, and the walk then steps to the next position
  * an address could begin at, rather than searching for one from every position of the line. Searching
@@ -370,7 +370,6 @@ const LOCKFILE_DEPRECATION_FIELD_PATTERN = /"deprecated"\s*:\s*"/;
  */
 function matchEmailAddress(context: RuleLineContext): readonly RuleMatch[] {
   if (
-    context.kind === 'lockfile' ||
     GIT_METADATA_ADDRESS_PATTERN.test(context.text) ||
     LOCKFILE_DEPRECATION_FIELD_PATTERN.test(context.text)
   ) {
@@ -885,7 +884,7 @@ export const SCAN_LIMITATIONS: readonly string[] = Object.freeze([
   'It does not detect personal names.',
   'It does not detect contextual disclosure of private or nonpublic information.',
   'It does not detect references to private projects, products or datasets.',
-  'It reports no address inside a lockfile, and none inside the deprecation notice npm copies verbatim from the registry wherever that notice is read, because both are upstream metadata the repository passes on rather than its own content and the committed lockfile stays exactly as npm wrote it.',
+  'It reports no address inside the deprecation notice npm copies verbatim from the registry, because that notice is upstream metadata the repository passes on rather than its own content; every other line of a lockfile is scanned as text.',
   'It reports no address on a git commit\'s Author: or Committer: line, or on any line whose whole text has that header\'s shape, because every commit this repository carries is authored with the committing tool\'s identity rather than a person\'s address.',
   'It reads the working tree and the local git history, and nothing outside the checkout.',
   'It matches patterns rather than meaning, so a clean run is not evidence that the repository holds no private information, and the scan must never be described as guaranteeing that absence.',

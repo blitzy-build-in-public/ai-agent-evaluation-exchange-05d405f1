@@ -191,7 +191,11 @@ function applyMigrations(database: Database.Database): void {
  * Seeds every row the fixture's entries reference, in the order the delivered references require: the
  * two accounts, the category, the listing the developer owns and its first version, the transaction a
  * marketplace or founder-allocation entry carries, and the report a gate-evaluation-fee entry carries
- * together with the standard and the standard version that report is traced to.
+ * together with the standard and the standard version that report is traced to. The standard, its
+ * version and the report are rows of SGI-owned tables, and this fixture writes them only because the
+ * delivered foreign keys require the parents a `ledger_entries.report_id` names: they are foreign-key
+ * parents in this file's own private in-memory database and never a production path, because the
+ * package's shipped modules write nothing but its own `transactions`, `refunds` and `ledger_entries`.
  */
 function seedReferencedRows(): void {
   const insertAccount =

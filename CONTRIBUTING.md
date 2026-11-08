@@ -233,10 +233,11 @@ payment, analytics and advertising dependency names, matched against a blocklist
 command exits `0` on no finding, `1` on a finding and `2` when it could not reach a verdict at all,
 so a broken scanner is never mistaken for a clean tree.
 Two suppressions are stated in this command's own output and in `docs/REVIEW-CHECKLIST.md` §2: no
-mail-address finding is reported inside a lockfile or inside the deprecation notice npm copies
-verbatim from the registry, because both are upstream metadata the repository passes on rather than
-its own content, and none is reported on a git commit's `Author:` or `Committer:` line, because each
-commit carries the committing tool's identity rather than a person's address.
+mail-address finding is reported inside the deprecation notice npm copies verbatim from the registry,
+because that notice is upstream metadata the repository passes on rather than its own content, and
+none is reported on a git commit's `Author:` or `Committer:` line, because each commit carries the
+committing tool's identity rather than a person's address. An address written anywhere else, a
+lockfile's own lines included, is reported.
 
 **What it does not do, and may never be described as doing.** It does not detect personal names. It
 does not detect the contextual disclosure of private or nonpublic information. It does not detect
@@ -283,7 +284,8 @@ through with a word about why, not deleted.
 - [ ] No real personal information, contact detail, financial information, credential, token or
       secret is introduced, and no personal name appears.
 - [ ] Any new dependency has an inventory entry, its purpose record in `scripts/deps-report.ts`, an
-      exact version, and an allowed licence; the lockfile is committed and was not hand-edited.
+      exact version, and an allowed licence; the lockfile is committed and was not hand-edited, apart
+      from the one removal of upstream registry metadata that carries a third party's contact detail.
 - [ ] Append-only holds: no route updates or deletes one of the nine append-only tables.
 - [ ] Trust separation holds: nothing carries fee, sponsorship or commercial data into scoring, a
       report, a badge or organic ordering.

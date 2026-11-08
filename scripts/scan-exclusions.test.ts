@@ -224,7 +224,7 @@ const PLANTED_EXPECTATIONS: ReadonlyArray<PlantedExpectation> = [
 /** The line of the planted address inside the history tree's committed file. */
 const HISTORY_ADDRESS_LINE = lineOf(HISTORY_LINES, PLANTED_ADDRESS);
 
-/** One address-shaped line read in three contexts, with the finding count each one earns. */
+/** One address-shaped line read in five contexts, with the finding count each one earns. */
 const ADDRESS_CONTEXTS: ReadonlyArray<{
   readonly label: string;
   readonly context: RuleLineContext;
@@ -238,6 +238,16 @@ const ADDRESS_CONTEXTS: ReadonlyArray<{
   {
     label: 'a lockfile',
     context: { file: 'package-lock.json', kind: 'lockfile', line: 1, text: `contact ${PLANTED_ADDRESS} for details` },
+    expected: 1,
+  },
+  {
+    label: 'a lockfile deprecation notice',
+    context: {
+      file: 'package-lock.json',
+      kind: 'lockfile',
+      line: 1,
+      text: `"deprecated": "contact ${PLANTED_ADDRESS} for details",`,
+    },
     expected: 0,
   },
   {
@@ -805,7 +815,7 @@ describe('nothing is read destructively', () => {
 });
 
 describe('the exemptions the scan states', () => {
-  it('states the lockfile exemption and the git commit header exemption, and prints both', () => {
+  it('states the lockfile limitation and the git commit header exemption, and prints both', () => {
     const lockfileEntries = SCAN_LIMITATIONS.filter((entry) => entry.toLowerCase().includes('lockfile'));
     const headerEntries = SCAN_LIMITATIONS.filter((entry) => /author:|committer:/i.test(entry));
     expect(lockfileEntries.length).toBeGreaterThan(0);

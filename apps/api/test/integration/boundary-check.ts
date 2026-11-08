@@ -2,12 +2,16 @@
  * The static half of the product's trust-separation guarantee.
  *
  * **What it proves.** No import path carries commercial or sponsored data into the SGI path, and no
- * manifest edge connects them: the check walks the import specifiers and sponsorship tokens of every
- * TypeScript file under a scan directory — by default `packages/sgi-core/` — and reads every
- * workspace manifest, reporting each forbidden edge it finds. The edges are the ones the
- * per-workspace contract states: `packages/sgi-core` may import `@adem/shared`,
- * `@adem/sgi-fixtures` and `better-sqlite3` and nothing commercial, and no workspace may reach back
- * into the SGI path or into the API workspace.
+ * manifest declares an edge its own workspace's row of the per-workspace contract forbids: the check
+ * walks the import specifiers and sponsorship tokens of every TypeScript file under a scan directory
+ * — by default `packages/sgi-core/` — and judges every enumerated manifest against that row,
+ * reporting each forbidden edge it finds. The edges are the ones that contract states:
+ * `packages/sgi-core` may import `@adem/shared`, `@adem/sgi-fixtures` and `better-sqlite3` and
+ * nothing commercial, and an edge to one of the workspace packages this check judges is reported
+ * unless the declaring workspace's own row permits it — none to `@adem/api` or `@adem/web` or to a
+ * path inside `apps/`, none to `@adem/commerce-sim` except from `apps/api`, and none to
+ * `@adem/sgi-core` or `@adem/sgi-fixtures` except from `apps/api`, `packages/sgi-core` (the fixture
+ * package only) and the example extension.
  *
  * **Why it is static.** A test exercises only the code paths it calls, whereas the import graph is a
  * property of the whole tree, so this check holds for code paths no test ever runs.
@@ -62,7 +66,8 @@ export interface BoundaryViolation {
     | "sgi-core-imports-apps-api"
     | "sgi-core-imports-sponsorship"
     | "manifest-edge-to-commerce-sim"
-    | "manifest-edge-to-apps-api";
+    | "manifest-edge-to-apps-api"
+    | "manifest-edge-to-sgi-core";
 }
 
 /**
@@ -91,7 +96,10 @@ const DEPENDENCY_BLOCK_KEYS: readonly string[] = [
 /** Directories the scan never descends into: installed dependencies and build output. */
 const SKIPPED_DIRECTORY_NAMES = new Set(["node_modules", "dist"]);
 
-/** The one manifest this check reports on; every other workspace may legitimately hold these edges. */
+/**
+ * The manifest the enumeration is required to hold, whichever root it is pointed at: the SGI-carrying
+ * package's own manifest. Its absence means the check read nothing it was required to read.
+ */
 const SGI_CORE_MANIFEST_RELATIVE_PATH = join("packages", "sgi-core", "package.json");
 
 /**
@@ -102,6 +110,82 @@ const COMMERCE_SIM_PACKAGE_NAME = "@adem/commerce-sim";
 
 /** The API workspace the SGI path must never reach; likewise rule data rather than an import. */
 const API_WORKSPACE_PACKAGE_NAME = "@adem/api";
+
+/** The web workspace's package name; likewise rule data rather than an import. */
+const WEB_WORKSPACE_PACKAGE_NAME = "@adem/web";
+
+/** The SGI package's name; likewise rule data rather than an import. */
+const SGI_CORE_PACKAGE_NAME = "@adem/sgi-core";
+
+/** The fixture package's name; likewise rule data rather than an import. */
+const SGI_FIXTURES_PACKAGE_NAME = "@adem/sgi-fixtures";
+
+/** The npm protocol prefix a dependency value can carry in front of the path it names. */
+const FILE_PROTOCOL_PREFIX = "file:";
+
+/**
+ * The path segment that names the workspace tree, as a dependency value writes it: the one spelling
+ * that says where a value points whether npm would resolve it from the repository root or from the
+ * declaring manifest, which is why {@link namesAppsTree} reads it in the value's own text.
+ */
+const APPS_PATH_SEGMENT = "apps/";
+
+/**
+ * One allowance of the per-workspace contract: the workspace package a manifest edge can name, the
+ * rule identifier a forbidden declaration of it is reported under, and the workspaces whose own row
+ * permits declaring it.
+ */
+interface WorkspacePackageAllowance {
+  /** The package name an edge can name, matched on the name itself or on a subpath of it. */
+  readonly packageName: string;
+  /** The class of edge a declaration this check refuses is reported under. */
+  readonly rule: BoundaryViolation["rule"];
+  /** The workspaces whose own row permits the package to be declared, as workspace directories. */
+  readonly permittedWorkspaceDirectories: readonly string[];
+}
+
+/**
+ * The allowances the per-workspace contract's rows state, held as rule data.
+ *
+ * `apps/api` is reached over HTTP rather than by import, so no row permits an edge to `@adem/api` or
+ * to `@adem/web`; the API workspace declares the commercial package and the SGI package by design,
+ * the SGI package and the fixture package are declared by the example extension that adds a fixture
+ * pack through the seam, and `sgi-core` declares the fixture package it reads. A workspace package
+ * outside this table — the shared types package, and Shield — states no edge this check judges. Each
+ * directory is a forward-slash path relative to the repository root, so `apps/api` is the API
+ * workspace and `examples/extension-fixture-pack` is the example extension.
+ */
+const WORKSPACE_PACKAGE_ALLOWANCES: readonly WorkspacePackageAllowance[] = [
+  {
+    packageName: API_WORKSPACE_PACKAGE_NAME,
+    rule: "manifest-edge-to-apps-api",
+    permittedWorkspaceDirectories: [],
+  },
+  {
+    packageName: WEB_WORKSPACE_PACKAGE_NAME,
+    rule: "manifest-edge-to-apps-api",
+    permittedWorkspaceDirectories: [],
+  },
+  {
+    packageName: COMMERCE_SIM_PACKAGE_NAME,
+    rule: "manifest-edge-to-commerce-sim",
+    permittedWorkspaceDirectories: ["apps/api"],
+  },
+  {
+    packageName: SGI_CORE_PACKAGE_NAME,
+    rule: "manifest-edge-to-sgi-core",
+    permittedWorkspaceDirectories: ["apps/api", "examples/extension-fixture-pack"],
+  },
+  {
+    packageName: SGI_FIXTURES_PACKAGE_NAME,
+    rule: "manifest-edge-to-sgi-core",
+    permittedWorkspaceDirectories: [
+      "apps/api",
+      "packages/sgi-core",
+      "examples/extension-fixture-pack",
+    ],
+  },
+];
 
 /**
  * The sponsorship tokens a measurement path must never mention: a closed list. The alternation names
@@ -475,9 +559,10 @@ export function checkSgiCoreImports(root: URL = DEFAULT_SGI_CORE_ROOT): Boundary
 }
 
 /**
- * Every manifest to read: the root's, then each workspace's under the three parent directories, in
- * code-unit order. Reading all of them, rather than only the one that is reported on, is what stops
- * a workspace added later from going unread by this check.
+ * Every manifest to judge: the root's, then each workspace's under the three parent directories, in
+ * code-unit order. Judging all of them, rather than one of them, is what holds a workspace — the root
+ * included — to its own row of the per-workspace contract and stops a workspace added later from
+ * going unjudged by this check.
  */
 function enumerateManifestPaths(repositoryRoot: string): readonly string[] {
   const manifestPaths: string[] = [join(repositoryRoot, "package.json")];
@@ -532,6 +617,63 @@ function listManifestDependencies(
 }
 
 /**
+ * The allowance whose package a dependency name names: the name itself, or a subpath of it, since
+ * `@adem/sgi-core/internal` reaches into the same package. `undefined` when the name names none of
+ * the packages this check judges, which leaves the dependency to be judged by its value instead.
+ */
+function allowanceForDependencyName(name: string): WorkspacePackageAllowance | undefined {
+  return WORKSPACE_PACKAGE_ALLOWANCES.find(
+    (allowance) => name === allowance.packageName || name.startsWith(`${allowance.packageName}/`),
+  );
+}
+
+/**
+ * Whether a dependency value names the `<repositoryRoot>apps/` tree, read both ways a value can
+ * name it.
+ *
+ * The text is read first, and it has to be: npm resolves a `file:` value against the directory npm
+ * itself runs from — the repository root — rather than against the manifest that declares it, so
+ * `file:apps/api` reaches `<repositoryRoot>apps/api` from any workspace while the value's own text
+ * is the only thing that says so, a bare relative path carrying no leading `.` or `/` for a
+ * resolution to start from. Any value whose text carries the `apps/` segment once the `file:`
+ * protocol prefix is stripped therefore names the tree, wherever inside it the rest of the value
+ * then points.
+ *
+ * The resolution is read second, and it catches the spellings the text does not write: a value whose
+ * stripped remainder begins with `.` or `/` is resolved against the declaring manifest's own
+ * directory, and names the tree when the result is that `apps/` directory itself or a path under it —
+ * `file:../../apps/api` written from a package, or `file:../api` written from `apps/web`, which
+ * reaches `apps/api` without writing the segment at all.
+ *
+ * A value that neither carries the segment nor resolves into the tree names no path inside it — a
+ * version range, a tag or a registry alias — and is not reported.
+ *
+ * @param repositoryRoot - The repository root whose `apps/` directory is the tree a value can name.
+ * @param manifestPath - The manifest that declares the dependency, whose own directory a relative
+ *   value is resolved against.
+ * @param value - The dependency's value, or `null` when the manifest declares a shape that is not a
+ *   string and so can name no path at all.
+ * @returns Whether the value names the `apps/` tree by either reading.
+ */
+function namesAppsTree(repositoryRoot: string, manifestPath: string, value: string | null): boolean {
+  if (value === null) {
+    return false;
+  }
+  const remainder = value.startsWith(FILE_PROTOCOL_PREFIX)
+    ? value.slice(FILE_PROTOCOL_PREFIX.length)
+    : value;
+  if (remainder.includes(APPS_PATH_SEGMENT)) {
+    return true;
+  }
+  if (!remainder.startsWith(".") && !remainder.startsWith("/")) {
+    return false;
+  }
+  const appsDirectory = join(repositoryRoot, "apps");
+  const resolved = resolve(dirname(manifestPath), remainder);
+  return resolved === appsDirectory || resolved.startsWith(`${appsDirectory}${sep}`);
+}
+
+/**
  * The 1-indexed line of a dependency entry's name, searched from the start of the block it is
  * declared in, so a name that also appears in another block reports the block's own line. When the
  * name cannot be located the block's own line is reported, and the first line of the file after
@@ -551,17 +693,24 @@ function dependencyLine(manifestText: string, dependency: ManifestDependency): n
 }
 
 /**
- * Reads the root and workspace manifests and flags a forbidden edge in `packages/sgi-core/package.json`.
+ * Reads the root and workspace manifests and flags every edge a workspace's own row forbids.
  *
- * Only that one manifest is reported on: the API workspace declares `@adem/commerce-sim` by design,
- * and the example extension declares `@adem/sgi-core` by design. Every other manifest is still read
- * and parsed, because an unreadable manifest is a defect this check must surface rather than skip.
+ * Every enumerated manifest is judged against the allowance the row of its own workspace states, so
+ * an edge is reported wherever it is declared rather than in `packages/sgi-core/package.json` alone:
+ * a declaration of one of the workspace packages the allowance table names, or of a subpath of one,
+ * is reported unless the declaring workspace is on that package's permitted list, and a dependency
+ * whose value names the `apps/` tree — by writing its segment or by resolving inside it, both of
+ * which {@link namesAppsTree} reads — is reported wherever it is declared, because a path into the
+ * `apps/` tree is a way into the API or the UI workspace and no row permits it. At most one
+ * violation is reported per dependency: the name rule decides first, and the value rule is read only
+ * for a name the table does not judge. Every manifest is read and parsed as well, because an
+ * unreadable manifest is a defect this check must surface rather than skip.
  *
- * @param root - The repository root whose manifests are read, defaulting to this file's own
- *   repository. A workspace parent directory that is absent is simply absent from the enumeration.
+ * @param root - The repository root whose manifests are read and whose workspace directories the
+ *   allowances are matched against, defaulting to this file's own repository. A workspace parent
+ *   directory that is absent is simply absent from the enumeration.
  * @returns Every forbidden edge found, ordered by file, then line, then specifier; empty on the
- *   delivered repository, whose SGI manifest declares only `@adem/shared`, `@adem/sgi-fixtures` and
- *   `better-sqlite3`.
+ *   delivered repository, whose manifests declare only the edges their own rows permit.
  * @throws {Error} When `<root>package.json` or `<root>packages/sgi-core/package.json` cannot be read,
  *   and when a manifest that was read is not valid JSON or not a JSON object. An empty array from a
  *   manifest that was never read would pass the check for the wrong reason; it throws for nothing else.
@@ -587,36 +736,26 @@ export function checkWorkspaceManifests(root: URL = DEFAULT_REPOSITORY_ROOT): Bo
   for (const manifestPath of manifestPaths) {
     const text = readTextFile(manifestPath);
     const manifest = parseManifest(manifestPath, text);
-    if (resolve(manifestPath) !== sgiCoreManifestPath) {
-      continue;
-    }
-    const file = toPosixPath(relative(REPOSITORY_ROOT, manifestPath));
+    const file = toPosixPath(relative(repositoryRoot, manifestPath));
+    // The workspace a manifest belongs to, as a path relative to the repository root: the root
+    // manifest's own directory is the empty path, which no allowance permits an edge from.
+    const workspaceDirectory = toPosixPath(relative(repositoryRoot, dirname(manifestPath)));
     for (const dependency of listManifestDependencies(manifestPath, manifest)) {
       const line = dependencyLine(text, dependency);
-      if (
-        dependency.name === COMMERCE_SIM_PACKAGE_NAME ||
-        dependency.name.startsWith(`${COMMERCE_SIM_PACKAGE_NAME}/`)
-      ) {
-        violations.push({
-          file,
-          absolutePath: manifestPath,
-          line,
-          specifier: dependency.name,
-          rule: "manifest-edge-to-commerce-sim",
-        });
+      const allowance = allowanceForDependencyName(dependency.name);
+      if (allowance !== undefined) {
+        if (!allowance.permittedWorkspaceDirectories.includes(workspaceDirectory)) {
+          violations.push({
+            file,
+            absolutePath: manifestPath,
+            line,
+            specifier: dependency.name,
+            rule: allowance.rule,
+          });
+        }
         continue;
       }
-      if (dependency.name === API_WORKSPACE_PACKAGE_NAME) {
-        violations.push({
-          file,
-          absolutePath: manifestPath,
-          line,
-          specifier: dependency.name,
-          rule: "manifest-edge-to-apps-api",
-        });
-        continue;
-      }
-      if (dependency.value !== null && dependency.value.includes("apps/")) {
+      if (namesAppsTree(repositoryRoot, manifestPath, dependency.value)) {
         violations.push({
           file,
           absolutePath: manifestPath,

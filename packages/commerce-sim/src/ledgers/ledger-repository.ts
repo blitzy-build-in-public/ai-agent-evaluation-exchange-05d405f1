@@ -144,7 +144,10 @@ LIMIT ? OFFSET ?`;
  * of a ledger asks for the next page, and a reader that wants to know how much ledger there is reads
  * this number without a second page request. It is deliberately taken over the same `WHERE ledger = ?`
  * the page is read with, so `total` and the page cannot disagree about which ledger they describe, and
- * it is served by `idx_ledger_entries_ledger`, the index `0011_indexes.sql` declares for this column.
+ * it is served by `idx_ledger_entries_ledger`, the index on the discriminator alone that
+ * `0012_amount_integer_guards.sql` creates on the `ledger_entries` table it rebuilds — the
+ * `(ledger, created_at)` index `0011_indexes.sql` declared for this column went with the table it
+ * stood on.
  */
 const COUNT_LEDGER_ENTRIES_SQL = `SELECT COUNT(*) AS total FROM ledger_entries WHERE ledger = ?`;
 

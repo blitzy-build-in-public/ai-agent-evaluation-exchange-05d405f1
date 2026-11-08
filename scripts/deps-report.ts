@@ -6,7 +6,7 @@
  * a licence outside the allowlist appears in that graph. The allowlist is data
  * (`scripts/license-allowlist.json`), so widening it is a reviewable diff rather than a code change.
  *
- * Five properties the report rests on:
+ * Six properties the report rests on:
  *
  * - **It is generated, never hand-edited.** The document is committed, so identical input must render
  *   byte-identically: no timestamp, no machine name, no absolute path, no run counter. A spurious
@@ -23,6 +23,11 @@
  * - **Graph membership decides the development-only exception.** A licence listed under
  *   `developmentOnlyExceptions` passes only for an entry in the development graph, so the same
  *   licence reaching a runtime graph fails the gate instead of slipping through on a name match.
+ * - **The list the criterion fixes and the licences this data file adds beyond it are two records,
+ *   printed apart.** The data file holds both — the fixed list, and every licence admitted beyond it
+ *   as an amendment with its reason — the loader refuses a policy where the two records disagree, and
+ *   the document prints the fixed list first and each amendment after it with the entries that carry
+ *   the licence, so a widening is legible in the review diff rather than inferred from the list.
  * - **A declared package carries version, licence and purpose.** The `Declared packages` section gives
  *   every package a manifest declares the three fields an inventory entry needs, taking the purpose
  *   from {@link DECLARED_PACKAGE_PURPOSES} and rendering `not recorded` where it holds none, so a
@@ -69,6 +74,12 @@ const NON_LICENSE_PREFIX = 'SEE LICENSE IN';
 
 /** Marker license-checker appends to a licence that differs from the one the manifest states. */
 const MODIFIED_LICENSE_MARKER = '*';
+
+/** The column the document's own prose wraps before. */
+const MAX_LINE_LENGTH = 100;
+
+/** The indent Markdown reads as a continuation of the list item above it. */
+const LIST_CONTINUATION_INDENT = '  ';
 
 /** Dependency maps that put a package in the runtime graph. `devDependencies` never does. */
 const RUNTIME_DEPENDENCY_MAPS: readonly string[] = [
@@ -166,10 +177,39 @@ export interface DevelopmentOnlyException {
   readonly reason: string;
 }
 
+/**
+ * One licence the policy admits beyond the list Success criteria 11 fixes, with the reason the
+ * document prints.
+ *
+ * Widening the licence list is a decision that has to stay visible, so it is never expressed by a
+ * licence simply appearing in an entry of `allowed`: the criterion's own list is recorded as data too
+ * ({@link Allowlist.successCriteria11}), and every licence admitted beyond it is recorded here with
+ * the reason the tree needs it. {@link loadAllowlist} refuses a policy whose two records disagree, so
+ * a widening cannot be recorded by accident and cannot be dropped by accident either.
+ */
+export interface LicenseAmendment {
+  /** The licence identifier this amendment admits, beyond the list the criterion fixes. */
+  readonly license: string;
+  /** Why the tree needs it, from the allowlist data, rendered into the report. */
+  readonly reason: string;
+}
+
 /** The licence policy the tree is checked against, read from the allowlist data. */
 export interface Allowlist {
   /** Licence identifiers that may appear in either graph. */
   readonly allowed: readonly string[];
+  /**
+   * The list Success criteria 11 fixes, as the allowlist data records it. `allowed` is this list widened
+   * by {@link Allowlist.amendments}, so the two statements are held apart and can be checked against
+   * each other. Optional so that a caller may construct a policy of its own; the report then renders
+   * `allowed` on its own, without a fixed list to print it against.
+   */
+  readonly successCriteria11?: readonly string[];
+  /**
+   * Every licence the policy admits beyond {@link Allowlist.successCriteria11}, each with its reason.
+   * Optional for the same reason as the fixed list: a policy that carries none records no widening.
+   */
+  readonly amendments?: readonly LicenseAmendment[];
   /** Licence identifiers that may appear only in the development graph. */
   readonly developmentOnly: readonly string[];
   /**
@@ -368,15 +408,62 @@ const readDevelopmentOnlyExceptions = (
 };
 
 /**
+ * Reads the recorded amendments: the licences the policy admits beyond the list the criterion fixes,
+ * each with the reason the report prints.
+ *
+ * An amendment is the only way a licence reaches `allowed` outside that list, so a member missing
+ * either half is refused rather than read as a licence admitted for no stated reason — an amendment
+ * with no reason would widen the list with nothing for a reviewer to judge.
+ */
+const readAmendments = (value: unknown, file: string): readonly LicenseAmendment[] => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `licence allowlist at ${file} is malformed: "amendments" must be an array of licence amendments`,
+    );
+  }
+  const amendments: LicenseAmendment[] = [];
+  for (const member of value) {
+    if (!isRecord(member)) {
+      throw new Error(
+        `licence allowlist at ${file} is malformed: every "amendments" entry needs a non-empty "license" and a non-empty "reason"`,
+      );
+    }
+    const license = typeof member.license === 'string' ? member.license.trim() : '';
+    if (license.length === 0) {
+      throw new Error(
+        `licence allowlist at ${file} is malformed: every "amendments" entry needs a non-empty "license"`,
+      );
+    }
+    const reason = typeof member.reason === 'string' ? member.reason.trim() : '';
+    if (reason.length === 0) {
+      throw new Error(
+        `licence allowlist at ${file} is malformed: the reason of the "${license}" amendment must be a non-empty string`,
+      );
+    }
+    amendments.push({ license, reason });
+  }
+  return amendments;
+};
+
+/**
  * Reads the licence policy from the allowlist data.
  *
  * The allowlist is data, not code: this function is the only place that knows its shape, and it fails
  * with an error naming the file rather than silently checking the tree against an empty policy.
  *
+ * The criterion's list and the widening of it are one statement, so the records of this licence list
+ * are held against each other here: a licence `allowed` carries that the criterion does not fix and no
+ * amendment records, an amendment no list admits, an amendment that restates a licence the criterion
+ * already fixes, and an amendment for a licence the development-only exceptions also scope to
+ * development alone are each a malformed policy, refused by name.
+ *
  * @param path - Path of the allowlist data. Defaults to `scripts/license-allowlist.json` under the
  * current working directory.
- * @returns The allowlisted licences, the development-only ones and each exception's reason.
- * @throws When the file is missing, is not JSON, or does not carry the documented shape.
+ * @returns The allowlisted licences in the data file's own order, the list the criterion fixes, the
+ * recorded amendments, the development-only licences and each development-only exception's reason.
+ * @throws When the file is missing, is not JSON, does not carry the documented shape, or holds two
+ * records of the same licence list that disagree.
  */
 export function loadAllowlist(path?: string): Allowlist {
   const file = resolvePath(path ?? join(process.cwd(), ALLOWLIST_RELATIVE_PATH));
@@ -404,10 +491,44 @@ export function loadAllowlist(path?: string): Allowlist {
       `licence allowlist at ${file} is malformed: the "allowed" array is required, and an absent list would let nothing pass`,
     );
   }
+  const successCriteria11 = readLicenseList(parsed.successCriteria11, 'successCriteria11', file);
+  if (parsed.successCriteria11 === undefined) {
+    throw new Error(
+      `licence allowlist at ${file} is malformed: the "successCriteria11" array is required, and without it this file would not record the list every widening here is measured against`,
+    );
+  }
+  const amendments = readAmendments(parsed.amendments, file);
   const exceptions = readDevelopmentOnlyExceptions(parsed.developmentOnlyExceptions, file);
+
+  const amendmentLicences = amendments.map((amendment) => amendment.license);
+  for (const licence of allowed) {
+    if (successCriteria11.includes(licence) || amendmentLicences.includes(licence)) continue;
+    throw new Error(
+      `licence allowlist at ${file} is malformed: "${licence}" is allowed but is neither one of the licences Success criteria 11 fixes nor the licence of a recorded amendment, so nothing records why it was admitted`,
+    );
+  }
+  for (const amendment of amendments) {
+    if (successCriteria11.includes(amendment.license)) {
+      throw new Error(
+        `licence allowlist at ${file} is malformed: the amendment for "${amendment.license}" restates a licence Success criteria 11 already fixes, and an amendment widens that list rather than restating it`,
+      );
+    }
+    if (!allowed.includes(amendment.license)) {
+      throw new Error(
+        `licence allowlist at ${file} is malformed: the amendment for "${amendment.license}" is not in the "allowed" list, so the two records of this licence list disagree`,
+      );
+    }
+    if (exceptions.some((exception) => exception.license === amendment.license)) {
+      throw new Error(
+        `licence allowlist at ${file} is malformed: the amendment for "${amendment.license}" is also a development-only exception, and a licence admitted in either graph cannot also be scoped to development alone`,
+      );
+    }
+  }
 
   return {
     allowed,
+    successCriteria11,
+    amendments,
     developmentOnly: uniqueStrings(exceptions.map((exception) => exception.license)),
     developmentOnlyExceptions: exceptions,
   };
@@ -1309,7 +1430,7 @@ const licenceCell = (entry: DependencyEntry): string =>
  * An in-repo workspace is named `workspace` instead of `direct` or `transitive`: it is one of this
  * repository's own members, listed from its own manifest rather than reached from another package, so
  * a directness taken from who declares it would tell a reader the product depends on it when nothing
- * does — which is exactly how the community example came to read as a runtime dependency.
+ * does.
  */
 const kindCell = (entry: DependencyEntry): string =>
   entry.inRepo ? 'workspace' : entry.direct ? 'direct' : 'transitive';
@@ -1323,6 +1444,103 @@ const exceptionLicencesOf = (
     entry.licenses.flatMap((operand) =>
       operandsOf(operand).filter((subOperand) => developmentOnly.includes(subOperand)),
     ),
+  );
+
+/** Joins rendered items with `, ` and ` and ` before the last, so a list reads as prose. */
+const joinProse = (items: readonly string[]): string => {
+  const [only] = items;
+  if (only === undefined) return '';
+  if (items.length === 1) return only;
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1] ?? ''}`;
+};
+
+/** Renders one entry as a carrier citation: its package and the exact version it was found at. */
+const carrierSpan = (entry: DependencyEntry): string =>
+  codeSpan(neutraliseLineBreaks(`${entry.name}@${entry.version}`));
+
+/**
+ * Lists the entries that carry one licence, which is the evidence a recorded amendment rests on.
+ *
+ * Derived from the entries being rendered rather than from the data file, so the citation names what
+ * this document actually holds: entries outside the dependency graphs (this repository's own members)
+ * are never cited, and an amendment whose licence the rendered graph does not reach is stated as
+ * carrying no entry rather than left to look evidenced. The entries arrive in the document's own
+ * order — sorted by name, then version — so the citations are in that order too.
+ */
+const carriersOf = (entries: readonly DependencyEntry[], licence: string): readonly DependencyEntry[] =>
+  entries.filter(
+    (entry) =>
+      !entry.inRepo &&
+      (entry.graph === 'runtime' || entry.graph === 'development') &&
+      entry.licenses.some((operand) => operandsOf(operand).includes(licence)),
+  );
+
+/**
+ * Renders the carriers of one amendment as the sentence that follows its reason.
+ *
+ * Every carrier names the graph it was found in, because that graph is what makes the citation
+ * evidence: the same licence in the runtime graph is distributed with the product and in the
+ * development graph is not. Carriers sharing one graph are named once in the graph at the end of the
+ * sentence; carriers spanning several graphs each carry their own, so no citation is left without the
+ * graph it belongs to.
+ */
+const carrierSentence = (carriers: readonly DependencyEntry[]): string => {
+  if (carriers.length === 0) return 'No entry listed in this document carries it.';
+  const graphs = uniqueStrings(carriers.map((entry) => entry.graph));
+  const graph = graphs[0] ?? '';
+  if (graphs.length === 1) {
+    const spans = joinProse(carriers.map(carrierSpan));
+    return `Carried by ${spans}, ${carriers.length === 1 ? 'in' : 'each in'} the ${graph} graph.`;
+  }
+  return `Carried by ${joinProse(
+    carriers.map((entry) => `${carrierSpan(entry)} in the ${entry.graph} graph`),
+  )}.`;
+};
+
+/**
+ * Wraps one Markdown list item onto lines no longer than {@link MAX_LINE_LENGTH}.
+ *
+ * The item ends with a reason read from the allowlist data and a carrier list derived from the
+ * entries, so its length is not known where the renderer is written. Continuation lines are indented
+ * by {@link LIST_CONTINUATION_INDENT}, which Markdown reads as part of the same list item, so a
+ * reader sees one bullet whatever the data holds. A word is never split, so a value longer than the
+ * width still renders whole rather than truncated.
+ */
+const wrapListItem = (item: string): readonly string[] => {
+  const lines: string[] = [];
+  let current = '';
+  for (const word of item.split(' ')) {
+    const candidate = current.length === 0 ? word : `${current} ${word}`;
+    if (candidate.length > MAX_LINE_LENGTH && current.length > 0) {
+      lines.push(current);
+      current = `${LIST_CONTINUATION_INDENT}${word}`;
+      continue;
+    }
+    current = candidate;
+  }
+  if (current.length > 0) lines.push(current);
+  return lines;
+};
+
+/**
+ * Renders one recorded amendment as the licence section's list item.
+ *
+ * The item states the licence, the reason the data file records for admitting it, and the entries that
+ * carry it, so a reader can tell a licence Success criteria 11 fixes from one this data file adds,
+ * and can see the evidence the addition rests on.
+ *
+ * @param amendment - The recorded amendment to render.
+ * @param entries - The entries being rendered, which the carrier list is derived from.
+ * @returns The item's lines, wrapped so no rendered line exceeds {@link MAX_LINE_LENGTH}.
+ */
+const amendmentLines = (
+  amendment: LicenseAmendment,
+  entries: readonly DependencyEntry[],
+): readonly string[] =>
+  wrapListItem(
+    `- ${licenceSpan(amendment.license)} — ${neutraliseLineBreaks(amendment.reason)} ${carrierSentence(
+      carriersOf(entries, amendment.license),
+    )}`,
   );
 
 /**
@@ -1432,12 +1650,34 @@ export function renderDependencyReport(input: {
   lines.push('');
   for (const source of input.sources) lines.push(`- \`${source}\``);
 
+  // The list the criterion fixes and the licences this data file admits beyond it are printed apart,
+  // both inside this one heading: a reader has to be able to tell a licence the criterion fixes from
+  // one the data file added, and the carriers printed under an amendment are the evidence for it.
+  const fixedLicences = input.allowlist.successCriteria11;
+  const amendments = [...(input.allowlist.amendments ?? [])].sort((left, right) =>
+    compareStrings(left.license, right.license),
+  );
+
   lines.push('');
   lines.push('## Licence allowlist');
   lines.push('');
-  lines.push('Every entry is checked against the allowlist in `scripts/license-allowlist.json`:');
-  lines.push('');
-  for (const licence of [...input.allowlist.allowed].sort(compareStrings)) lines.push(`- \`${licence}\``);
+  if (fixedLicences === undefined) {
+    lines.push('Every entry is checked against the allowlist in `scripts/license-allowlist.json`:');
+    lines.push('');
+    for (const licence of [...input.allowlist.allowed].sort(compareStrings)) lines.push(`- \`${licence}\``);
+  } else {
+    lines.push('Every entry is checked against the allowlist in `scripts/license-allowlist.json`. That');
+    lines.push('data file holds the list Success criteria 11 fixes:');
+    lines.push('');
+    for (const licence of [...fixedLicences].sort(compareStrings)) lines.push(`- \`${licence}\``);
+    if (amendments.length > 0) {
+      lines.push('');
+      lines.push('Every licence the data file admits beyond that list is recorded there as an amendment,');
+      lines.push('with the reason the tree needs it and the entries that carry it:');
+      lines.push('');
+      for (const amendment of amendments) lines.push(...amendmentLines(amendment, entries));
+    }
+  }
   lines.push('');
   lines.push('A licence listed as a development-only exception passes only in the development graph, never in');
   lines.push('the runtime graph, because a licence permitted for development must not be distributed:');
@@ -1581,10 +1821,17 @@ export async function runDepsReport(options: RunDepsReportOptions = {}): Promise
   writeFileSync(reportPath, document, 'utf8');
 
   const counts = countEntries(entries);
+  const amendmentCount = (allowlist.amendments ?? []).length;
   printLine(
     `${entries.length} dependencies: ${counts.runtime} runtime, ${counts.development} development, ${counts.workspace} in-repo`,
   );
-  printLine(`${violations.length} licence violation(s) against ${allowlist.allowed.length} allowlisted licence(s)`);
+  printLine(
+    `${violations.length} licence violation(s) against ${allowlist.allowed.length} allowlisted licence(s)${
+      amendmentCount === 0
+        ? ''
+        : ` (${amendmentCount} recorded amendment(s) beyond the list Success criteria 11 fixes)`
+    }`,
+  );
   printLine(`wrote ${reportPath}`);
   for (const violation of violations) {
     printLine(`${violation.name}@${violation.version} — ${violation.reason}`);

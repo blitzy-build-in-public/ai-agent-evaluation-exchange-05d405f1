@@ -6,11 +6,12 @@
  * **What it proves that the unit test cannot.** `request-body-policy.test.ts` proves the predicate;
  * this file proves the hook that calls it, and proves it through the real routes — one migrated,
  * seeded server on an ephemeral port, real requests, and row counts read from the same connection.
- * The two findings behind both files were observed exactly here, over HTTP: a `POST /listings` whose
- * `title` was the JSON number `123` answered `201` with the title stored as the string `"123"`, and an
- * undeclared field — `"extra": 1` on a listing, `"body"` on a thread — answered `201` with the field
- * silently gone. Each case below is that request, asserted to be refused instead, with the row count
- * read before and after it and the row the write would have created looked for by name.
+ * The two shapes the policy has to refuse are the two Fastify's own validator would otherwise admit:
+ * a `POST /listings` whose `title` is the JSON number `123`, which `coerceTypes` converts to the
+ * string `"123"`, and a body carrying an undeclared field — `"extra": 1` on a listing, `"body"` on a
+ * thread — which `removeAdditional` drops silently. Each case below is that request, asserted to be
+ * refused, with the row count read before and after it and the row the write would have created
+ * looked for by name.
  *
  * **The refusal is the contract's own, and nothing new.** A refused body earns the same status, the
  * same code and the same sentence a body the validator itself rejects earns — the one envelope, with

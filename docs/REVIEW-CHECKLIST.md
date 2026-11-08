@@ -58,8 +58,9 @@ run is **not** evidence that the repository holds no private information, and th
 never be described — here, in a pull request, in a document, in a report, in a badge or in a user
 interface string — as guaranteeing the absence of private information**. Its own findings are printed
 with its limitations, and those limitations say the same thing in the command's own words. It also
-reports nothing inside a lockfile's upstream metadata or on a commit's identity line, because those
-are what a packaging tool and a committing tool wrote rather than content this repository authored.
+reports nothing inside the deprecation notice a registry's packaging tool copies into a lockfile, or
+on a commit's identity line, because those are what a packaging tool and a committing tool wrote
+rather than content this repository authored.
 
 This review is the check that covers what the scan cannot. The two are complementary and never
 interchangeable: a passing scan with this checklist unsigned reports nothing about the three categories

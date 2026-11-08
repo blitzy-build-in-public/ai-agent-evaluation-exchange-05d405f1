@@ -2,12 +2,13 @@
  * Integration proof for the contract of `apps/api/src/seed/seed-data.ts`: the rows the seed publishes
  * and the invariants the demonstration database depends on.
  *
- * **No database is opened here, and that is exact rather than convenient.** The seed's insert path
- * `seedDatabase` is a sibling deliverable of this same workspace that is not written yet, so what can
- * be asserted today is the exported data itself: the counts per table, the closed vocabularies every
- * column's `CHECK` requires, the fourteen versions with exactly three fixture candidates, the one
- * claim per version, the standard and its case set, the sponsored slots, the three candidate
- * descriptors, and the absence of any contact detail in every string the module publishes.
+ * **No database is opened here, and that is exact rather than convenient.** What this tier asserts is
+ * the exported data itself: the counts per table, the closed vocabularies every column's `CHECK`
+ * requires, the fourteen versions with exactly three fixture candidates, the one claim per version,
+ * the standard and its case set, the sponsored slots, the three candidate descriptors, and the
+ * absence of any contact detail in every string the module publishes. That data is what the seed's
+ * insert path, `seedDatabase`, stores; the integration harness runs that path against its own
+ * in-memory connection, which is why no database is opened here.
  *
  * Two committed documents of `packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/` are read from disk and
  * used as the check on the seed's own data: the twenty-case set with its five critical cases, and the

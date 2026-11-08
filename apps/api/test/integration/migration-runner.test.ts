@@ -4,9 +4,9 @@
  *
  * What it evidences, in the terms the plan states them:
  *
- * - **A first run applies the delivered set.** Twelve files, in filename order, each recorded once
- *   with its own name and a SHA-256 recomputed here from that file's bytes, and `PRAGMA user_version`
- *   left at the highest applied version.
+ * - **A first run applies the delivered set.** Every file the migrations directory carries, in
+ *   filename order, each recorded once with its own name and a SHA-256 recomputed here from that
+ *   file's bytes, and `PRAGMA user_version` left at the highest applied version.
  * - **A second run is a no-op.** Nothing applied, nothing recorded, the same highest version.
  * - **A tampered history refuses the whole run, before anything is applied.** The three states a
  *   changed, renamed and removed migration file leave are each staged in the database's own
@@ -252,7 +252,9 @@ describe("runMigrations on a fresh database", () => {
 
     // The tables 0011's indexes serve: every one of them is in place by the time that file is applied,
     // which is the ordering 0011 depends on. 0012 follows it, rebuilding four tables — ledger_entries
-    // and refunds among them — and recreating, verbatim, the two indexes 0011 declares for those two.
+    // and refunds among them — recreating `idx_refunds_transaction_id` verbatim and creating
+    // `idx_ledger_entries_ledger` on the discriminator alone, the single-key form the three operator
+    // ledger reads are served by.
     const tableNames = schemaObjectNames(database, "table");
     for (const table of INDEXED_TABLES) {
       expect(tableNames).toContain(table);

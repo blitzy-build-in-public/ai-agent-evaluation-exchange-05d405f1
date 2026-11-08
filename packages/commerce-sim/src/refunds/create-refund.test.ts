@@ -385,7 +385,11 @@ function seedChargedTransaction(): void {
 /**
  * Seeds the three rows a completed evaluation leaves behind: the standard, the versioned criteria it
  * was scored against and the report itself. A gate-evaluation fee is charged for a report and for
- * nothing else, so the fee row a case appends names the report this function stores.
+ * nothing else, so the fee row a case appends names the report this function stores. The three are
+ * rows of SGI-owned tables, and this fixture writes them only because the delivered foreign keys
+ * require the parents a `ledger_entries.report_id` names: they are foreign-key parents in this file's
+ * own private in-memory database and never a production path, because the package's shipped modules
+ * write nothing but its own `transactions`, `refunds` and `ledger_entries`.
  */
 function seedEvaluationReport(): void {
   db.prepare('INSERT INTO standards (id, code, title, summary) VALUES (?, ?, ?, ?)').run(
@@ -849,6 +853,44 @@ describe('createRefund — the append it holds to', () => {
     const refusal = requireRefusal(createRefund(db, refundInput(TRANSACTION_AMOUNT_MINOR_UNITS)));
 
     expect(refusal.reason).toBe('exceeds_net_remaining');
+  });
+
+  it('decides the eligibility rule inside the transaction that appends the refund', () => {
+    // Whether a transaction was open when each statement was prepared, recorded the way the case above
+    // records what was prepared: `prepare` is replaced with an own property on this case's connection,
+    // and `db.inTransaction` answers for the moment the module asked for the statement. This is the pin
+    // the eligibility rule rests on: the transaction row and the sum of its refunds are read with the
+    // transaction already open, so the net-remaining decision is one act with the append that follows
+    // it rather than a read the deployment's single-threaded model has to keep honest.
+    const prepared: Array<{ readonly source: string; readonly inTransaction: boolean }> = [];
+    const original = db.prepare.bind(db) as unknown as (source: string) => unknown;
+    (db as unknown as { prepare: (source: string) => unknown }).prepare = (source: string) => {
+      prepared.push({ source: source.replace(/\s+/g, ' ').trim(), inTransaction: db.inTransaction });
+      return original(source);
+    };
+
+    // Every statement recorded for one pattern, in the order the module asked for it.
+    const preparedFor = (pattern: RegExp): Array<{ readonly source: string; readonly inTransaction: boolean }> =>
+      prepared.filter((statement) => pattern.test(statement.source));
+
+    requireSuccess(createRefund(db, refundInput(PARTIAL_REFUND_MINOR_UNITS)));
+
+    // One read of each table, and both taken under an open transaction: the row the net remaining is
+    // computed from and the sum it is computed against cannot be overtaken by an append that landed
+    // between them and the insert.
+    expect(preparedFor(/FROM transactions/).map((statement) => statement.inTransaction)).toEqual([true]);
+    expect(preparedFor(/FROM refunds/).map((statement) => statement.inTransaction)).toEqual([true]);
+
+    // The transaction was the module's own and it is closed again by the time the call answers, so the
+    // two assertions above saw the module's transaction rather than one this case left open.
+    expect(db.inTransaction).toBe(false);
+
+    // And the invalid-amount refusal is the one decision taken before the transaction opens, because it
+    // reads nothing: no statement against either table is prepared while it answers.
+    prepared.length = 0;
+
+    expect(requireRefusal(createRefund(db, refundInput(0))).reason).toBe('invalid_amount');
+    expect(preparedFor(/FROM transactions|FROM refunds/)).toEqual([]);
   });
 
   it('appends nothing at all when a reversal cannot be written', () => {

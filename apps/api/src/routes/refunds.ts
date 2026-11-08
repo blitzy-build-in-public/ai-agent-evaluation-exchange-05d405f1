@@ -26,8 +26,9 @@
  * contract's status for that reason: `transaction_not_found` `404`, `already_fully_refunded` `409`,
  * `exceeds_net_remaining` `422` and `invalid_amount` `400`. The refusal keeps the domain's own
  * stable string as the envelope's `code`, which is what that module documents the vocabulary for.
- * A refusal writes nothing at all: the domain returns before its transaction opens, and this file's
- * own throw rolls back the enclosing transaction in which nothing was written.
+ * A refusal writes nothing at all: the domain decides the refusal inside its own transaction — which
+ * better-sqlite3 nests as a savepoint inside this route's — and returns having appended nothing, so
+ * this file's own throw rolls the enclosing transaction back around a path that wrote nothing.
  *
  * **One transaction for the refund, its reversals and the record of it.** The domain's write and the
  * audit append run inside a single `db.transaction(...)`, so a refund that failed to append its
@@ -233,9 +234,9 @@ export function registerRefundRoutes(app: FastifyInstance, context: RefundRouteC
         });
 
         // A refusal is thrown rather than returned, so the enclosing transaction is rolled back
-        // around the throw. Nothing was written on this path — the domain returns before its own
-        // transaction opens — so the rollback has nothing to undo, and it keeps that true if the
-        // domain's refusal paths ever change.
+        // around the throw. The domain decides the refusal inside its own transaction — a savepoint
+        // nested inside this one — and returns having appended nothing, so the rollback has nothing
+        // to undo, and it keeps that true if the domain's refusal paths ever change.
         if (!result.ok) {
           throw refusalError(result.reason);
         }

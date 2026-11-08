@@ -1,5 +1,12 @@
 {
+  "successCriteria11": ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT"],
   "allowed": ["0BSD", "Apache-2.0", "BlueOak-1.0.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT"],
+  "amendments": [
+    {
+      "license": "BlueOak-1.0.0",
+      "reason": "A permissive, OSI-approved licence carried by the four packages the runtime graph reaches through glob under @fastify/static, a pinned row of the closed dependency inventory, so the row cannot be removed without departing from that inventory."
+    }
+  ],
   "developmentOnlyExceptions": [
     {
       "license": "MPL-2.0",
@@ -18,5 +25,5 @@
       "reason": "Public-domain dedication of spdx-license-ids, reached only through license-checker-rseidelsohn; development graph only."
     }
   ],
-  "source": "Amendment record, Success criteria 11: the plan's licence list is MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and 0BSD, with MPL-2.0 permitted for development-only dependencies, and this data file records one amendment to that list, raised for review as a diff to this file. BlueOak-1.0.0 joins the always-allowed set: it is a permissive, OSI-approved licence carried by jackspeak, minipass, package-json-from-dist and path-scurry, four packages that reach the runtime graph through glob under @fastify/static, a pinned row of the closed dependency inventory. The three further development-only exceptions cover the data licences reached only through the licence checker itself and through the frontend build tooling; MPL-2.0 stays permitted for development-only dependencies, and a package carrying any of these exceptions still fails in the runtime graph, which is what keeps every exception scoped to development."
+  "source": "Success criteria 11 fixes the licence list this gate applies — MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and 0BSD, with MPL-2.0 permitted for development-only dependencies. Every licence this data file admits beyond that list is recorded below as an amendment naming the licence and why the tree needs it, and every development-only exception carries its own reason; widening either set is a reviewable diff to this file."
 }

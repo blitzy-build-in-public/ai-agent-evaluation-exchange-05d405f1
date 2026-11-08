@@ -97,9 +97,8 @@ const OUT_OF_ALLOWLIST_LICENCE = "GPL-3.0-only";
 /**
  * The shape of a bare host name: one token of letters, digits, dots and hyphens.
  *
- * The case that proves the document is machine-independent used to read the running machine's host
- * name, which made it depend on that machine rather than on the document. This shape is what such a
- * leak would look like, and recognising it reads nothing of the host.
+ * This shape is what a leak of the running machine's host name into the document would look like,
+ * and recognising it reads nothing of the host.
  */
 const BARE_HOST_NAME = /^[A-Za-z0-9.-]+$/;
 
@@ -281,7 +280,10 @@ function acceptedEntries(document: string): readonly string[] {
 
 describe("the licence allowlist data", () => {
   it("holds the licences the request names, in the file's own order and without duplicates", () => {
-    const data = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8")) as { readonly allowed: readonly string[] };
+    const data = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8")) as {
+      readonly allowed: readonly string[];
+      readonly successCriteria11: readonly string[];
+    };
 
     const allowlist = deliveredAllowlist();
 
@@ -295,6 +297,12 @@ describe("the licence allowlist data", () => {
       expect(licence.length).toBeGreaterThan(0);
       expect(licence).toBe(licence.trim());
     }
+
+    // The list the request fixes is recorded as data of its own, exactly the six it names and in the
+    // file's own order, so every widening below is measured against the request rather than against
+    // `allowed` — which holds a licence the request does not name.
+    expect(allowlist.successCriteria11).toEqual(data.successCriteria11);
+    expect(allowlist.successCriteria11).toEqual(REQUEST_ALLOWLISTED_LICENCES);
   });
 
   it("records where the list came from, so widening it is reviewed against the request", () => {
@@ -337,6 +345,8 @@ describe("the licence allowlist data", () => {
     const allowlist = deliveredAllowlist();
     const data = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8")) as { readonly source?: unknown };
     const exceptions = (allowlist.developmentOnlyExceptions ?? []).map((exception) => exception.license);
+    const criteria = allowlist.successCriteria11 ?? [];
+    const amendments = allowlist.amendments ?? [];
 
     // Exactly one licence beyond the request's six, and exactly the four exceptions the amendment names:
     // a silent removal and a further widening both fail here, in either direction.
@@ -345,10 +355,25 @@ describe("the licence allowlist data", () => {
     ]);
     expect(exceptions.sort()).toEqual(["CC-BY-3.0", "CC-BY-4.0", "CC0-1.0", DEVELOPMENT_ONLY_EXCEPTION]);
 
+    // The widening is recorded as an amendment rather than by the licence appearing in a list: one
+    // amendment, over exactly the licences `allowed` carries beyond the fixed list, with a reason that
+    // names the chain the runtime graph reaches it through. A licence moved into the fixed list, or a
+    // second licence admitted with no amendment, fails here.
+    const widened = allowlist.allowed.filter((licence) => !criteria.includes(licence));
+    expect(amendments).toHaveLength(1);
+    expect(amendments.map((amendment) => amendment.license)).toEqual(widened);
+    expect(widened).toEqual(["BlueOak-1.0.0"]);
+    expect(criteria.filter((licence) => !REQUEST_ALLOWLISTED_LICENCES.includes(licence))).toEqual([]);
+
+    const amendment = firstOf(amendments, "one recorded amendment");
+    expect(amendment.reason.trim().length).toBeGreaterThan(0);
+    expect(amendment.reason).toMatch(/glob/);
+    expect(amendment.reason).toMatch(/fastify\/static/);
+
     const source = String(data.source);
     expect(source).toMatch(/criteria 11/i);
     expect(source).toMatch(/amendment/i);
-    expect(source).toContain("BlueOak-1.0.0");
+    expect(source).toMatch(/reviewable diff/i);
   });
 
   it("does not admit a copyleft licence the request leaves out", () => {
@@ -396,16 +421,168 @@ describe("loadAllowlist", () => {
 
   it("fails, naming the file, when the development-only exceptions are not a list of exceptions", () => {
     const badExceptions = scratchPath("bad-exceptions-allowlist.json");
-    writeFileSync(badExceptions, JSON.stringify({ allowed: ["MIT"], developmentOnlyExceptions: ["MPL-2.0"] }), "utf8");
+    writeFileSync(
+      badExceptions,
+      JSON.stringify({ successCriteria11: ["MIT"], allowed: ["MIT"], developmentOnlyExceptions: ["MPL-2.0"] }),
+      "utf8",
+    );
 
     expect(() => loadAllowlist(badExceptions)).toThrowError(/bad-exceptions-allowlist\.json[\s\S]*malformed/);
   });
 
   it("reads a policy that names no development-only exception", () => {
     const plain = scratchPath("plain-allowlist.json");
-    writeFileSync(plain, JSON.stringify({ allowed: ["MIT", "ISC"] }), "utf8");
+    writeFileSync(plain, JSON.stringify({ successCriteria11: ["MIT", "ISC"], allowed: ["MIT", "ISC"] }), "utf8");
 
-    expect(loadAllowlist(plain)).toEqual({ allowed: ["MIT", "ISC"], developmentOnly: [], developmentOnlyExceptions: [] });
+    expect(loadAllowlist(plain)).toEqual({
+      allowed: ["MIT", "ISC"],
+      successCriteria11: ["MIT", "ISC"],
+      amendments: [],
+      developmentOnly: [],
+      developmentOnlyExceptions: [],
+    });
+  });
+
+  /** An amendment missing the reason half the policy needs, one row per way it can be missing. */
+  const amendmentsWithoutReason: ReadonlyArray<{
+    readonly label: string;
+    readonly amendment: { readonly license: string; readonly reason?: string };
+  }> = [
+    { label: "no reason at all", amendment: { license: "BlueOak-1.0.0" } },
+    { label: "an empty reason", amendment: { license: "BlueOak-1.0.0", reason: "   " } },
+  ];
+
+  it.each(amendmentsWithoutReason)(
+    "fails, naming the licence, when an amendment carries $label",
+    ({ amendment }: { readonly label: string; readonly amendment: { readonly license: string; readonly reason?: string } }) => {
+      const withoutReason = scratchPath("amendment-without-reason-allowlist.json");
+      writeFileSync(
+        withoutReason,
+        JSON.stringify({
+          successCriteria11: ["MIT"],
+          allowed: ["MIT", "BlueOak-1.0.0"],
+          amendments: [amendment],
+        }),
+        "utf8",
+      );
+
+      expect(() => loadAllowlist(withoutReason)).toThrowError(
+        /amendment-without-reason-allowlist\.json[\s\S]*BlueOak-1\.0\.0/,
+      );
+    },
+  );
+
+  it("fails, naming the licence, when an amendment restates a licence the fixed list already holds", () => {
+    const restated = scratchPath("restated-amendment-allowlist.json");
+    writeFileSync(
+      restated,
+      JSON.stringify({
+        successCriteria11: ["MIT", "ISC"],
+        allowed: ["MIT", "ISC"],
+        amendments: [{ license: "ISC", reason: "Recorded as a widening although the list already fixes it." }],
+      }),
+      "utf8",
+    );
+
+    expect(() => loadAllowlist(restated)).toThrowError(
+      /restated-amendment-allowlist\.json[\s\S]*"ISC"[\s\S]*restates/,
+    );
+  });
+
+  it("fails, naming the key, when the data records no list for the request to fix", () => {
+    const withoutCriteria = scratchPath("missing-criteria-allowlist.json");
+    writeFileSync(withoutCriteria, JSON.stringify({ allowed: ["MIT"] }), "utf8");
+
+    expect(() => loadAllowlist(withoutCriteria)).toThrowError(
+      /missing-criteria-allowlist\.json[\s\S]*"successCriteria11"[\s\S]*required/,
+    );
+  });
+
+  it("fails, naming the licence, when the allowed list holds a licence no record admits", () => {
+    const widened = scratchPath("unrecorded-widening-allowlist.json");
+    writeFileSync(
+      widened,
+      JSON.stringify({ successCriteria11: ["MIT"], allowed: ["MIT", "BlueOak-1.0.0"], amendments: [] }),
+      "utf8",
+    );
+
+    expect(() => loadAllowlist(widened)).toThrowError(
+      /unrecorded-widening-allowlist\.json[\s\S]*"BlueOak-1\.0\.0"[\s\S]*neither/,
+    );
+  });
+
+  it("fails, naming the licence, when an amendment records a licence the allowed list does not carry", () => {
+    const unlisted = scratchPath("unlisted-amendment-allowlist.json");
+    writeFileSync(
+      unlisted,
+      JSON.stringify({
+        successCriteria11: ["MIT"],
+        allowed: ["MIT"],
+        amendments: [{ license: "BlueOak-1.0.0", reason: "Recorded for a licence the allowed list omits." }],
+      }),
+      "utf8",
+    );
+
+    expect(() => loadAllowlist(unlisted)).toThrowError(
+      /unlisted-amendment-allowlist\.json[\s\S]*"BlueOak-1\.0\.0"[\s\S]*disagree/,
+    );
+  });
+
+  it("fails, naming the licence, when an amendment records a licence the development-only exceptions also scope", () => {
+    const bothRecords = scratchPath("amendment-and-exception-allowlist.json");
+    writeFileSync(
+      bothRecords,
+      JSON.stringify({
+        successCriteria11: ["MIT"],
+        allowed: ["MIT", "BlueOak-1.0.0"],
+        amendments: [
+          {
+            license: "BlueOak-1.0.0",
+            reason: "A permissive licence reached through a pinned inventory row, which cannot be removed.",
+          },
+        ],
+        developmentOnlyExceptions: [
+          {
+            license: "BlueOak-1.0.0",
+            reason: "Scoped to the development graph although the amendment admits the licence in either graph.",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    expect(() => loadAllowlist(bothRecords)).toThrowError(
+      /amendment-and-exception-allowlist\.json[\s\S]*"BlueOak-1\.0\.0"[\s\S]*development-only/,
+    );
+  });
+
+  it("reads a policy whose amendment admits one licence beyond the fixed list, in either graph", () => {
+    const amended = scratchPath("amended-allowlist.json");
+    const amendment = {
+      license: "BlueOak-1.0.0",
+      reason: "A permissive licence reached through a pinned inventory row, which cannot be removed.",
+    };
+    writeFileSync(
+      amended,
+      JSON.stringify({
+        successCriteria11: REQUEST_ALLOWLISTED_LICENCES,
+        allowed: [...REQUEST_ALLOWLISTED_LICENCES, amendment.license],
+        amendments: [amendment],
+      }),
+      "utf8",
+    );
+
+    const allowlist = loadAllowlist(amended);
+
+    // The fixed list stays the request's six and the amendment is the only widening, so the licence it
+    // admits passes in both graphs: an amendment widens the always-allowed set, and it is not the
+    // development-only exception, which may never reach a runtime graph.
+    expect(allowlist.successCriteria11).toEqual(REQUEST_ALLOWLISTED_LICENCES);
+    expect(allowlist.amendments).toEqual([amendment]);
+    expect(allowlist.developmentOnly).toEqual([]);
+    for (const graph of GRAPHS) {
+      expect(isAllowlisted([amendment.license], graph, allowlist)).toBe(true);
+    }
   });
 });
 
@@ -863,7 +1040,7 @@ describe("readResolvedTree", () => {
       expect(installedHere.licenses).toEqual(normalizeLicense(glibc.installedLicence));
       expect(installedHere.licenses).not.toEqual(normalizeLicense(glibc.lockfileLicence));
 
-      // The finding's own case: present or absent, the document is one artefact byte for byte.
+      // Present or absent, the document is one artefact byte for byte.
       expect(render(otherHostEntries)).toBe(render(thisHostEntries));
     });
   });
@@ -1362,6 +1539,75 @@ describe("the generated document", () => {
       "runtime",
     ]);
   });
+
+  it("prints the request's list apart from a recorded amendment, with the entries that carry it", () => {
+    const criteria: readonly string[] = ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT"];
+    const amendment = {
+      license: "BlueOak-1.0.0",
+      reason: "A permissive licence reached through a pinned inventory row, which cannot be removed.",
+    };
+    const entriesWithCarriers: readonly DependencyEntry[] = [
+      dependency("pkg-carrier-development", {
+        version: "1.1.1",
+        licenses: [amendment.license],
+        graph: "development",
+      }),
+      dependency("pkg-carrier-runtime", {
+        version: "3.4.3",
+        licenses: [amendment.license],
+        graph: "runtime",
+      }),
+      dependency("pkg-carrier-workspace", {
+        version: "0.1.0",
+        licenses: [amendment.license],
+        graph: "workspace",
+        inRepo: true,
+      }),
+      dependency("pkg-outside-the-list", { version: "1.0.0", licenses: [OUT_OF_ALLOWLIST_LICENCE] }),
+    ];
+    const policy: Allowlist = {
+      allowed: [...criteria, amendment.license],
+      successCriteria11: criteria,
+      amendments: [amendment],
+      developmentOnly: [],
+    };
+
+    const document = renderDependencyReport({
+      entries: entriesWithCarriers,
+      allowlist: policy,
+      generatedBy: GENERATED_BY,
+      sources: REPORT_SOURCES,
+    });
+
+    const start = document.indexOf("## Licence allowlist");
+    const end = document.indexOf("A licence listed as a development-only exception", start);
+    // A wrapped item is read back as the one item a reader sees, so the amendment is asserted whole.
+    const section = document.slice(start, end).replace(/\n {2}(?=\S)/g, " ");
+    const items = section.split("\n").filter((line) => line.startsWith("- "));
+
+    // The request's list alone and then the amendment: never `allowed` printed as one flat list.
+    expect(items.slice(0, criteria.length)).toEqual(criteria.map((licence) => `- \`${licence}\``));
+    expect(items.filter((line) => line === `- \`${amendment.license}\``)).toEqual([]);
+    expect(items).toHaveLength(criteria.length + 1);
+
+    const item = firstOf(items.slice(criteria.length), "the amendment's list item");
+    expect(item.startsWith(`- \`${amendment.license}\` — ${amendment.reason}`)).toBe(true);
+    // The carriers are derived from the entries being rendered, each named with its graph, and this
+    // repository's own workspace is cited by neither: it is no third-party dependency and no graph.
+    expect(item).toContain("`pkg-carrier-runtime@3.4.3` in the runtime graph");
+    expect(item).toContain("`pkg-carrier-development@1.1.1` in the development graph");
+    expect(item).not.toContain("pkg-carrier-workspace");
+
+    // The amendment is rendered inside the section the document already had, so no heading is added.
+    expect(document.split("\n").filter((line) => line.startsWith("#"))).toEqual([
+      "# Dependency inventory",
+      "## Sources",
+      "## Licence allowlist",
+      "## Dependencies",
+      "## Accepted through a development-only exception",
+      "## Violations",
+    ]);
+  });
 });
 
 describe("the declared-package inventory", () => {
@@ -1434,14 +1680,15 @@ describe("the declared-package inventory", () => {
       expect(line).not.toContain("purpose: not recorded");
     }
 
-    // The four packages this checkpoint's findings name are inventoried like every other declaration.
-    const findings: ReadonlyArray<readonly [string, string]> = [
+    // The four `@types` packages a manifest declares are inventoried like every other declaration, at
+    // the version the manifest states.
+    const declaredTypesPackages: ReadonlyArray<readonly [string, string]> = [
       ["@types/node", "20.19.43"],
       ["@types/better-sqlite3", "9.6.0"],
       ["@types/react", "18.3.31"],
       ["@types/react-dom", "18.3.7"],
     ];
-    for (const [name, version] of findings) {
+    for (const [name, version] of declaredTypesPackages) {
       const declaredPackage = firstOf(
         declared.filter((candidate) => candidate.name === name),
         `the ${name} inventory entry`,

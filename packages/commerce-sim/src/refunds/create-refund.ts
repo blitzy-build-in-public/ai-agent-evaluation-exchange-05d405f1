@@ -20,20 +20,28 @@
  * triggers are defence in depth and never a security boundary, so the guarantee is held here: every
  * statement below that writes is an append of a new row.
  *
- * **One transaction, so a half-performed refund cannot exist.** The refund row and its two reversal
- * entries are appended inside one `db.transaction(...)`. A refund whose reversal failed to land would
- * otherwise leave the marketplace ledger and the founder-allocation ledger describing one transaction
- * differently, with nothing in either row to show it. Better-sqlite3 is synchronous and runs on the
- * calling thread, so this module answers with a value rather than a promise: there is no `await` on
- * this path, nothing is queued, and the product's evaluation path is not entered from here at all.
+ * **One transaction, so a half-performed refund cannot exist and no rule is decided against a stale
+ * read.** The transaction row, the sum of its refund rows and both eligibility refusals are taken
+ * inside the same `db.transaction(...)` that appends the refund row and its two reversal entries, so
+ * the rule that decides whether a refund may be appended and the append that acts on it are one act:
+ * nothing appended by anyone between a read and the insert below can go unnoticed, and the rule does
+ * not rest on the deployment being one process, one connection and a synchronous driver. A refund
+ * whose reversal failed to land would otherwise leave the marketplace ledger and the
+ * founder-allocation ledger describing one transaction differently, with nothing in either row to
+ * show it. Better-sqlite3 is synchronous and runs on the calling thread, so this module answers with
+ * a value rather than a promise: there is no `await` on this path, nothing is queued, and the
+ * product's evaluation path is not entered from here at all.
  *
  * **The order in which the refusals are taken is part of the rule, not an accident of the code.** An
- * amount that is not a whole count of at least one minor unit is refused first, because nothing about
- * it can be answered at all; an unknown transaction is refused next; a transaction with nothing left
- * is refused as already fully refunded *before* the over-large test, because a fully refunded
- * transaction also satisfies "the amount is greater than what remains"; and only then is an amount
- * greater than the net remaining refused. Every refusal returns before the transaction opens, so a
- * refused refund writes nothing — not the refund row, not a reversal entry, not a ledger row.
+ * amount that is not a whole count of at least one minor unit is refused first and before anything is
+ * read, because nothing about it can be answered at all; the transaction row, the sum of its refunds
+ * and the three refusals that depend on them are then taken *inside* the transaction that appends:
+ * an unknown transaction is refused first among those; a transaction with nothing left is refused as
+ * already fully refunded before the over-large test, because a fully refunded transaction also
+ * satisfies "the amount is greater than what remains"; and only then is an amount greater than the
+ * net remaining refused. A refusal writes nothing — not the refund row, not a reversal entry, not a
+ * ledger row — because none of those decisions is followed by a write, so the transaction a refusal
+ * is returned from commits with nothing appended to it.
  *
  * **A refund of nothing is refused rather than written.** The request schema admits `0` — its
  * `minimum: 0` in `packages/shared/src/schemas/commerce-schema.ts` is deliberate, so that the meaning
@@ -317,14 +325,18 @@ export function computeNetRemaining(db: Database, transactionId: string): number
  * a {@link RefundRefusal} carrying one of the four reasons. No refusal of its own is thrown — an
  * invalid amount, an unknown transaction, a transaction with nothing left and an amount greater than
  * what remains are all ordinary outcomes the caller answers with a status it owns — and a refusal
- * writes nothing whatsoever, because each one returns before the transaction below opens.
+ * writes nothing whatsoever: an amount that is not a whole count is refused before anything is read,
+ * and the other three are decided inside the transaction below, which is then committed having
+ * appended nothing because none of those decisions is followed by a write.
  *
- * The transaction is the unit of atomicity: the refund row and its pair of reversals are appended
- * inside one `db.transaction(...)`, so a refund that failed to append its reversals leaves no refund
- * row behind and no ledger corrected in half. The instant is read once through the injected clock and
- * threaded to both reversal entries, so a refund and its reversals can share one instant when a
- * caller pins one. Every amount is a whole number of minor units of the synthetic currency, and both
- * labels arrive from the resolved configuration rather than from the caller.
+ * The transaction is the unit of atomicity and the unit the rule is decided in: the transaction row,
+ * the sum of its refunds and both net-remaining refusals are taken inside it, and the refund row and
+ * its pair of reversals are appended inside it too, so a refund that failed to append its reversals
+ * leaves no refund row behind, no ledger corrected in half, and no rule decided against a read the
+ * append below could have outlived. The instant is read once through the injected clock and threaded
+ * to both reversal entries, so a refund and its reversals can share one instant when a caller pins
+ * one. Every amount is a whole number of minor units of the synthetic currency, and both labels
+ * arrive from the resolved configuration rather than from the caller.
  *
  * @param db - The caller's database handle.
  * @param input - The transaction to refund, the amount, the operator account, the resolved
@@ -344,45 +356,52 @@ export function createRefund(
   // read: a fraction, a negative count, a value that is not a number at all, an infinity and a count
   // beyond what the number type represents exactly are all answered the same way, and a `0` — which
   // the request schema deliberately admits — is refused here rather than by the schema, because a
-  // refund of nothing is not an act this path can record.
+  // refund of nothing is not an act this path can record. This is the one refusal taken outside the
+  // transaction below, and it belongs there: it reads nothing, so there is no read it could be decided
+  // against.
   if (!Number.isSafeInteger(input.amountMinorUnits) || input.amountMinorUnits < 1) {
     return { ok: false, reason: "invalid_amount" };
   }
 
-  const transaction = readTransaction(db, input.transactionId);
+  // One transaction for the eligibility rule and the write it rules. The transaction row, the sum of
+  // its refund rows and both net-remaining refusals are taken inside it, so no append that landed
+  // between a read and the insert below can go unnoticed: the rule rests on this transaction rather
+  // than on the deployment's single-process, single-connection, synchronous model. A refusal returned
+  // from inside it commits a transaction in which nothing was written, which is the intended outcome
+  // and not a partial success. `insertLedgerEntries` opens its own transaction so that the two
+  // reversals are one act as well; better-sqlite3 nests that as a savepoint inside this one, so the
+  // rule, the refund, the marketplace reversal and the founder-allocation reversal all commit
+  // together or none of them do.
+  const appendRefund = db.transaction((): RefundResult | RefundRefusal => {
+    const transaction = readTransaction(db, input.transactionId);
 
-  if (transaction === undefined) {
-    return { ok: false, reason: "transaction_not_found" };
-  }
+    if (transaction === undefined) {
+      return { ok: false, reason: "transaction_not_found" };
+    }
 
-  // The net remaining is computed from the row read just above rather than by asking
-  // `computeNetRemaining` for it: that function reads the transaction row itself to answer, and a
-  // request that reads a transaction twice for one question spends a statement on a row it already
-  // holds. The arithmetic is the same one site — `remainingAfterRefunds` — and the sum of this
-  // transaction's refund rows is the only thing left to read.
-  const netRemaining = remainingAfterRefunds(
-    transaction,
-    readRefundedTotal(db, input.transactionId),
-  );
+    // The net remaining is computed from the row read just above rather than by asking
+    // `computeNetRemaining` for it: that function reads the transaction row itself to answer, and a
+    // request that reads a transaction twice for one question spends a statement on a row it already
+    // holds. The arithmetic is the same one site — `remainingAfterRefunds` — and the sum of this
+    // transaction's refund rows is the only thing left to read.
+    const netRemaining = remainingAfterRefunds(
+      transaction,
+      readRefundedTotal(db, input.transactionId),
+    );
 
-  // Checked before the over-large test below, and the order is load-bearing: a transaction whose
-  // refunds already account for its whole amount satisfies "the amount is greater than what remains"
-  // as well, and it is the already-fully-refunded answer the caller owes its client in that state.
-  if (netRemaining === 0) {
-    return { ok: false, reason: "already_fully_refunded" };
-  }
+    // Checked before the over-large test below, and the order is load-bearing: a transaction whose
+    // refunds already account for its whole amount satisfies "the amount is greater than what remains"
+    // as well, and it is the already-fully-refunded answer the caller owes its client in that state.
+    if (netRemaining === 0) {
+      return { ok: false, reason: "already_fully_refunded" };
+    }
 
-  if (input.amountMinorUnits > netRemaining) {
-    return { ok: false, reason: "exceeds_net_remaining" };
-  }
+    if (input.amountMinorUnits > netRemaining) {
+      return { ok: false, reason: "exceeds_net_remaining" };
+    }
 
-  const clock = input.now ?? defaultNow;
+    const clock = input.now ?? defaultNow;
 
-  // One transaction for the refund row and its reversal pair. `insertLedgerEntries` opens its own
-  // transaction so that the two reversals are one act as well; better-sqlite3 nests that as a
-  // savepoint inside this one, so the refund, the marketplace reversal and the founder-allocation
-  // reversal all commit together or none of them do.
-  const appendRefund = db.transaction((): RefundResult => {
     const refund: Refund = {
       id: randomUUID(),
       transaction_id: transaction.id,

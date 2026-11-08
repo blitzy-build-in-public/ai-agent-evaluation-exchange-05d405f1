@@ -166,7 +166,11 @@ function applyMigrations(database: Database.Database): void {
  * developer account, the category, the listing that developer owns and its first version, the
  * standard and the one standard version the pass thresholds are held in, and the two reports this
  * file's own two identifiers name. Both reports hang from the same versioned parents, which is why one
- * of each is seeded for the pair.
+ * of each is seeded for the pair. The standard, its version and the two reports are rows of SGI-owned
+ * tables, and this fixture writes them only because the delivered foreign keys require the parents a
+ * `ledger_entries.report_id` names: they are foreign-key parents in this file's own private in-memory
+ * database and never a production path, because the package's shipped modules write nothing but its
+ * own `transactions`, `refunds` and `ledger_entries`.
  */
 function seedReferencedRows(): void {
   db.prepare('INSERT INTO accounts (id, handle, role, display_label) VALUES (?, ?, ?, ?)').run(
