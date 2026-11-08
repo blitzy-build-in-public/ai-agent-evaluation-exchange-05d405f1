@@ -109,6 +109,19 @@ const LISTING_GONE_TEXT =
   "public view. Nothing was recorded, and every listing that remains is still browsable.";
 
 /**
+ * The sentence a message too large for the service is refused with, which is the message field's own
+ * problem and is marked as one.
+ *
+ * It names the reader's own text as the cause and the one next step, and it states no byte count: the
+ * size the service accepts is the service's, and a number here would have to be kept in step with it.
+ * `error-notice.tsx` states the same cause for the same status, which is the one wording this UI
+ * gives a failure, and it is the sentence a reader sees wherever that component renders the refusal.
+ */
+const MESSAGE_TOO_LARGE_TEXT =
+  "The message was larger than the service accepts, so the inquiry was not sent. Nothing was " +
+  "recorded — shorten it and send it again.";
+
+/**
  * The refusal this form produces for itself: a message left empty, caught before any request is
  * sent so that a blank submit is neither a round trip nor a write against the rate limit.
  *
@@ -177,11 +190,12 @@ function explainValidation(failureMessage: string): string {
  * The explanation one failure is rendered with.
  *
  * Every case a reader can act on differently has its own sentence, and the next step belongs to
- * the sentence: a refused message is the field's own problem, the two demo-account failures are
- * resolved in the switcher, a removed listing is resolved by browsing, and a throttled write is
- * resolved by waiting for the seconds the response stated. A failure this form cannot place renders
- * the generic sentence and never the service's own: the service's sentence for an internal failure
- * exists so that nothing internal reaches a client, and echoing whatever arrived would defeat it.
+ * the sentence: a refused message is the field's own problem, a message the service is too small to
+ * accept is shortened in the same field, the two demo-account failures are resolved in the switcher,
+ * a removed listing is resolved by browsing, and a throttled write is resolved by waiting for the
+ * seconds the response stated. A failure this form cannot place renders the generic sentence and
+ * never the service's own: the service's sentence for an internal failure exists so that nothing
+ * internal reaches a client, and echoing whatever arrived would defeat it.
  */
 function explainFailure(failure: unknown): FailureExplanation {
   if (failure instanceof EmptyMessageError) {
@@ -204,6 +218,8 @@ function explainFailure(failure: unknown): FailureExplanation {
       return { text: NOT_A_BUYER_TEXT, fieldIsInvalid: false, offersBrowse: false };
     case 404:
       return { text: LISTING_GONE_TEXT, fieldIsInvalid: false, offersBrowse: true };
+    case 413:
+      return { text: MESSAGE_TOO_LARGE_TEXT, fieldIsInvalid: true, offersBrowse: false };
     case 429:
       return {
         text: describeRetry(clientFailure.retryAfterSeconds),

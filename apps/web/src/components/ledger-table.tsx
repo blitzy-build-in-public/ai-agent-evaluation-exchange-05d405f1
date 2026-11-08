@@ -15,7 +15,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, RefObject } from "react";
 import { refundTransaction } from "../api-client";
-import { isRecord, readCount, statusOf } from "../payload-reading";
+import { Timestamp, isRecord, readCount, statusOf } from "../payload-reading";
 import { FOUNDER_ALLOCATION_CONTRACT_LABEL, SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
 import type {
   FounderAllocationLedgerReadResult,
@@ -161,7 +161,7 @@ export function LedgerTable(props: LedgerTableProps): JSX.Element {
             (transactionId: string): JSX.Element => (
               <details key={transactionId}>
                 <summary>
-                  {REFUND_SUMMARY_PREFIX}{" "}
+                  {REFUND_SUMMARY_PREFIX}
                   <span className="ledger-table__identifier">{transactionId}</span>
                 </summary>
                 <RefundForm transactionId={transactionId} onRefunded={props.onRefunded} />
@@ -204,7 +204,14 @@ function RefundForm(props: RefundFormProps): JSX.Element {
   const [refusal, setRefusal] = useState<unknown | null>(null);
   const [outcome, setOutcome] = useState<string | null>(null);
 
-  const errorText = amountError ?? (refusal === null ? null : describeRefundFailure(refusal));
+  // A spent write rate limit is not the amount field's fault: the amount was never the problem, so the
+  // refusal is announced in the form's status region in the warning triple and the field stays valid. A
+  // refusal that concerns the amount itself — this form's own guard, the domain's `400` and the
+  // over-refund `422` — is still rendered beside the field it describes.
+  const throttledNotice =
+    refusal !== null && statusOf(refusal) === 429 ? describeRefundFailure(refusal) : null;
+  const errorText =
+    amountError ?? (refusal === null || throttledNotice !== null ? null : describeRefundFailure(refusal));
   useReturnFocusOnError(inputRef, errorText);
 
   const handleAmountChange = (event: ChangeEvent<HTMLInputElement>): void => {
@@ -278,13 +285,16 @@ function RefundForm(props: RefundFormProps): JSX.Element {
       <button
         type="submit"
         className="button button--destructive"
-        disabled={inFlight || amount.trim() === ""}
+        disabled={inFlight}
         aria-busy={inFlight}
       >
         {REFUND_BUTTON_LABEL}
       </button>
 
       <div className="status-region" role="status">
+        {throttledNotice === null ? null : (
+          <p className="notice notice--warning">{throttledNotice}</p>
+        )}
         {outcome === null ? null : <p className="notice notice--success">{outcome}</p>}
       </div>
     </form>
@@ -324,7 +334,7 @@ function renderEntries(entries: readonly LedgerEntry[]): JSX.Element[] {
             </>
           )}
           <dt>{RECORDED_LABEL}</dt>
-          <dd>{entry.created_at}</dd>
+          <dd><Timestamp value={entry.created_at} /></dd>
         </dl>
       </article>
     ),

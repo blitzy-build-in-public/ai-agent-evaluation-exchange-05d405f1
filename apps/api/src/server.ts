@@ -18,8 +18,11 @@
  * 2. The instance is created with Fastify's own logger at `info`, which is the API's whole
  *    instrumentation: there is no metrics backend, no tracing exporter and no log shipping, because no
  *    external service may be called.
- * 3. The migration runner is called on the resolved handle before any route is reachable. It is
- *    idempotent and creates `schema_migrations` itself, so a caller that already migrated its handle
+ * 3. The resolved handle's schema is settled before any route is reachable: the migration runner is
+ *    called on it unless the caller supplied both that handle and the run it already made on it (see
+ *    {@link CreateServerOptions.migration}), which is the pair that says the schema is established and
+ *    is what keeps a start-up to one read and one hash per migration file. The runner is idempotent and
+ *    creates `schema_migrations` itself, so a caller that migrated a handle without recording the run
  *    sees a silent no-op rather than a second copy of the schema; no migration logic lives here.
  * 4. `@fastify/rate-limit` is registered with `global: false`, so reads are unlimited and a write
  *    route opts in through the route options each group declares from the resolved configuration. The
@@ -33,18 +36,26 @@
  * 6. The built web application is served from the resolved web directory when `<webDir>/index.html`
  *    exists, and that is decided once, here, at registration time. A checkout whose web build has not
  *    run yet starts anyway and answers for the API alone — a partially built checkout is a supported
- *    state, never a crash — and the SPA entry is read once rather than per request.
+ *    state, never a crash. The entry document itself is read from disk per request rather than held
+ *    from construction: it is a fraction of a kilobyte, and a build run over a listening server then
+ *    serves the entry that build just wrote instead of one naming the asset filenames the build
+ *    deleted. A read that fails answers the envelope's 404, like any other absent resource.
  * 7. The single error handler maps every thrown value to the one envelope of
  *    `./errors/error-envelope`. Validation failures, the demo-session header's failure, a domain
  *    package's refusal and a server fault all leave by it, so no handler writes an error body of its
- *    own and no client parses a second shape.
+ *    own and no client parses a second shape. It records a refused request at warning level, with the
+ *    method, the path, the status and the code, and a server fault at error level with the cause
+ *    itself; a request body, the demo header's value and the envelope's sentence are never recorded.
  * 8. The single not-found handler answers an `/api/` path, and a request for something that looks
  *    like a static file, with the envelope and status `404`; it answers every other path with the SPA
- *    entry and status `200`, which is what lets `/listings`, `/report/<id>`, `/compare?ids=…` and
- *    `/academy` reach the client router. Fastify 4 answers an unregistered path and an unregistered
- *    method on a registered path with the same `404`, and no `PUT`, `PATCH` or `DELETE` handler exists
- *    anywhere in this workspace, so an update or a delete of an append-only record is unreachable by
- *    construction rather than by a check.
+ *    entry, read from disk as it answers, and status `200`, which is what lets `/listings`,
+ *    `/report/<id>`, `/compare?ids=…` and `/academy` reach the client router. A path under the API's
+ *    own root is recorded at warning level like any other refused API request, while a missing asset
+ *    and a deep link answered with the SPA entry are not recorded at all — neither is a refusal.
+ *    Fastify 4 answers an unregistered path and an unregistered method on a registered path with the
+ *    same `404`, and no `PUT`, `PATCH` or `DELETE` handler exists anywhere in this workspace, so an
+ *    update or a delete of an append-only record is unreachable by construction rather than by a
+ *    check.
  *
  * **What this module deliberately does not do.** It does not listen: `apps/api/src/index.ts` is the
  * workspace's only public entry and the only place a `main`-style start-up lives, so that
@@ -66,6 +77,7 @@ import type { Database } from "better-sqlite3";
 import type { ApiConfig, ApiConfigOverrides } from "./config";
 import { resolveConfig } from "./config";
 import { openDatabase } from "./db/connection";
+import type { MigrationRun } from "./db/migrate";
 import { runMigrations } from "./db/migrate";
 import { ERROR_STATUS, STATUS_DEFAULT_CODE } from "./errors/error-codes";
 import { ApiError, envelope, toApiError } from "./errors/error-envelope";
@@ -111,6 +123,18 @@ export interface CreateServerOptions {
   readonly database?: Database;
 
   /**
+   * The run `./db/migrate`'s `runMigrations` has already made on {@link database}, which is the record
+   * that handle's schema is established. Read only alongside {@link database}: the two together are
+   * what let this module take the handle as it stands instead of calling the runner on it, so a
+   * start-up that migrated its own handle reads and hashes each migration file once, not twice.
+   *
+   * Supplied without {@link database} it decides nothing: a run names the handle it was made on, and a
+   * path is a connection this module opens itself. Absent, the runner is called on the resolved handle,
+   * so a caller handed a handle it did not migrate still gets a migrated one.
+   */
+  readonly migration?: MigrationRun;
+
+  /**
    * A file path, or the in-memory name `:memory:`, to open when no handle is supplied. This module
    * then owns the connection and closes it when the instance closes. Ignored when {@link database} is
    * supplied, and not recorded as the resolved configuration's database path in that case either: a
@@ -153,15 +177,19 @@ export interface CreateServerOptions {
  * `apps/api/test/integration/test-server.ts` listens on an ephemeral port for a suite.
  *
  * Refuses nothing of its own. An absent built-web directory is a supported state rather than an
- * error: an instance built in a checkout whose web build has not run answers for the API alone. The
- * three refusals that mean the process cannot start with what it was given are propagated unchanged
- * and are not translated into anything milder: `./config`'s `ConfigurationError` for an unusable
- * environment value or override, `./db/connection`'s own failure to open the path it was given, and
- * the migration runner's refusal when an applied migration file has changed, been renamed or
- * disappeared.
+ * error: an instance built in a checkout whose web build has not run answers for the API alone. That
+ * absence is decided once, at registration time; the entry document is not, because it is read from
+ * disk per request — a build run over a listening server is therefore served as soon as it finished,
+ * and a read that fails while a build replaces the directory answers the envelope's 404 rather than
+ * throwing. The three refusals that mean the process cannot start with what it was given are
+ * propagated unchanged and are not translated into anything milder: `./config`'s
+ * `ConfigurationError` for an unusable environment value or override, `./db/connection`'s own failure
+ * to open the path it was given, and the migration runner's refusal when an applied migration file
+ * has changed, been renamed or disappeared.
  *
- * @param options The caller's handle or path, its port and web directory, and its configuration
- *   overrides. Every member is optional; an absent one resolves to the configuration's own value.
+ * @param options The caller's handle or path, the run it already made on that handle, its port and web
+ *   directory, and its configuration overrides. Every member is optional; an absent one resolves to the
+ *   configuration's own value, except the recorded run, which is read only beside a handle.
  * @returns The instance, with every route, handler and hook registered, before it is listening.
  */
 export function createApp(options: CreateServerOptions = {}): FastifyInstance {
@@ -190,7 +218,14 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
     });
   }
 
-  runMigrations(database);
+  // The schema, before any route is reachable. The runner is skipped only for the caller that supplied
+  // both the handle and the run it already made on it: either one alone leaves the handle's schema
+  // unestablished, so the runner is called here — on a caller's handle it did not migrate, and on the
+  // connection this module opened for a path. Honouring a recorded run is what keeps one start-up to
+  // one read and one hash per migration file rather than two.
+  if (options.database === undefined || options.migration === undefined) {
+    runMigrations(database);
+  }
 
   instance.register(fastifyRateLimit, {
     // Reads are unlimited and a write opts in through its own route options, which each group
@@ -207,13 +242,14 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
 
   registerRoutes(instance, { database, config });
 
-  // The built web application, served only when it exists. The `wildcard` option is stated because it
-  // is the one that makes a missing asset reach the handler below — the plugin's wildcard route calls
-  // the not-found handler when its file is absent — rather than the plugin answering a 404 of its own
-  // that no envelope shapes.
+  // The built web application, served only when it exists. Whether it exists is decided here, once:
+  // the static handler's registration cannot change under a running server. The entry document is
+  // deliberately *not* read here — see the not-found handler below. The `wildcard` option is stated
+  // because it is the one that makes a missing asset reach the handler below — the plugin's wildcard
+  // route calls the not-found handler when its file is absent — rather than the plugin answering a
+  // 404 of its own that no envelope shapes.
   const spaEntryPath = join(config.webDir, "index.html");
   const servesBuiltWebApp = existsSync(spaEntryPath);
-  const spaDocument = servesBuiltWebApp ? readFileSync(spaEntryPath, "utf8") : undefined;
 
   if (servesBuiltWebApp) {
     instance.register(fastifyStatic, { root: config.webDir, wildcard: true });
@@ -225,10 +261,23 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
   instance.setErrorHandler((error, request, reply) => {
     const apiError = mapFailure(error);
 
-    if (apiError.status >= 500) {
+    if (failureLogLevel(apiError.status) === "error") {
       // The cause is recorded here and never sent: the client reads the envelope's own generic
       // sentence, so no stack, driver report, statement or path leaves the process in a response body.
       request.log.error({ err: error }, "The request failed and was answered with a server fault.");
+    } else {
+      // A refused request is recorded at warning level with the facts an operator needs to diagnose
+      // it, so a client-caused failure is distinguishable from routine traffic by level alone. The
+      // body, the demo header's value and the envelope's own sentence are never recorded.
+      request.log.warn(
+        {
+          method: request.method,
+          url: request.url,
+          statusCode: apiError.status,
+          code: apiError.code,
+        },
+        "The request was refused and answered with a client error.",
+      );
     }
 
     sendApiError(reply, apiError);
@@ -242,17 +291,41 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
     // each the absence of a resource, and answering a request for a script with the application shell
     // and a 200 would hand a loader an HTML document it would then try to execute as code.
     if (isApiPath(path) || looksLikeStaticFile(path)) {
-      sendApiError(reply, ApiError.notFound());
+      // One value is built for both the record and the response, so the status and the code logged are
+      // the ones the client is answered with. A path under the API's own root is a refused API request
+      // and is recorded like one; a missing asset is not, because it is an absence rather than a
+      // refusal.
+      const notFound = ApiError.notFound();
+
+      if (isApiPath(path)) {
+        request.log.warn(
+          {
+            method: request.method,
+            url: request.url,
+            statusCode: notFound.status,
+            code: notFound.code,
+          },
+          "The request was refused and answered with a client error.",
+        );
+      }
+
+      sendApiError(reply, notFound);
       return;
     }
 
     // A document request for any other path is a deep link: the client router owns the route, so the
-    // SPA entry is answered with 200. The entry is absent exactly when the build is, and a checkout
-    // with no built web application answers the same 404 as any other absent resource instead of
-    // failing to start.
-    if (spaDocument !== undefined && isDocumentRequest(request.method)) {
-      reply.type("text/html; charset=utf-8").send(spaDocument);
-      return;
+    // SPA entry is answered with 200. It is read from disk here, per request, rather than held from
+    // construction: a build run over this listening server rewrites the entry to name the assets it
+    // just wrote, so a document captured at start-up would name files that build deleted. The entry is
+    // a fraction of a kilobyte and only a deep link reads it. A read that fails — the file removed by
+    // an in-flight build, or unreadable — falls through to the same 404 as any other absent resource.
+    if (servesBuiltWebApp && isDocumentRequest(request.method)) {
+      const document = readFileText(spaEntryPath);
+
+      if (document !== undefined) {
+        reply.type("text/html; charset=utf-8").send(document);
+        return;
+      }
     }
 
     sendApiError(reply, ApiError.notFound());
@@ -270,6 +343,22 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
   });
 
   return instance;
+}
+
+/**
+ * The level a failure is recorded at, decided by the status it is answered with.
+ *
+ * The handler's one logging policy, in one place, so that the record a failure produces and the
+ * assertion that pins it read the same rule: a failure the server caused is recorded at error level
+ * with its cause, and a request the API refused is recorded at warning level with the facts an
+ * operator needs. The instance's logger is built at `info`, which emits both levels, so no record
+ * depends on the configured level.
+ *
+ * @param status The status the failure is answered with.
+ * @returns `error` at `500` and above, `warn` below it.
+ */
+export function failureLogLevel(status: number): "warn" | "error" {
+  return status >= 500 ? "error" : "warn";
 }
 
 /**
@@ -331,6 +420,29 @@ function isDocumentRequest(method: string): boolean {
 }
 
 /**
+ * Reads a file's UTF-8 text, answering `undefined` rather than throwing when the read fails.
+ *
+ * A file this process serves can be replaced or removed under it while it listens — `vite build`
+ * empties the web output directory before it writes the next one, and a container's image swap
+ * replaces the whole directory — so reading one is a request-time event with a failure mode rather
+ * than a construction-time certainty. This function performs the read and reports its failure; what
+ * an unreadable file means for the answer is the caller's decision, not this function's.
+ *
+ * @param filePath The path of the file to read.
+ * @returns The file's contents as text, or `undefined` when it is absent, is a directory, is
+ *   unreadable, or is replaced mid-read.
+ */
+function readFileText(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch {
+    // The `undefined` is the handling: the caller answers the request with the envelope's 404 rather
+    // than letting a filesystem failure leave the handler as a server fault.
+    return undefined;
+  }
+}
+
+/**
  * Answers a request with an {@link ApiError} in the one envelope.
  *
  * @param reply The reply to send on.
@@ -352,11 +464,15 @@ function sendApiError(reply: FastifyReply, error: ApiError): void {
  * did. Only a 4xx status is read this way: a fault at 5xx keeps the generic sentence and the 500 the
  * mapper chose, because its message is a driver report rather than a sentence.
  *
+ * Exported so `apps/api/test/integration/error-mapping.test.ts` can assert the mapping this handler
+ * performs on the failures Fastify really raises, rather than a copy of it written in the suite; the
+ * composition root is otherwise its only caller.
+ *
  * @param error The value a route, a hook or a plugin threw, of any type.
  * @returns The mapped error, which is always an `ApiError`: this function never throws, so a mapping
  *   that cannot be made cannot turn one failure into two.
  */
-function mapFailure(error: unknown): ApiError {
+export function mapFailure(error: unknown): ApiError {
   const mapped = toApiError(error);
 
   if (mapped.code !== "internal_error") {

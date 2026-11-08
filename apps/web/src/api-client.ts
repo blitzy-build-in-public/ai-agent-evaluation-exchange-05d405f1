@@ -63,6 +63,7 @@ import {
 import type {
   Appeal,
   AppealCreateBody,
+  AppealRulingBody,
   AuditEvent,
   Category,
   Challenge,
@@ -752,6 +753,10 @@ function normalizeListingDetail(response: ApiResponse): ListingDetail {
     developer_handle: readString(record["developer_handle"]),
     category: normalizeCategory(record["category"]),
     versions: arrayOrEmpty(record["versions"]) as ListingVersion[],
+    // The version history arrives as a bounded page — the most recent one — so the number of
+    // versions the listing holds in all is read beside it rather than inferred from the page: a
+    // client that took the page for the history would show 20 versions of a listing that has 108.
+    version_total: requireCount(record["version_total"], response),
     claims: arrayOrEmpty(record["claims"]) as ListingClaim[],
     report_id: readText(record["report_id"]),
     outcome: readText(record["outcome"]) as ReportOutcome | null,
@@ -1034,6 +1039,54 @@ export async function openAppeal(reportId: string, body: AppealCreateBody): Prom
     demoAccount: true,
   });
   return entityFrom<Appeal>(response, ["appeal"]);
+}
+
+/**
+ * What a ruling answers with: the appeal in its new state and the governance event the ruling
+ * appended.
+ *
+ * The two answer different questions. `appeal.status` is a column that moves and states where the
+ * appeal stands now; `event` is the append-only row the ruling appended and holds the ground the
+ * operator stated, which has no column of its own — the appeal row carries no ruled-at, ruled-by or
+ * ruling-reason field — so the ground is rendered from the event beside the status it justified.
+ * `event` is `null` only when the response carried none.
+ */
+export interface AppealRulingResult {
+  /** The appeal as the ruling left it: `upheld` or `denied`. */
+  readonly appeal: Appeal;
+  /** The governance event the ruling appended, or `null` when the response carried none. */
+  readonly event: GovernanceEvent | null;
+}
+
+/**
+ * `POST /appeals/{id}/ruling` (operator): rules an appeal `upheld` or `denied`, with an optional
+ * stated ground.
+ *
+ * The ruling moves the appeal's own status and appends a governance event that records it; it never
+ * touches the report the appeal concerns, so a page reading a report before and after a ruling reads
+ * the same evidence, the same totals and the same outcome. `reason` is optional because the contract
+ * makes it optional: a ruling is not obliged to justify itself, and an appeal ruled without a stated
+ * ground records that absence rather than a fabricated sentence.
+ *
+ * Raises {@link ApiClientError} for `400` (a `status` outside {@link APPEAL_RULINGS}), `404`
+ * (`not_found`, an appeal identifier no row carries), `409` (`already_ruled`, an appeal that already
+ * carries a terminal status — a ruling is final), `401` when no demo account is selected, `403` when
+ * the resolved account is not an operator, and `429` when the write limit is reached.
+ */
+export async function ruleAppeal(
+  appealId: string,
+  body: AppealRulingBody,
+): Promise<AppealRulingResult> {
+  const response = await send("POST", `/appeals/${encodeURIComponent(appealId)}/ruling`, {
+    body,
+    demoAccount: true,
+  });
+  const record = requireRecord(response);
+  const event = record["event"];
+  return {
+    appeal: entityFrom<Appeal>(response, ["appeal"]),
+    event: isRecord(event) ? (event as unknown as GovernanceEvent) : null,
+  };
 }
 
 /**
@@ -1362,24 +1415,46 @@ export async function submitProposal(body: StandardProposalCreateBody): Promise<
 }
 
 /**
+ * What the operator's review answers with: the proposal in its new state and the governance event
+ * the review appended.
+ *
+ * A review's record is that event: the status the proposal now carries, and the ground the operator
+ * stated with the decision, which has no column of the proposal's own. Both therefore travel
+ * together, so the page that announces the decision renders the trail it left. `event` is `null` only
+ * when the response carried none, which is how {@link moderateListing} reads its own decision too.
+ */
+export interface ProposalReviewResult {
+  /** The proposal as the review left it: `accepted` or `rejected`, its text unchanged. */
+  readonly proposal: StandardProposal;
+  /** The governance event the review appended, or `null` when the response carried none. */
+  readonly event: GovernanceEvent | null;
+}
+
+/**
  * `POST /standards/proposals/{id}/review` (operator): rules a proposal `accepted` or
  * `rejected` and appends a governance event.
  *
  * The review moves the proposal's status and never rewrites its title or rationale, so the
- * reasoning a decision answered stays readable afterwards. Raises {@link ApiClientError} for
- * `400` (a status outside the review vocabulary), `404` (an unknown proposal), `409`
- * (`already_decided`, a proposal that already carries a terminal status) and `403` when the
- * resolved account is not an operator.
+ * reasoning a decision answered stays readable afterwards; the event it appended — which carries the
+ * ground the operator stated — comes back with the proposal, so the decision and its record are
+ * announced together. Raises {@link ApiClientError} for `400` (a status outside the review
+ * vocabulary), `404` (an unknown proposal), `409` (`already_decided`, a proposal that already
+ * carries a terminal status) and `403` when the resolved account is not an operator.
  */
 export async function reviewProposal(
   proposalId: string,
   body: StandardProposalReviewBody,
-): Promise<StandardProposal> {
+): Promise<ProposalReviewResult> {
   const response = await send("POST", `/standards/proposals/${encodeURIComponent(proposalId)}/review`, {
     body,
     demoAccount: true,
   });
-  return entityFrom<StandardProposal>(response, ["standard_proposal", "proposal"]);
+  const record = requireRecord(response);
+  const event = record["event"];
+  return {
+    proposal: entityFrom<StandardProposal>(response, ["standard_proposal", "proposal"]),
+    event: isRecord(event) ? (event as unknown as GovernanceEvent) : null,
+  };
 }
 
 /**
@@ -1452,14 +1527,21 @@ export async function listLedger(
   const response = await send("GET", `/ledger/${LEDGER_PATH_SEGMENTS[ledger]}`, { demoAccount: true });
   const record = requireRecord(response);
   const entries = arrayOrEmpty(record["entries"]) as LedgerEntry[];
+  // The read is bounded — one page of the ledger, the most recent page first — so the page it
+  // answered and the number of entries the ledger holds are part of what this call returns: a
+  // ledger view that showed a page without them could not tell a short ledger from a clipped one.
+  const total = requireCount(record["total"], response);
+  const page = requireCount(record["page"], response);
   if (ledger === "founder_allocation") {
     return {
       ledger,
       entries,
+      total,
+      page,
       rate_basis_points: requireCount(record["rate_basis_points"], response),
     };
   }
-  return { ledger, entries };
+  return { ledger, entries, total, page };
 }
 
 /**
@@ -1532,14 +1614,4 @@ export async function listAuditEvents(): Promise<AuditEvent[]> {
   const response = await send("GET", "/audit-events", { demoAccount: true });
   return requireArray(response, ["items", "audit_events"]) as AuditEvent[];
 }
-
-/*
- * `POST /appeals/{id}/ruling` (operator) is a row of the API contract table and is the one
- * row this module deliberately does not call. It appears in neither the plan's list of this
- * client's functions nor its page tables, so no surface here consumes an appeal ruling — the
- * operator's ruling is exercised where the immutability guarantee is proved, in
- * `apps/api/test/integration/immutability.test.ts`, which asserts that a ruling appends a
- * governance event while `GET /evaluations/{id}` returns the appealed report unchanged. An
- * appeal is opened through `openAppeal` above; a ruling is not this client's to send.
- */
 

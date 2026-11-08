@@ -47,11 +47,22 @@ import {
  *
  * The five filters are optional, so an absent one narrows nothing, and `sort`
  * and `page` are the only inputs whose value is resolved. Validation produces
- * `400` for a value that fails `type`, `enum` or `minimum` — `?page=0` fails
- * `minimum: 1` and `?model=bogus` fails the {@link PRICING_MODELS} enum — while
- * an empty result is `200` with `items: []` and `total: 0` and is **never an
- * error**: no listing matching a search is an ordinary state, and the listings
- * page renders it with the filters that produced it.
+ * `400` for a value that fails `type`, `enum`, `minimum` or `maxLength` — `?page=0`
+ * fails `minimum: 1`, `?model=bogus` fails the {@link PRICING_MODELS} enum, and a
+ * free-text filter over the ceiling stated below fails `maxLength` — while an empty result is
+ * `200` with
+ * `items: []` and `total: 0` and is **never an error**: no listing matching a search
+ * is an ordinary state, and the listings page renders it with the filters that
+ * produced it.
+ *
+ * The four free-text filters each carry a stated `maxLength`: `q` 200, and
+ * `category`, `license` and `standard` 64. A query value reaches work that grows
+ * with it — `q` becomes a `LIKE` pattern compared against every listing's title
+ * and summary, and each filter is compared with a column for every row the
+ * search scans — so a field with no ceiling lets one client make a single read
+ * arbitrarily expensive. The numbers are this module's own choice, large enough
+ * for the content of that kind (a search phrase, a category slug, a licence code
+ * and a standard code) and no larger.
  *
  * **There is deliberately no page-size property, and none may be added.** The
  * size is the fixed `LISTING_PAGE_SIZE` of `../constants` (20), the response
@@ -73,20 +84,25 @@ import {
  *   value that fails a constraint, which is what
  *   `apps/api/test/integration/route-walk.test.ts` asserts for this row.
  *
- * `page` is declared `integer` with a lower bound of `1`; the validator coerces
- * the query string to a number, so the parsed query carries a number and no
- * route has to parse one. The 1-based page number is the only paging input —
- * there is no offset, no cursor and no page size.
+ * `page` is declared `integer` with a lower bound of `1` and no upper bound of its own: the
+ * validator coerces the query string to a number, so the parsed query carries a number and
+ * no route has to parse one. The upper end of the range is judged in the route rather than
+ * by this schema, because what a page too large to answer actually breaks is the offset the
+ * handler is about to bind: `apps/api/src/routes/listings.ts` refuses a page the store
+ * cannot address with the same `400`, and its sentence names `page` rather than sending the
+ * client the one generic sentence a schema rejection earns. A page that is addressable and
+ * past the end of the match set is the empty page above, never a refusal. The 1-based page
+ * number is the only paging input — there is no offset, no cursor and no page size.
  */
 export const listingSearchQuerySchema = {
   querystring: {
     type: 'object',
     properties: {
-      q: { type: 'string' },
-      category: { type: 'string' },
-      license: { type: 'string' },
+      q: { type: 'string', maxLength: 200 },
+      category: { type: 'string', maxLength: 64 },
+      license: { type: 'string', maxLength: 64 },
       model: { type: 'string', enum: PRICING_MODELS },
-      standard: { type: 'string' },
+      standard: { type: 'string', maxLength: 64 },
       sort: { type: 'string', enum: LISTING_SORTS, default: DEFAULT_LISTING_SORT },
       page: { type: 'integer', minimum: 1, default: 1 },
     },
@@ -146,38 +162,54 @@ export const listingIdParamsSchema = {
  *   is the operator's act, through `./moderation-schema.ts`.
  *
  * The owning developer is resolved from the `X-Demo-Account` header and is never
- * a body field. Because Fastify validates with `removeAdditional` among its
- * defaults, a client that sends `slug`, `status`, `developer_account_id` or
- * `created_at` alongside an otherwise valid body has those fields **removed
- * before the handler runs** rather than answered with a `400`; no handler may
- * rely on reading one, and none may take a developer identity from the body.
+ * a body field. The API holds a request body to this closed object before its
+ * validator runs — the check in
+ * `apps/api/src/routes/request-body-policy.ts` — so a client that sends `slug`,
+ * `status`, `developer_account_id` or `created_at` alongside an otherwise valid
+ * body is answered **`400 validation_error`** rather than having those fields
+ * removed, and a value of the wrong JSON type for a declared field, `title: 123`
+ * for the string below, is answered the same way rather than converted. No handler
+ * may rely on reading an undeclared field, and none may take a developer identity
+ * from the body.
  *
  * Statuses this row produces or hands on: `400` for a missing or empty `title`,
- * `summary`, `category_id` or `license_code`, or a `pricing_model` outside
- * {@link PRICING_MODELS}; `401` for a missing or unresolvable demo header; and
- * `403` for a resolvable account whose role is not `developer`. Success is `201`
- * with the created listing. Whether `category_id` names a category that exists
- * is decided elsewhere: this schema constrains the field's shape, and the
- * reference is held by the foreign key to `categories.id` in
+ * `summary`, `category_id` or `license_code`, for a bounded text field over its
+ * stated maximum, or for a `pricing_model` outside {@link PRICING_MODELS} — and
+ * for a declared field carrying a value of another JSON type, or for a field this
+ * object does not declare, refused by the request-body policy before the handler
+ * runs; `401` for a missing or unresolvable demo header; and `403` for a
+ * resolvable account whose role is not `developer`. Success is `201` with the
+ * created listing. Whether `category_id` names a category that exists is decided
+ * elsewhere: this schema constrains the field's shape, and the reference is held
+ * by the foreign key to `categories.id` in
  * `packages/shared/migrations/0002_listings_and_versions.sql`, checked by the
  * route against the catalogue rather than restated as a list of ids here.
  *
- * `minLength: 1` on the four free-text fields is this module's own choice, taken
+ * `minLength: 1` on the four required strings is this module's own choice, taken
  * for consistency with the sibling schema modules where the plan states it
  * explicitly. Its effect is that a required string cannot be satisfied by the
  * empty string: `title: ""` is a validation failure rather than a listing with a
- * blank heading. It is a shape bound only — no length, and no content rule
- * beyond membership of an enum, is imposed on a listing's text.
+ * blank heading.
+ *
+ * The three free-text fields also carry a stated `maxLength` — `title` 200,
+ * `summary` 2000 and `license_code` 64 — because a stored value is carried by
+ * every collection read: a summary with no ceiling lets one client inflate every
+ * page that lists the listing and lengthen every search pattern its text
+ * matches. `category_id` carries none, and must not: it is an identifier
+ * resolved against the catalogue rather than text a reader is meant to read. The
+ * other three numbers are this module's own choice, large enough for the content
+ * of that kind. No content rule beyond membership of an enum is imposed on a
+ * listing's text.
  */
 export const listingCreateBodySchema = {
   body: {
     type: 'object',
     required: ['title', 'summary', 'category_id', 'license_code', 'pricing_model'],
     properties: {
-      title: { type: 'string', minLength: 1 },
-      summary: { type: 'string', minLength: 1 },
+      title: { type: 'string', minLength: 1, maxLength: 200 },
+      summary: { type: 'string', minLength: 1, maxLength: 2000 },
       category_id: { type: 'string', minLength: 1 },
-      license_code: { type: 'string', minLength: 1 },
+      license_code: { type: 'string', minLength: 1, maxLength: 64 },
       pricing_model: { type: 'string', enum: PRICING_MODELS },
     },
     additionalProperties: false,
@@ -196,6 +228,13 @@ export const listingCreateBodySchema = {
  * to say "nothing recorded here", so a caller cannot pass an explicit
  * `undefined` and cannot write a `null` the row would refuse.
  *
+ * `notes` carries a stated `maxLength` of 2000, as every free-text field in this
+ * folder now does: the notes are served with the version history on every read
+ * of the listing, so a field with no ceiling lets one client inflate every
+ * payload that carries the version. The number is this module's own choice,
+ * large enough for the content of that kind — the notes for one version — and no
+ * larger.
+ *
  * **The unique `(listing_id, version_string)` pair is the contract's `409`, and
  * the pattern below MUST NOT be grown into a uniqueness rule.** Only the stored
  * pair can tell whether this listing has already published this version, and the
@@ -207,10 +246,11 @@ export const listingCreateBodySchema = {
  * shapes `1.0.0`, `2024-05`, `v2_rc1` and `1.0.0-beta.2` all satisfy).
  *
  * Statuses this row produces or hands on: `400` for a missing or empty
- * `version_string`, or one the pattern or `maxLength` rejects; `404` for a
- * listing id no listing carries; `409` for a version string this listing has
- * already published; `401` for a missing or unresolvable demo header; and `403`
- * for a resolvable developer account that does not own the listing.
+ * `version_string`, for one the pattern or `maxLength` rejects, or for a `notes`
+ * over its stated maximum; `404` for a listing id no listing carries; `409` for
+ * a version string this listing has already published; `401` for a missing or
+ * unresolvable demo header; and `403` for a resolvable developer account that
+ * does not own the listing.
  *
  * A version is append-only by route design: no route updates or deletes one, so
  * a correction is a new version and an evaluation always names the version that
@@ -227,7 +267,7 @@ export const listingVersionCreateBodySchema = {
         maxLength: 32,
         pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]*$',
       },
-      notes: { type: 'string' },
+      notes: { type: 'string', maxLength: 2000 },
     },
     additionalProperties: false,
   },

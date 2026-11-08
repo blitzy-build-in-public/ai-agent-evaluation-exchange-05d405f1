@@ -21,7 +21,9 @@
  *    by the operator: exactly one `governance_events` row appears, naming the ruling, the operator
  *    and the appeal, while the report, its per-case evidence and the payload the report route
  *    answers with stay byte-identical, and while the appeal's own row moves its `status` column and
- *    no other. A second ruling is refused `409` `already_ruled` and appends nothing at all.
+ *    no other. The ruling's answer carries that appended row beside the ruled appeal, which is the
+ *    trail the operator reads where the decision is shown. A second ruling is refused `409`
+ *    `already_ruled` and appends nothing at all.
  * 3. *The suite's table list is the migration's.* The nine tables are read out of
  *    `packages/shared/migrations/0010_append_only_triggers.sql` at run time and asserted equal to the
  *    list the attempts are built from, so a migration that gains an append-only table, or a list
@@ -761,6 +763,33 @@ function capturedEvidence(): RulingEvidence {
 }
 
 /**
+ * The one governance event the ruling appended: the row the log holds after the ruling that it did
+ * not hold before it.
+ *
+ * The two logs are compared by id rather than by position, because where in the trail a ruling falls
+ * is the database's business while *that it appended exactly one row* is the claim the block makes.
+ * The count is asserted where it belongs — in the case about what a ruling appends — so every case
+ * that needs the appended row takes it from here rather than repeating the comparison.
+ *
+ * @param captured - The appeal block's captured evidence.
+ * @returns The row the ruling added to the log.
+ * @throws {Error} When the ruling appended no row, or appended more than one.
+ */
+function appendedRulingEvent(captured: RulingEvidence): GovernanceEventRow {
+  const alreadyLogged = new Set(captured.eventsBeforeRuling.map((event) => event.id));
+  const appended = captured.eventsAfterRuling.filter((event) => !alreadyLogged.has(event.id));
+  const [event] = appended;
+
+  if (event === undefined || appended.length !== 1) {
+    throw new Error(
+      `expected the ruling to append exactly one governance event, found ${appended.length}`,
+    );
+  }
+
+  return event;
+}
+
+/**
  * The suite's one harness, started by the first hook and closed by the last.
  *
  * Every case reaches the running server through {@link runningServer}, so a case that ran before its
@@ -915,9 +944,10 @@ describe("immutability of the append-only record", () => {
    * half of the same invariant — that the one change the design does allow is an append, and that it
    * leaves the record it comments on exactly as it was. The sequence runs once, in the block's own
    * hook, so each case below asserts one facet of one ruling rather than repeating it: the single
-   * appended event, the untouched report, the appeal's single mutable column, and the refusal of a
-   * second ruling. A log that grew by two would be as much a defect as a rewritten report, which is
-   * why the count is asserted exactly rather than at least.
+   * appended event, the untouched report, the appeal's single mutable column, the answer that carries
+   * the appended event beside the ruled appeal, and the refusal of a second ruling. A log that grew
+   * by two would be as much a defect as a rewritten report, which is why the count is asserted
+   * exactly rather than at least.
    */
   describe("appeal ruling", () => {
     beforeAll(async () => {
@@ -973,15 +1003,10 @@ describe("immutability of the append-only record", () => {
         captured.eventsBeforeRuling.length + 1,
       );
 
-      const alreadyLogged = new Set(captured.eventsBeforeRuling.map((event) => event.id));
-      const appended = captured.eventsAfterRuling.filter((event) => !alreadyLogged.has(event.id));
-      const [event] = appended;
-
-      if (event === undefined || appended.length !== 1) {
-        throw new Error(
-          `expected the ruling to append exactly one governance event, found ${appended.length}`,
-        );
-      }
+      // The one row the ruling added, resolved by comparing the two logs rather than by assuming a
+      // position: the comparison below is what proves the count, and the row itself is what this case
+      // then reads.
+      const event = appendedRulingEvent(captured);
 
       // The type is the vocabulary member the package owns, resolved above rather than spelled here:
       // one member covers both outcomes, so the outcome itself travels in the payload asserted below.
@@ -1020,7 +1045,7 @@ describe("immutability of the append-only record", () => {
       );
     });
 
-    it("moves only the appeal's own status column, and answers with the ruled appeal", () => {
+    it("moves only the appeal's own status column, and answers with the ruled appeal and its event", () => {
       const captured = capturedEvidence();
 
       const stored = singleRowOf(
@@ -1037,9 +1062,17 @@ describe("immutability of the append-only record", () => {
       // old one — which is also why the row carries no ruled-at, ruled-by or ruling-reason column, and
       // why the ruling's own ground lives in the appended event asserted above.
       expect(stored).toStrictEqual({ ...captured.appealAtOpening, status: RULING });
-      expect(captured.rulingResponse.json<Appeal>()).toStrictEqual({
-        ...captured.appealAtOpening,
-        status: RULING,
+
+      // The route answers the ruled appeal beside the governance event the ruling appended, which is
+      // the shape the moderation row already uses for its own decision and the shape that makes the
+      // trail readable where the decision is shown. The event asserted here is the row the log holds,
+      // read back through the harness, so the comparison is between the route's answer and the stored
+      // record rather than between two renderings of the same value.
+      expect(
+        captured.rulingResponse.json<{ readonly appeal: Appeal; readonly event: GovernanceEventRow }>(),
+      ).toStrictEqual({
+        appeal: { ...captured.appealAtOpening, status: RULING },
+        event: appendedRulingEvent(captured),
       });
     });
 

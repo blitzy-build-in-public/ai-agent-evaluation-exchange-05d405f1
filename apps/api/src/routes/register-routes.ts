@@ -2,12 +2,14 @@
  * The route registrar: the one place the fourteen route groups are mounted, and the one place the
  * versioned prefix is applied.
  *
- * This module declares no handler, holds no business rule, issues no query and validates nothing. It
- * imports the fourteen group registrars, calls each one with an encapsulated scope that carries the
- * prefix and with the resolved {@link RouteContext}, and stops there. Each group owns its own paths,
- * its own JSON schemas, its own role checks and its own rate-limit options; the composition root owns
- * the error handler, the rate-limit plugin and the static handler. Nothing in this file repeats any of
- * that work.
+ * This module declares no handler, holds no business rule, issues no query and declares no schema of
+ * its own: the scope's one request-body policy is registered here, through
+ * {@link registerRequestBodyPolicy}, and every JSON schema a route validates against stays in its
+ * group. It imports the fourteen group registrars, calls each one with an encapsulated scope that
+ * carries the prefix and with the resolved {@link RouteContext}, and stops there. Each group owns its
+ * own paths, its own JSON schemas, its own role checks and its own rate-limit options; the composition
+ * root owns the error handler, the rate-limit plugin and the static handler. Nothing in this file
+ * repeats any of that work.
  *
  * **The prefix is applied exactly once, here.** Fastify's own encapsulation is what makes that true:
  * every group is handed the scoped instance created by `app.register(..., { prefix })`, so a group
@@ -71,6 +73,7 @@ import { registerLedgerRoutes } from "./ledgers";
 import { registerListingsRoutes } from "./listings";
 import { registerModerationRoutes } from "./moderation";
 import { registerRefundRoutes } from "./refunds";
+import { registerRequestBodyPolicy } from "./request-body-policy";
 import { registerSponsoredRoutes } from "./sponsored";
 import { registerStandardsRoutes } from "./standards";
 import { registerThreadRoutes } from "./threads";
@@ -127,6 +130,13 @@ export interface RouteContext {
 export function registerRoutes(app: FastifyInstance, context: RouteContext): void {
   app.register(
     async (instance: FastifyInstance): Promise<void> => {
+      // The scope's one hook, and the first thing registered in it: a write body is held to the JSON
+      // types and the declared fields its own schema states before Fastify's validator is given it —
+      // the validator's `coerceTypes` and `removeAdditional` defaults would otherwise convert a
+      // wrongly-typed value and drop an undeclared field instead of refusing either. It reads each
+      // route's own body schema, so no group declares or repeats anything for it.
+      registerRequestBodyPolicy(instance);
+
       registerListingsRoutes(instance, context);
       registerCompareRoutes(instance, context);
       registerInquiryRoutes(instance, context);

@@ -18,20 +18,21 @@ when any capability arrives.
 **Delivers.** The repository skeleton and everything that makes the tree buildable and testable: the
 workspace declaration with its root scripts, the strict compiler configuration inherited by every
 workspace, the three test configurations, the container files, the CI pipeline, and `packages/shared`
-in full — its constants, domain types, JSON schemas and the twelve ordered migrations that create the
+in full — its constants, domain types, JSON schemas and the thirteen ordered migrations that create the
 tables, the append-only triggers and the read-path indexes.
 
 **Touches.** `package.json`, `package-lock.json`, `tsconfig.base.json`, `tsconfig.json`,
 `vitest.unit.config.ts`, `vitest.integration.config.ts`, `playwright.config.ts`, `Dockerfile`,
 `docker-compose.yml`, `.gitignore`, `.dockerignore`, `.github/workflows/ci.yml`, `packages/shared/**`
-including `packages/shared/migrations/0001`–`0012`, among them `0012_amount_integer_guards.sql`.
+including `packages/shared/migrations/0001`–`0013`, among them `0012_amount_integer_guards.sql` and
+`0013_newest_row_and_filter_indexes.sql`.
 
 **Priority tier:** P0 — the infrastructure every other milestone is built on.
 
 **Exit condition.** From a clean checkout: `npm ci` exits 0, `npm run build` exits 0, and the unit leg
 behaves as `vitest.unit.config.ts` states — on a tree with no test file yet `npm run test:unit` reports
 `No test files found` and exits 1 (`passWithNoTests: false`), and it exits 0 as soon as one test file
-lands; and the twelve migrations apply in filename order to an in-memory database, with the append-only
+lands; and the thirteen migrations apply in filename order to an in-memory database, with the append-only
 triggers created on all nine append-only tables.
 
 ## M2 — Exchange discovery (P0)

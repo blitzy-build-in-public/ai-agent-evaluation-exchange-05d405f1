@@ -57,12 +57,18 @@ export interface ChallengeFormProps {
 
 /**
  * What a failure renders as: the sentence beside the question when the question itself is
- * what failed (`null` when it is not), the sentence the status region announces, and whether
- * the state offers the way back to browsing.
+ * what failed (`null` when it is not), the sentence the status region announces, the notice
+ * variant that sentence renders in, and whether the state offers the way back to browsing.
  */
 interface ChallengeFailureReading {
   readonly questionMessage: string | null;
   readonly statusMessage: string;
+  /**
+   * The notice variant the status region renders: the error triple for a refusal of what was
+   * sent, and the warning triple for the write rate limit, which is a wait-and-send-again
+   * state rather than a failure of anything the reader can correct.
+   */
+  readonly variant: "notice--error" | "notice--warning";
   readonly offersBrowse: boolean;
 }
 
@@ -93,6 +99,7 @@ const UNREADABLE_FAILURE_STATUS =
 const BLANK_QUESTION_READING: ChallengeFailureReading = Object.freeze({
   questionMessage: BLANK_QUESTION_SENTENCE,
   statusMessage: "The challenge was not posted, and no request was sent.",
+  variant: "notice--error",
   offersBrowse: false,
 });
 
@@ -100,6 +107,7 @@ const BLANK_QUESTION_READING: ChallengeFailureReading = Object.freeze({
 const REFUSED_QUESTION_READING: ChallengeFailureReading = Object.freeze({
   questionMessage: REFUSED_QUESTION_SENTENCE,
   statusMessage: REFUSED_QUESTION_STATUS,
+  variant: "notice--error",
   offersBrowse: false,
 });
 
@@ -126,7 +134,12 @@ function describeFailure(error: unknown): ChallengeFailureReading | null {
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { questionMessage: null, statusMessage: UNREADABLE_FAILURE_STATUS, offersBrowse: false };
+    return {
+      questionMessage: null,
+      statusMessage: UNREADABLE_FAILURE_STATUS,
+      variant: "notice--error",
+      offersBrowse: false,
+    };
   }
   if (failure.code === LOCAL_MISSING_QUESTION_CODE) {
     return BLANK_QUESTION_READING;
@@ -139,6 +152,7 @@ function describeFailure(error: unknown): ChallengeFailureReading | null {
         questionMessage: null,
         statusMessage:
           "No demo account is selected, so the question was not posted. Choose a demo account in the demo account switcher and post it again — the selected account separates roles for the demonstration and is not a sign-in. The text you typed has been kept.",
+        variant: "notice--error",
         offersBrowse: false,
       };
     case 403:
@@ -146,6 +160,7 @@ function describeFailure(error: unknown): ChallengeFailureReading | null {
         questionMessage: null,
         statusMessage:
           "Posting a challenge needs a demo account whose role is buyer, and the selected demo account is not a buyer, so the question was not posted. Switch to a buyer in the demo account switcher and post it again. The text you typed has been kept.",
+        variant: "notice--error",
         offersBrowse: false,
       };
     case 404:
@@ -153,18 +168,21 @@ function describeFailure(error: unknown): ChallengeFailureReading | null {
         questionMessage: null,
         statusMessage:
           "This listing is no longer available, so the question was not posted. A hidden or removed listing leaves the public board.",
+        variant: "notice--error",
         offersBrowse: true,
       };
     case 429:
       return {
         questionMessage: null,
         statusMessage: `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(failure.retryAfterSeconds, "then post the question again.")} The text you typed has been kept.`,
+        variant: "notice--warning",
         offersBrowse: false,
       };
     default:
       return {
         questionMessage: null,
         statusMessage: `The question was not posted. ${withFullStop(failure.message)} The text you typed has been kept.`,
+        variant: "notice--error",
         offersBrowse: false,
       };
   }
@@ -291,7 +309,7 @@ export function ChallengeForm(props: ChallengeFormProps): JSX.Element {
           </div>
         )}
         {reading === null ? null : (
-          <div className="notice notice--error">
+          <div className={`notice ${reading.variant}`}>
             <p>{reading.statusMessage}</p>
             {reading.offersBrowse ? (
               <p>

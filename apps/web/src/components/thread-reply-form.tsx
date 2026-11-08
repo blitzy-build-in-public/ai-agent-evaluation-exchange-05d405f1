@@ -68,8 +68,8 @@ const THREAD_GONE_MESSAGE =
 const UNEXPECTED_FAILURE_MESSAGE = "The write could not be completed. Try again.";
 
 /**
- * One failed write, ready to render: the sentence, where it belongs, and whether the reply
- * form can also offer the way back to the board.
+ * One failed write, ready to render: the sentence, where it belongs, the notice variant it renders
+ * in, and whether the reply form can also offer the way back to the board.
  *
  * Only a failure of the field's own value sets `inField`, because only that case makes the
  * control's own value the thing a reader has to change; marking a field invalid for a missing
@@ -78,15 +78,27 @@ const UNEXPECTED_FAILURE_MESSAGE = "The write could not be completed. Try again.
 interface WriteFailure {
   /** The sentence the form renders — beside the field when `inField`, else in its status region. */
   readonly message: string;
+  /**
+   * The notice variant the status region renders: the warning triple for the write rate limit, which
+   * the reader waits out and sends again, and the error triple for every other refusal.
+   */
+  readonly variant: "notice--error" | "notice--warning";
   /** Whether the field's own value caused the failure, the only case that marks the field invalid. */
   readonly inField: boolean;
   /** Whether the thread is gone, so the reply form offers the board in the same explanation. */
   readonly threadGone: boolean;
 }
 
-/** A failure that belongs in the form's status region rather than beside its field. */
-function regionFailure(message: string): WriteFailure {
-  return { message, inField: false, threadGone: false };
+/**
+ * A failure that belongs in the form's status region rather than beside its field. Every refusal
+ * renders in the error triple unless its caller says otherwise, and only the write rate limit does:
+ * it is a state the reader simply waits out, not a fault of anything sent.
+ */
+function regionFailure(
+  message: string,
+  variant: "notice--error" | "notice--warning" = "notice--error",
+): WriteFailure {
+  return { message, variant, inField: false, threadGone: false };
 }
 
 /**
@@ -128,11 +140,11 @@ function describeCreateFailure(error: unknown): WriteFailure {
   }
   switch (failure.status) {
     case 400:
-      return { message: REFUSED_TITLE_MESSAGE, inField: true, threadGone: false };
+      return { message: REFUSED_TITLE_MESSAGE, variant: "notice--error", inField: true, threadGone: false };
     case 401:
       return regionFailure(NO_DEMO_ACCOUNT_MESSAGE);
     case 429:
-      return regionFailure(describeRateLimit(failure.retryAfterSeconds));
+      return regionFailure(describeRateLimit(failure.retryAfterSeconds), "notice--warning");
     default:
       // Every other failure the client raises already carries a sentence a page may render as it
       // stands — a transport failure, a server fault — and it carries no path, header or body.
@@ -155,13 +167,13 @@ function describeReplyFailure(error: unknown): WriteFailure {
   }
   switch (failure.status) {
     case 400:
-      return { message: REFUSED_REPLY_MESSAGE, inField: true, threadGone: false };
+      return { message: REFUSED_REPLY_MESSAGE, variant: "notice--error", inField: true, threadGone: false };
     case 401:
       return regionFailure(NO_DEMO_ACCOUNT_MESSAGE);
     case 404:
-      return { message: THREAD_GONE_MESSAGE, inField: false, threadGone: true };
+      return { message: THREAD_GONE_MESSAGE, variant: "notice--error", inField: false, threadGone: true };
     case 429:
-      return regionFailure(describeRateLimit(failure.retryAfterSeconds));
+      return regionFailure(describeRateLimit(failure.retryAfterSeconds), "notice--warning");
     default:
       return regionFailure(failure.message);
   }
@@ -211,7 +223,7 @@ export function ThreadCreateForm(props: ThreadCreateFormProps): JSX.Element {
     setCreated(null);
     const trimmedTitle = title.trim();
     if (trimmedTitle === "") {
-      setFailure({ message: EMPTY_TITLE_MESSAGE, inField: true, threadGone: false });
+      setFailure({ message: EMPTY_TITLE_MESSAGE, variant: "notice--error", inField: true, threadGone: false });
       return;
     }
 
@@ -284,7 +296,7 @@ export function ThreadCreateForm(props: ThreadCreateFormProps): JSX.Element {
         ) : null}
 
         {failure === null || failure.inField ? null : (
-          <div className="notice notice--error">
+          <div className={`notice ${failure.variant}`}>
             <p>{failure.message}</p>
           </div>
         )}
@@ -350,7 +362,7 @@ export function ThreadReplyForm(props: ThreadReplyFormProps): JSX.Element {
     setCreated(null);
     const trimmedBody = body.trim();
     if (trimmedBody === "") {
-      setFailure({ message: EMPTY_REPLY_MESSAGE, inField: true, threadGone: false });
+      setFailure({ message: EMPTY_REPLY_MESSAGE, variant: "notice--error", inField: true, threadGone: false });
       return;
     }
 
@@ -423,7 +435,7 @@ export function ThreadReplyForm(props: ThreadReplyFormProps): JSX.Element {
         ) : null}
 
         {failure === null || failure.inField ? null : (
-          <div className="notice notice--error">
+          <div className={`notice ${failure.variant}`}>
             <p>{failure.message}</p>
             {failure.threadGone ? (
               <p>

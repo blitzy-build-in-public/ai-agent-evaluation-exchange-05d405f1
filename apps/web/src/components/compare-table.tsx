@@ -2,13 +2,19 @@
  * The comparison: two to four listings side by side, each showing what its developer claims
  * beside the evidence that was actually measured.
  *
- * Three decisions a later reader could invert, and why they hold:
+ * Four decisions a later reader could invert, and why they hold:
  *
  *   - Per-listing `<section>` blocks rather than one wide `<table>`. A comparison has to be
  *     readable at 360 px, where criterion 9 asserts no page-level horizontal scroll, and the
  *     stylesheet's `.compare-table` grid stacks these blocks into one reading column each below
  *     its `min-width: 48rem` breakpoint. A table wide enough for four listings at 360 px would have
  *     to be scrolled sideways to be read at all.
+ *
+ *   - Every block renders the same groups in the same order: its title, then one wrapper per group
+ *     — claims, measured evidence, stated limitations, offering, and the footer a caller supplies.
+ *     The wrappers are what let the stylesheet lay every column on the section's own row tracks, so
+ *     the same group sits at the same height in every column instead of each column flowing to its
+ *     own heights.
  *
  *   - Claims and measured evidence are two separately headed groups inside every block. Comparing
  *     a developer's assertions against what was measured is what this view is for, so the two are
@@ -32,7 +38,9 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { NO_REPORT_LABEL } from "@adem/shared";
-import type { CompareEntry, ListingClaim } from "@adem/shared";
+import type { CompareEntry, ListingClaim, ReportOutcome } from "@adem/shared";
+
+import { describePricingModel } from "../labels";
 
 /**
  * Props for {@link CompareTable}. Both members are readonly: the comparison is a rendering of the
@@ -89,12 +97,19 @@ const NO_CLAIMS_NOTE = "This listing states no claims yet, so there is nothing t
 /**
  * One label/value pair of a listing's block. The label sits in the row with its value rather than
  * in a column header, so a block stacked at 360 px still says what each value is.
+ *
+ * `valueClass` is the value's own extra class. The outcome row is its only caller, because the
+ * outcome is the one fact a comparison renders as a chip, and it is an optional parameter rather
+ * than an optional property, so a caller with no extra class simply omits the argument.
  */
-function row(label: string, value: string): JSX.Element {
+function row(label: string, value: string, valueClass = ""): JSX.Element {
+  const valueClassName =
+    valueClass === "" ? "compare-table__value" : `compare-table__value ${valueClass}`;
+
   return (
     <div className="compare-table__row">
       <span className="compare-table__label">{label}</span>
-      <span className="compare-table__value">{value}</span>
+      <span className={valueClassName}>{value}</span>
     </div>
   );
 }
@@ -105,10 +120,21 @@ function hasText(value: string): boolean {
 }
 
 /**
- * The measured evidence of one listing: the report its latest version was scored in, the outcome,
- * the standard version and the label. A listing whose latest version has no report says so in
- * plain language instead, because a listing with no evaluation is an ordinary state of the
- * exchange and not an error.
+ * The classes the outcome row's value carries: the one chip every surface renders this datum with,
+ * so a comparison reads the same pill a listing card does. The row's label already says which fact
+ * the value is, so the chip holds the outcome word alone, and each direction is styled from its own
+ * token triple.
+ */
+function outcomeValueClass(outcome: ReportOutcome): string {
+  return outcome === "PASS" ? "chip chip--pass" : "chip chip--fail";
+}
+
+/**
+ * The measured evidence of one listing: the report its latest version was scored in, the outcome —
+ * rendered as a chip, because it is the decision this comparison exists to read across — the
+ * standard version and the label. A listing whose latest version has no report says so in plain
+ * language instead, because a listing with no evaluation is an ordinary state of the exchange and
+ * not an error.
  */
 function renderMeasuredEvidence(entry: CompareEntry): JSX.Element {
   if (
@@ -123,7 +149,9 @@ function renderMeasuredEvidence(entry: CompareEntry): JSX.Element {
   return (
     <>
       {entry.report_id === null ? null : row(REPORT_ROW_LABEL, entry.report_id)}
-      {entry.outcome === null ? null : row(OUTCOME_ROW_LABEL, entry.outcome)}
+      {entry.outcome === null
+        ? null
+        : row(OUTCOME_ROW_LABEL, entry.outcome, outcomeValueClass(entry.outcome))}
       {entry.standard_version_id === null
         ? null
         : row(STANDARD_VERSION_ROW_LABEL, entry.standard_version_id)}
@@ -215,20 +243,37 @@ export function CompareTable(props: CompareTableProps): JSX.Element | null {
               <Link to={`/listings/${entry.listing_id}`}>{entry.title}</Link>
             </h3>
 
-            <h4>{CLAIMS_HEADING}</h4>
-            {renderClaims(entry)}
+            {/* One wrapper per group, and the same five groups in every column, because the
+                stylesheet lays these wrappers on the section's own row tracks: equal counts are what
+                makes a track line up from column to column. The heading stays inside its group, so a
+                group is still titled wherever the tracks put it. */}
+            <div className="compare-table__group">
+              <h4>{CLAIMS_HEADING}</h4>
+              {renderClaims(entry)}
+            </div>
 
-            <h4>{MEASURED_EVIDENCE_HEADING}</h4>
-            {renderMeasuredEvidence(entry)}
+            <div className="compare-table__group">
+              <h4>{MEASURED_EVIDENCE_HEADING}</h4>
+              {renderMeasuredEvidence(entry)}
+            </div>
 
-            <h4>{STATED_LIMITATIONS_HEADING}</h4>
-            {renderLimitations(entry)}
+            <div className="compare-table__group">
+              <h4>{STATED_LIMITATIONS_HEADING}</h4>
+              {renderLimitations(entry)}
+            </div>
 
-            <h4>{OFFERING_HEADING}</h4>
-            {row(LICENSE_ROW_LABEL, entry.license_code)}
-            {row(PRICING_MODEL_ROW_LABEL, entry.pricing_model)}
+            <div className="compare-table__group">
+              <h4>{OFFERING_HEADING}</h4>
+              {row(LICENSE_ROW_LABEL, entry.license_code)}
+              {row(PRICING_MODEL_ROW_LABEL, describePricingModel(entry.pricing_model))}
+            </div>
 
-            {props.renderColumnFooter === undefined ? null : props.renderColumnFooter(entry)}
+            {/* The footer is a group of its own only so that the count stays equal: the compare
+                page passes it to every entry or to none, and a column carrying six children beside
+                one carrying five would shift every group below the difference. */}
+            {props.renderColumnFooter === undefined ? null : (
+              <div className="compare-table__group">{props.renderColumnFooter(entry)}</div>
+            )}
           </section>
         );
       })}

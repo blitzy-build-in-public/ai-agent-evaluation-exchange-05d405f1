@@ -177,8 +177,8 @@ function listSponsoredSlots(database: Database): SponsoredSlotListItem[] {
 /**
  * Registers this group's one route — `GET /sponsored-slots` — on the instance it is handed.
  *
- * The path is prefix-relative: the versioned prefix — `API_PREFIX`, from
- * `apps/api/src/server.ts` — is applied exactly once, by `./register-routes`, which calls this
+ * The path is prefix-relative: the versioned prefix — `API_PREFIX`, declared once in the sibling
+ * `./register-routes` — is applied exactly once, by `./register-routes`, which calls this
  * function with its encapsulated scope. That literal appears nowhere in this file and must not:
  * a group that spelled it would be the second place the prefix is decided.
  *

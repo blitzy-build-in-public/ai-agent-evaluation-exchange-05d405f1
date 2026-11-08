@@ -122,6 +122,18 @@ const FILTER_LABELS: readonly string[] = [
   "Sort by",
 ];
 
+/**
+ * The readable name the exchange presents each pricing model under on every surface that names one:
+ * a result card and a comparison column print this label rather than the value the payload carried,
+ * so the listings-step assertion below compares what a reader sees against that vocabulary.
+ */
+const PRICING_MODEL_LABELS: Readonly<Record<string, string>> = {
+  rent: "Rent",
+  purchase: "Purchase",
+  license: "License",
+  subscription: "Subscription",
+};
+
 /** The sections a listing detail page carries, beside the page's own heading. */
 const LISTING_DETAIL_SECTIONS: readonly string[] = [
   "Claims versus measured evidence",
@@ -667,7 +679,10 @@ test.describe("route walk", () => {
       card,
       `${LISTINGS_STEP}: the search should render a result card for ${JSON.stringify(listing.title)}, the first listing it returned`,
     ).toHaveCount(1);
-    await expect(card).toContainText(`Pricing model: ${listing.pricing_model}`);
+    // The card names the pricing model through the exchange's own vocabulary, so what it shows is the
+    // readable label for the value the payload carried rather than the stored value itself.
+    const pricingModelLabel = PRICING_MODEL_LABELS[listing.pricing_model];
+    await expect(card).toContainText(`Pricing model: ${pricingModelLabel}`);
     await expect(card).toContainText(`License: ${listing.license_code}`);
 
     if (listing.outcome === null || listing.standard_version_id === null || listing.label === null) {

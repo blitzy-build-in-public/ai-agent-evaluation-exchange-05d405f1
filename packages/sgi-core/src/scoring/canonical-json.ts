@@ -33,8 +33,8 @@ import type { JsonValue } from "@adem/sgi-fixtures";
  *
  * It carries the machine-readable code `unrenderable_value` — never a raw engine error name, which
  * is what a caller maps to its own refusal — and it is the one failure {@link canonicalize} raises,
- * for the three inputs JSON cannot carry as text: a value that refers to itself, a member that
- * cannot be read, and a value that is not JSON data at all.
+ * for the four inputs JSON cannot carry as text: a value that refers to itself, a member that
+ * cannot be read, a number JSON cannot represent, and a value that is not JSON data at all.
  *
  * `cause` is set for a member that could not be read and holds the engine's own error — the
  * `TypeError` a revoked `Proxy` raises, for instance. The message never repeats that error's text:
@@ -59,7 +59,7 @@ export class UnrenderableValueError extends Error {
  * explicit stack on the heap, so one more level costs memory rather than one more JavaScript call
  * frame, and a recording nested twenty thousand levels deep renders and scores.
  *
- * It refuses exactly three things, with an {@link UnrenderableValueError} carrying the
+ * It refuses exactly four things, with an {@link UnrenderableValueError} carrying the
  * machine-readable code `unrenderable_value`, rather than letting a raw engine error out:
  *
  * - A value that **refers to itself**, directly or through a container it holds. JSON carries a
@@ -67,6 +67,10 @@ export class UnrenderableValueError extends Error {
  * - A **member that cannot be read** — a revoked `Proxy`, an accessor that throws. The engine's own
  *   error is attached as the refusal's `cause`, because it is the record of why the member could not
  *   be read; the message a caller reads is this module's own words.
+ * - A **number JSON cannot represent** — `Infinity`, `-Infinity` and `NaN`, each of which
+ *   `JSON.stringify` writes as `null`. `JSON.parse` reaches them from ordinary JSON text (`1e999`
+ *   parses to `Infinity`), and a value silently rendered as `null` would compare equal to an
+ *   expected `null` and would store evidence that differs from what the candidate submitted.
  * - A value that is **not JSON data at all** — `undefined`, a function, a symbol, a bigint — whose
  *   type the message names.
  *
@@ -85,10 +89,12 @@ export class UnrenderableValueError extends Error {
  *   fixture data carries small non-negative integers, so no rounding question
  *   arises here and no rounding rule is invented in this file: the product's one
  *   documented half-up rounding point is the founder-allocation arithmetic in the
- *   commerce simulation package, which nothing here reaches. Two values the JSON
- *   data model cannot express consequently need no branch — `NaN` and `Infinity`
- *   are not JSON values — and `-0` renders as `0`, so `-0` and `0` canonicalise
- *   equal.
+ *   commerce simulation package, which nothing here reaches. A number the JSON
+ *   data model cannot express — `Infinity`, `-Infinity` and `NaN` — is refused as
+ *   `unrenderable_value` rather than rendered, because `JSON.stringify` writes one
+ *   as `null`: a value silently rendered as `null` would compare equal to an
+ *   expected `null` and would store evidence differing from what was submitted.
+ *   `-0` renders as `0`, so `-0` and `0` canonicalise equal.
  * - An **array** renders its elements in order, separated by `,` inside `[` and
  *   `]`. The order is preserved exactly: elements are never sorted and never
  *   deduplicated, because their order is data.
@@ -103,9 +109,9 @@ export class UnrenderableValueError extends Error {
  * output or a candidate's recorded output supplies it.
  * @returns The canonical JSON text of `value`.
  * @throws {UnrenderableValueError} when `value` refers to itself, holds a member that cannot be
- * read, or is a value that is not JSON data. The error carries `code: "unrenderable_value"`, so a
- * caller maps a stable code rather than reading whichever name the engine's own error happened to
- * have.
+ * read, is a number JSON cannot represent, or is a value that is not JSON data. The error carries
+ * `code: "unrenderable_value"`, so a caller maps a stable code rather than reading whichever name
+ * the engine's own error happened to have.
  */
 export function canonicalize(value: JsonValue): string {
   const frames: Frame[] = [{ kind: "value", value }];
@@ -128,7 +134,19 @@ export function canonicalize(value: JsonValue): string {
         scheduleContainer(frame.value, frames, ancestors);
       } else if (frame.value === null) {
         out.push("null");
-      } else if (typeof frame.value === "string" || typeof frame.value === "number") {
+      } else if (typeof frame.value === "string") {
+        out.push(JSON.stringify(frame.value));
+      } else if (typeof frame.value === "number") {
+        // `JSON.stringify` writes `null` for `Infinity`, `-Infinity` and `NaN`, and `JSON.parse`
+        // reaches those from ordinary JSON text — `1e999` parses to `Infinity`, and a submission's
+        // recorded output is unconstrained data. A number silently rendered as `null` would compare
+        // equal to an expected `null` and would store evidence stating `null` rather than what was
+        // submitted, so the value is refused here instead of being rewritten to one nobody sent.
+        if (!Number.isFinite(frame.value)) {
+          throw new UnrenderableValueError(
+            `the number ${String(frame.value)} is not a value JSON data can carry, so it has no canonical JSON text`,
+          );
+        }
         out.push(JSON.stringify(frame.value));
       } else if (typeof frame.value === "boolean") {
         out.push(frame.value ? "true" : "false");

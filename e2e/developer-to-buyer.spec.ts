@@ -48,7 +48,15 @@ const API_PREFIX = "/api/v1";
 
 /******* The one listing this loop creates: fixed, fictional and independent of the seed's rows */
 
-/** The title the developer publishes. Fictional, and no seeded listing carries it. */
+/**
+ * The title the developer publishes. Fictional, and no seeded listing carries it.
+ *
+ * It is not a run-unique identifier, and nothing in this file is located by it alone: a server the
+ * configuration reuses, or a repeated run over the one database the `webServer` seeds, leaves an
+ * earlier run's listing carrying this same title in place. The listing this loop created is located
+ * through the address its own create response named (see {@link listingBlockById}), and this title is
+ * used for what a reader uses it for — the search a buyer types and the copy the pages render.
+ */
 const LISTING_TITLE = "Loop Demo Handling Agent";
 
 /** The one-paragraph summary the create form is filled with. */
@@ -60,6 +68,12 @@ const LICENSE_CODE = "MIT";
 
 /** The pricing model the listing declares, and therefore the offer model the checkout selects. */
 const PRICING_MODEL = "purchase";
+
+/**
+ * The readable name the exchange presents {@link PRICING_MODEL} under on the surfaces a buyer reads
+ * it on: the search card and the comparison column print this label rather than the stored value.
+ */
+const PRICING_MODEL_LABEL = "Purchase";
 
 /** The category the listing is placed in: one of the four the seeded catalogue publishes. */
 const CATEGORY_LABEL = "Order intake";
@@ -285,9 +299,29 @@ function disclosureBanner(page: Page): Locator {
   return page.getByRole("banner").getByRole("paragraph").getByText(DEMO_AUTHENTICATION_LABEL, EXACT);
 }
 
-/** One listing's block on the developer workspace, or one result card on the listings page. */
+/**
+ * One listing's block on the developer workspace, or one result card on the listings page, located
+ * by the title it carries. A title is only safe for looking up a seeded row: for a listing this loop
+ * created, use {@link listingBlockById}.
+ */
 function listingBlock(page: Page, title: string): Locator {
   return page.getByRole("article").filter({ hasText: title });
+}
+
+/**
+ * The block of the listing whose identifier this loop was answered with, located by the address that
+ * listing links to rather than by its title.
+ *
+ * **A title is not an identifier.** A server the configuration reuses, or a repeated run over the one
+ * database the `webServer` seeds, already holds an earlier run's listing under this spec's fixed
+ * title: two blocks then carry that title — this run's and the one before it — and a filter by text
+ * alone cannot say which is which. A listing's own address is decided by the write this run made, so
+ * a block located through it is this run's listing whatever else the database holds.
+ */
+function listingBlockById(page: Page, listingId: string): Locator {
+  return page
+    .getByRole("article")
+    .filter({ has: page.locator(`a[href$="/listings/${listingId}"]`) });
 }
 
 /**
@@ -390,9 +424,13 @@ test("the developer-to-buyer loop runs end to end on seed data", async ({ page }
     // The page confirms the write in its own words, naming the record it produced.
     await expect(page.getByText(/Listing published:/)).toContainText(listingId);
 
-    // …and the listing is now among this developer's own listings.
-    const block = listingBlock(page, LISTING_TITLE);
-    await expect(block, "the published listing must appear in the developer's own list").toHaveCount(1);
+    // …and the listing is now among this developer's own listings, located by the address the create
+    // response above named rather than by a title another row may also carry.
+    const block = listingBlockById(page, listingId);
+    await expect(
+      block,
+      `exactly one block in the developer's own list must carry the listing this run published (${listingId})`,
+    ).toHaveCount(1);
     await expect(block.getByRole("link", { name: LISTING_TITLE, ...EXACT })).toBeVisible();
 
     // A listing is measured by its versions, so the loop publishes the version it will evaluate.
@@ -612,13 +650,18 @@ test("the developer-to-buyer loop runs end to end on seed data", async ({ page }
     ]);
     expect(searched.status(), "a search answers 200").toBe(200);
 
-    // The listing the developer published, found by a buyer who knows nothing but its title, carrying
-    // the terms it is offered under and the label of the report that measured it.
-    const found = listingBlock(page, LISTING_TITLE);
-    await expect(found, "the buyer's search must return the developer's listing").toHaveCount(1);
+    // The listing the developer published, found by a buyer who knows nothing but its title,
+    // carrying the terms it is offered under and the label of the report that measured it. The block
+    // itself is located by the address this run's create response named, because the search this
+    // buyer typed also matches an earlier run's listing when the server has been reused.
+    const found = listingBlockById(page, listingId);
+    await expect(
+      found,
+      `the buyer's search must return exactly one block for the listing this run published (${listingId})`,
+    ).toHaveCount(1);
     await expect(found.getByRole("link", { name: LISTING_TITLE, ...EXACT })).toBeVisible();
     await expect(found).toContainText(`Label: ${REPORT_LABEL_VERIFIED_IN_DEMO}`);
-    await expect(found).toContainText(`Pricing model: ${PRICING_MODEL}`);
+    await expect(found).toContainText(`Pricing model: ${PRICING_MODEL_LABEL}`);
     await expect(found).toContainText(`License: ${LICENSE_CODE}`);
 
     // A search that matches nothing is an ordinary successful state, and the page explains it with the
@@ -657,7 +700,7 @@ test("the developer-to-buyer loop runs end to end on seed data", async ({ page }
     }
     const partnerTitle = requireText(partner.title, "the compared listing's title");
 
-    const found = listingBlock(page, LISTING_TITLE);
+    const found = listingBlockById(page, listingId);
     const partnerBlock = listingBlock(page, partnerTitle);
     await expect(partnerBlock, "the listing this loop compares against must be in the results").toHaveCount(
       1,
@@ -699,7 +742,7 @@ test("the developer-to-buyer loop runs end to end on seed data", async ({ page }
     await expect(column).toContainText("License");
     await expect(column).toContainText(LICENSE_CODE);
     await expect(column).toContainText("Pricing model");
-    await expect(column).toContainText(PRICING_MODEL);
+    await expect(column).toContainText(PRICING_MODEL_LABEL);
     await expect(column).toContainText("Standard version");
     await expect(column).toContainText(standardVersionId);
     await expect(column).toContainText("Report label");
@@ -740,7 +783,7 @@ test("the developer-to-buyer loop runs end to end on seed data", async ({ page }
     // Back to the results, then into the listing through its own card — the walk a buyer makes.
     await page.getByRole("link", { name: "Listings", exact: true }).click();
     await expect(page).toHaveURL(/\/listings$/);
-    await listingBlock(page, LISTING_TITLE)
+    await listingBlockById(page, listingId)
       .getByRole("link", { name: LISTING_TITLE, ...EXACT })
       .click();
     await expect(page).toHaveURL(new RegExp(`/listings/${listingId}$`));

@@ -315,12 +315,22 @@ function shannonEntropyPerCharacter(value: string): number {
  */
 const ADDRESS_SEPARATOR = String.fromCharCode(64);
 
-const LOCAL_PART_SOURCE = '[A-Za-z0-9._%+-]+';
+/** The characters a local part is made of, as a character class and as the run built from it. */
+const LOCAL_PART_CHARACTER_SOURCE = '[A-Za-z0-9._%+-]';
+const LOCAL_PART_SOURCE = `${LOCAL_PART_CHARACTER_SOURCE}+`;
 const DOMAIN_LABEL_SOURCE = '[A-Za-z0-9_-]+';
 const EMAIL_CANDIDATE_SOURCE = `${LOCAL_PART_SOURCE}${ADDRESS_SEPARATOR}${DOMAIN_LABEL_SOURCE}(?:\\.${DOMAIN_LABEL_SOURCE})+`;
 const DOMAIN_LABEL_FORMAT_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const TOP_LEVEL_LABEL_PATTERN = /^[A-Za-z]{2,63}$/;
 const IPV4_ADDRESS_PATTERN = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/**
+ * One character of a local part, for the walk that decides which positions an address could begin at.
+ *
+ * Built from {@link LOCAL_PART_CHARACTER_SOURCE}, so the walk and the candidate pattern can never
+ * disagree about what a local part is made of.
+ */
+const LOCAL_PART_CHARACTER_PATTERN = new RegExp(LOCAL_PART_CHARACTER_SOURCE);
 
 /**
  * The address line of a git commit header. Its address is the committing tool's identity — every
@@ -349,6 +359,14 @@ const LOCKFILE_DEPRECATION_FIELD_PATTERN = /"deprecated"\s*:\s*"/;
  * commit header, and an address inside a lockfile or inside an upstream deprecation notice — both
  * of which carry a third party's identity rather than the repository's own. A hand-written manifest
  * and every text file are still checked in full.
+ *
+ * The candidate is attempted at one position at a time, and the walk then steps to the next position
+ * an address could begin at, rather than searching for one from every position of the line. Searching
+ * would let the greedy local part consume the rest of the line at every position before it fails at
+ * the separator, which costs time quadratic in the line's length: one committed bundle or one line of
+ * JSON would make the scan of that line take longer than any CI run may. {@link nextEmailCandidateStart}
+ * is what makes the two readings the same one, so detection is unchanged — the walk returns exactly the
+ * non-overlapping matches, leftmost first, that the search returns.
  */
 function matchEmailAddress(context: RuleLineContext): readonly RuleMatch[] {
   if (
@@ -358,20 +376,46 @@ function matchEmailAddress(context: RuleLineContext): readonly RuleMatch[] {
   ) {
     return [];
   }
+  const text = context.text;
   const matches: RuleMatch[] = [];
-  const pattern = new RegExp(EMAIL_CANDIDATE_SOURCE, 'g');
-  for (const candidate of context.text.matchAll(pattern)) {
+  const candidatePattern = new RegExp(EMAIL_CANDIDATE_SOURCE, 'y');
+  let from = 0;
+  while (from < text.length) {
+    candidatePattern.lastIndex = from;
+    const candidate = candidatePattern.exec(text);
+    if (candidate === null) {
+      from = nextEmailCandidateStart(text, from);
+      continue;
+    }
     const value = candidate[0];
-    const index = candidate.index ?? -1;
-    if (index < 0 || !isAddressLike(value)) {
-      continue;
+    const index = candidate.index;
+    if (isAddressLike(value) && !(index > 0 && /[\w@]/.test(text.charAt(index - 1)))) {
+      matches.push({ ruleId: EMAIL_ADDRESS_RULE_ID, excerpt: maskExcerpt(value) });
     }
-    if (index > 0 && /[\w@]/.test(context.text.charAt(index - 1))) {
-      continue;
-    }
-    matches.push({ ruleId: EMAIL_ADDRESS_RULE_ID, excerpt: maskExcerpt(value) });
+    from = index + value.length;
   }
   return matches;
+}
+
+/**
+ * The next position an address could begin at, given that the position `from` did not begin one.
+ *
+ * Returns the line's length when no position is left. From every position inside one run of local-part
+ * characters the greedy local part reaches the same separator and then the same domain, so an attempt
+ * that fails at one of them fails at all of them and the walk passes over the rest of that run in one
+ * step. A position holding a character a local part is not made of is passed over as well, because a
+ * local part needs at least one character to begin with. The line is thus walked once, whatever its
+ * length.
+ */
+function nextEmailCandidateStart(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && LOCAL_PART_CHARACTER_PATTERN.test(text.charAt(index))) {
+    index += 1;
+  }
+  while (index < text.length && !LOCAL_PART_CHARACTER_PATTERN.test(text.charAt(index))) {
+    index += 1;
+  }
+  return index;
 }
 
 /** Whether a matched candidate is a complete address rather than a scope or a bare pair. */

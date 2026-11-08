@@ -140,6 +140,16 @@ function describeFailure(error: unknown): string {
 }
 
 /**
+ * The notice variant a refusal renders in, chosen by the status the service answered with: the warning
+ * triple for the write rate limit, which asks the reader to wait and send the same request again, and
+ * the error triple for every other refusal. A value carrying no status is not a throttled write.
+ */
+function describeRefusalVariant(error: unknown): "notice--error" | "notice--warning" {
+  const facts = readWriteFailure(error);
+  return facts !== null && facts.status === 429 ? "notice--warning" : "notice--error";
+}
+
+/**
  * The offer selector and the simulated checkout.
  *
  * One outcome is shown and announced at a time: each submit clears the previous result, so the
@@ -269,7 +279,9 @@ export function CheckoutPanel(props: CheckoutPanelProps): JSX.Element {
           reader is told about is the one the markup declares. The node exists from the first
           render and only its content changes, which is what makes the announcement reliable. */}
       <div className="status-region" role="status" aria-live="polite">
-        {error === null ? null : <p className="notice notice--error">{describeFailure(error)}</p>}
+        {error === null ? null : (
+          <p className={`notice ${describeRefusalVariant(error)}`}>{describeFailure(error)}</p>
+        )}
 
         {transaction === null ? null : (
           <div className="notice notice--success">

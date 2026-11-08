@@ -57,7 +57,10 @@
  * the catalogue — an announcement written by a component about to disappear is an announcement no one
  * hears. The page therefore owns the sentence, keyed to the standard it concerns so switching
  * standard cannot carry a stale message across, and the control owns only the refusals that leave it
- * on screen.
+ * on screen. The sentence names the governance event the review appended — its identifier, its type,
+ * the account that recorded it and the ground it states, or that it recorded none — because that
+ * event is the decision's record: the proposal's status column moves while an appended event never
+ * does, and the operator's reason is held nowhere else.
  *
  * **Presentation only.** No business rule, no outcome derivation, no label derivation, no arithmetic
  * and no persistence live here: every number, status and identifier is rendered as the service
@@ -80,6 +83,7 @@ import {
   WRITE_RATE_LIMIT_MAX,
 } from "@adem/shared";
 import type {
+  GovernanceEvent,
   ProposalReviewStatus,
   ProposalStatus,
   StandardProposal,
@@ -94,7 +98,7 @@ import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { StandardsProposalForm } from "../components/standards-proposal-form";
 import { findDemoAccount } from "../data/demo-accounts";
-import { isRecord, readNumber, statusOf } from "../payload-reading";
+import { Timestamp, isRecord, readNumber, statusOf } from "../payload-reading";
 
 /**
  * The route this page is mounted at. It is spelled here rather than shared, because the page is its
@@ -275,8 +279,40 @@ const REVIEW_DECIDED_HINT =
   "The decision was recorded. The proposal list is being read again, so the status shown above is about to be the one the service holds.";
 
 /** The sentence the page announces after a decision the service applied. */
-function describeDecision(proposalId: string, status: ProposalReviewStatus): string {
-  return `Proposal ${proposalId} is now ${status}: the review moved its status and appended a governance event. The catalogue has been read again, so the status shown is the one the service holds.`;
+function describeDecision(
+  proposalId: string,
+  status: ProposalReviewStatus,
+  event: GovernanceEvent | null,
+): string {
+  const decision = `Proposal ${proposalId} is now ${status}: the review moved its status and appended a governance event.`;
+
+  // The event is the decision's own record — the status column moves while an appended event never
+  // does — so the announcement names it and states the ground it carries. An answer that carried no
+  // event is reported as such rather than passed over: a reader told only that the status moved would
+  // not know whether the trail exists.
+  const trail =
+    event === null
+      ? "The service's answer carried no record of that event, so its trail cannot be shown here."
+      : `The event is ${event.id}, of type ${event.event_type}, recorded by ${event.actor_account_id}. ${statedGround(event.reason)}`;
+
+  return `${decision} ${trail} The catalogue has been read again, so the status shown is the one the service holds.`;
+}
+
+/**
+ * The ground a governance event states, as the announcement reads it, or this page's sentence for an
+ * event that recorded none.
+ *
+ * A reason is optional on both decision rows, and a decision taken without one stores the absence —
+ * `null` in the event's column — so both readings mean the same thing to a reader and neither renders
+ * a blank or an empty quotation. The text itself is rendered exactly as the event stores it, because
+ * it is the operator's own words and the record of why the decision was taken.
+ */
+function statedGround(reason: string | null): string {
+  const stated = reason === null ? "" : reason.trim();
+
+  return stated === ""
+    ? "It records no stated ground: a decision is not obliged to give one."
+    : `The ground it states is: "${reason}"`;
 }
 
 /** The sentence the page announces after a proposal it was shown had already been decided. */
@@ -663,12 +699,21 @@ type ReviewRefusal =
       /** A refusal this control explains beside the actions, which stay available. */
       readonly kind: "explained";
       readonly sentence: string;
+      /**
+       * The notice variant the explanation renders in: the warning triple for the write rate limit,
+       * which the operator waits out and sends the decision again, and the error triple for every
+       * other refusal.
+       */
+      readonly variant: "notice--error" | "notice--warning";
     }
   | {
       /** A refusal that the page's region announces, because the list on screen is out of date. */
       readonly kind: "stale";
       readonly sentence: string;
     };
+
+/** The refusal this control's own region renders, which is the explained reading. */
+type ExplainedRefusal = Extract<ReviewRefusal, { readonly kind: "explained" }>;
 
 /**
  * A named property of a raised value as a finite number, or `null`.
@@ -697,15 +742,15 @@ function readNumberOf(error: unknown, key: string): number | null {
 function describeReviewRefusal(error: unknown, proposalId: string): ReviewRefusal {
   const status = statusOf(error);
   if (status === null) {
-    return { kind: "explained", sentence: UNEXPECTED_REFUSAL };
+    return { kind: "explained", sentence: UNEXPECTED_REFUSAL, variant: "notice--error" };
   }
   switch (status) {
     case 400:
-      return { kind: "explained", sentence: REFUSED_REVIEW_REFUSAL };
+      return { kind: "explained", sentence: REFUSED_REVIEW_REFUSAL, variant: "notice--error" };
     case 401:
-      return { kind: "explained", sentence: NO_DEMO_ACCOUNT_REFUSAL };
+      return { kind: "explained", sentence: NO_DEMO_ACCOUNT_REFUSAL, variant: "notice--error" };
     case 403:
-      return { kind: "explained", sentence: NOT_OPERATOR_REFUSAL };
+      return { kind: "explained", sentence: NOT_OPERATOR_REFUSAL, variant: "notice--error" };
     case 404:
       return { kind: "stale", sentence: describeNotHeld(proposalId) };
     case 409:
@@ -714,13 +759,14 @@ function describeReviewRefusal(error: unknown, proposalId: string): ReviewRefusa
       return {
         kind: "explained",
         sentence: describeThrottledReview(readNumberOf(error, "retryAfterSeconds")),
+        variant: "notice--warning",
       };
     case 0:
       // No response arrived at all, which the client reports as this status and which is a state of its
       // own rather than a fault of the request that was sent.
-      return { kind: "explained", sentence: TRANSPORT_REFUSAL };
+      return { kind: "explained", sentence: TRANSPORT_REFUSAL, variant: "notice--error" };
     default:
-      return { kind: "explained", sentence: UNEXPECTED_REFUSAL };
+      return { kind: "explained", sentence: UNEXPECTED_REFUSAL, variant: "notice--error" };
   }
 }
 
@@ -1036,9 +1082,7 @@ function VersionDetail(props: {
           {STANDARD_STATUS_LABELS[version.status]}. {STANDARD_STATUS_SENTENCES[version.status]}
         </dd>
         <dt>Published</dt>
-        <dd>
-          <code>{version.published_at}</code>
-        </dd>
+        <dd><Timestamp value={version.published_at} /></dd>
         <dt>Fixture cases</dt>
         <dd>{version.total_cases}</dd>
         <dt>Critical cases</dt>
@@ -1149,7 +1193,9 @@ function VersionSwitcher(props: {
  * **It announces only what leaves it on screen.** A decided proposal stops being `submitted`, so this
  * control is unmounted by the same update that re-reads the catalogue; a sentence written by a
  * component about to disappear is a sentence no one hears. The durable announcement therefore belongs
- * to the page, and this control's own region carries the refusals that leave it mounted.
+ * to the page, and this control's own region carries the refusals that leave it mounted. What it hands
+ * the page is the whole sentence, the governance event the review appended included, because the event
+ * is read from this call's answer and nowhere else on the page has seen it.
  *
  * **Nothing here can touch a measurement.** A decision moves a proposal's status and appends a
  * governance event. No control here publishes a version, rewrites a threshold or reaches a report, and
@@ -1173,7 +1219,7 @@ function ProposalReviewControl(props: {
   const [reason, setReason] = useState<string>("");
   const [pending, setPending] = useState<ProposalReviewStatus | null>(null);
   const [isDecided, setIsDecided] = useState<boolean>(false);
-  const [refusal, setRefusal] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<ExplainedRefusal | null>(null);
 
   const isBusy = pending !== null || isDecided;
 
@@ -1201,12 +1247,15 @@ function ProposalReviewControl(props: {
     // outside the block below, so a defect in the page's own callback is never reported to the operator
     // as a refused decision.
     let announcement: string | null = null;
-    let refusalSentence: string | null = null;
+    let refusalReading: ExplainedRefusal | null = null;
 
     try {
-      await reviewProposal(props.proposalId, body);
+      const reviewed = await reviewProposal(props.proposalId, body);
       setIsDecided(true);
-      announcement = describeDecision(props.proposalId, status);
+      // The announcement names the governance event the service appended, read from the review's own
+      // answer: the event is the decision's durable record, and the only place the ground the operator
+      // stated with it is held.
+      announcement = describeDecision(props.proposalId, status, reviewed.event);
     } catch (error: unknown) {
       const reading = describeReviewRefusal(error, props.proposalId);
       if (reading.kind === "stale") {
@@ -1215,13 +1264,13 @@ function ProposalReviewControl(props: {
         // that cannot succeed as the page currently holds it.
         announcement = reading.sentence;
       } else {
-        refusalSentence = reading.sentence;
+        refusalReading = reading;
       }
     } finally {
       setPending(null);
     }
 
-    setRefusal(refusalSentence);
+    setRefusal(refusalReading);
     if (announcement !== null) {
       props.onReviewed(announcement);
     }
@@ -1292,8 +1341,8 @@ function ProposalReviewControl(props: {
           before the refusal it announces arrives. `role="status"` is already a polite live region. */}
       <div className="status-region" role="status">
         {refusal === null ? null : (
-          <div className="notice notice--error">
-            <p>{refusal}</p>
+          <div className={`notice ${refusal.variant}`}>
+            <p>{refusal.sentence}</p>
           </div>
         )}
       </div>

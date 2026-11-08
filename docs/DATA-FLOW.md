@@ -17,10 +17,11 @@ restated here — this file follows the data.
   prefix `/api/v1`, declared as `API_PREFIX` in `apps/api/src/routes/register-routes.ts` and applied
   once by Fastify's own encapsulation, so a route group owns prefix-relative paths only and no group
   file contains the literal.
-- **One failure body.** Every failure — validation, auth, role, not-found, unprocessable, throttling,
-  internal — answers the one shape `{ "error": { "code": "<code>", "message": "<message>" } }`, built by
-  the `envelope` function in `apps/api/src/errors/error-envelope.ts` and sent by the composition root's
-  single error handler. The status for a code comes from the one map in
+- **One failure body.** Every failure — a payload or a media type the framework itself refuses,
+  validation, auth, role, not-found, unprocessable, throttling, internal — answers the one shape
+  `{ "error": { "code": "<code>", "message": "<message>" } }`, built by the `envelope` function in
+  `apps/api/src/errors/error-envelope.ts` and sent by the composition root's single error handler. The
+  status for a code comes from the one map in
   `apps/api/src/errors/error-codes.ts`; no route chooses a status and no handler writes an error body of
   its own.
 - **Reads are public, with four exceptions.** The three operator reads `GET /ledger/marketplace`,
@@ -50,8 +51,10 @@ restated here — this file follows the data.
 
 1. **Schema validation.** The route's own JSON schema — the ones used by more than one workspace live in
    `packages/shared/src/schemas/` — validates the query string, the path parameters and the body. A value
-   that fails `type`, `enum` or `minimum` is `400 validation_error`. Defaults are applied at this point,
-   which is why a client may omit the listing search's `sort` and `page`.
+   that fails `type`, `enum`, `minimum` or `maxLength` is `400 validation_error`. Every free-text field
+   carries a stated `maxLength`, so an over-long value is refused here rather than stored and then carried
+   by every read that serves it. Defaults are applied at this point, which is why a client may omit the
+   listing search's `sort` and `page`.
 2. **One read.** The handler issues a single read: a domain call into `@adem/sgi-core` or
    `@adem/commerce-sim`, or a statement against the tables `apps/api` owns. Nothing is cached between
    requests and no second round trip is made to assemble an answer.
@@ -62,24 +65,32 @@ restated here — this file follows the data.
 **Empty is an ordinary state, never an error.** A read that matches nothing answers `200` with
 `items: []`, and the pages that render such a collection render an explanation rather than an error
 trace. Paging is fixed: page size is `LISTING_PAGE_SIZE` = 20 from `packages/shared/src/constants.ts`,
-`page` is the only paging input (an integer with a lower bound of 1), and the search query contract
-declares no page-size property, so `limit`, `size` and `per_page` are not part of it.
+`page` is the only paging input (an integer of 1 or more; a page whose offset the store cannot
+address is refused the row's `400` with a sentence naming the parameter), and the search query
+contract declares no page-size property, so
+`limit`, `size` and `per_page` are not part of it.
 
 **A concrete example — `GET /api/v1/listings?q=depot&page=2`.**
 
 1. `listingSearchQuerySchema` validates `q` and `page`; `?page=0` would fail `minimum: 1` and answer
    `400 validation_error`, and `?model=bogus` would fail the `PRICING_MODELS` enum the same way.
-2. `apps/api/src/routes/listings.ts` runs one batched statement that joins each matching listing to its
-   newest version and to that version's newest report, ordered by a deterministic total order ending in
-   `listings.id` so two calls answer byte-identical bodies.
+2. `apps/api/src/routes/listings.ts` runs two statements over one row source that joins each matching
+   listing to its newest version and to that version's newest report — the count that fills `total` and
+   the page itself, ordered by a deterministic total order ending in `listings.id` so two calls answer
+   byte-identical bodies. A `category` filter is resolved first, in one statement of its own, and a
+   `standard` filter in two — the standard by its code, then its version row — so a value that names
+   no category or no published standard version answers `400`.
 3. The response is `200 { items, total, page }`. `items` holds that page's summaries — identity,
    category, developer handle, pricing model, license, latest version string, and the latest report's
    outcome, standard version and label — where a version that has never been evaluated states `null` in
-   those last three rather than a substituted word. `total` counts the filtered set, and a page past the
-   last is `200` with `items: []`.
+   those last three rather than a substituted word. `total` counts the filtered set, a page past the
+   last is `200` with `items: []`, and a page whose offset the store cannot bind is refused as an
+   invalid parameter, `400 validation_error`, with a sentence naming it.
 
 **Three more public reads a contributor meets first.** `GET /api/v1/listings/{id}` answers `200` with the
-listing's versions, claims, evidence and limitations, or `404` for an identifier that names no listing;
+listing's most recent page of versions together with the claims those versions make, its evidence and its
+limitations, or `404` for an identifier that names no listing; the pages of the history behind that one
+are reached through the read's own `page`, which `docs/SCHEMA.md` section 8 bounds;
 a listing an operator has hidden is still readable by the operator and `404` for everyone else.
 `GET /api/v1/compare?ids=a,b,c` answers `200` with one column per requested listing in request order,
 `400` for a list outside two to four distinct identifiers, and `404` if any identifier names no listing
@@ -168,9 +179,10 @@ measured report. It is synchronous — there is no queue and no worker — and t
    header, then `403` for a resolvable account whose role is not `developer`.
 2. **The body.** `{ candidate_version_id, standard_version_id, recorded_outputs: [{ case_id, output }] }`
    — the candidate version, the standard version, and one recorded output per fixture case. There is
-   **no retest field**, and that is structural rather than conventional: the body's
-   `additionalProperties: false` means Fastify removes an unexpected field before the handler runs, so a
-   client that sent a retest link would have it dropped rather than accepted.
+   **no retest field**, and that is structural rather than conventional: the scope's request-body
+   policy holds the body to the schema's `additionalProperties: false`, so a client that sent a retest
+   link is answered `400 validation_error` rather than having the field dropped or accepted — and a
+   value of the wrong JSON type for a declared field is refused the same way.
 3. **The candidate version, from this workspace's own table.** One row of `listing_versions` joined to
    its listing, addressed by `candidate_version_id`. No row is `404 not_found`; a version whose listing
    belongs to another developer is `403 forbidden`. The row also supplies `is_fixture_candidate`, the one
@@ -186,9 +198,12 @@ measured report. It is synchronous — there is no queue and no worker — and t
    fixture case is refused as `incomplete_submission`, which maps to `422`, **before anything is written
    at all**: a rejected submission leaves zero new rows in `evaluation_reports`, `report_case_results` and
    `ledger_entries`. Each remaining case is then decided by comparing the canonical JSON of its recorded
-   output against the canonical JSON of its expected output. Nothing submitted is executed: a candidate is
-   declarative data compared as text, and there is no evaluation of submitted content anywhere on this
-   path.
+   output against the canonical JSON of its expected output, and a recorded output holding a value
+   canonical JSON cannot represent — a number JSON cannot carry, such as the `1e999` a client can send
+   because the submission schema leaves `output` unconstrained, a value that refers to itself, a member
+   that cannot be read, or a value that is not JSON data — is refused as `unrenderable_value`, which maps
+   to `400`, before anything is written. Nothing submitted is executed: a candidate is declarative data
+   compared as text, and there is no evaluation of submitted content anywhere on this path.
 6. **The label.** `deriveReportLabel` in `packages/sgi-core/src/reports/build-report.ts` decides it from
    the candidate version's stored `is_fixture_candidate` flag alone. The rule is **total over every
    report** — a failed report carries exactly the label a passed one does, because the label states where
@@ -272,9 +287,11 @@ thresholds, its case count, its critical-case count and its rubric reference are
 evaluator reads them from the stored row. Approving a proposal does not publish a version, and no route
 in this release publishes one — the versions are seeded, and the standards routes publish nothing but
 read. The event vocabulary carries `standard_version_published` for that publication path, which is a
-new row announcing a new version and never an amendment to an existing one. The thresholds and the
-process are `docs/STANDARD-SGI-SO-1.0.0.md` and `docs/governance/SGI-PROPOSALS.md`; the column that holds
-them is `docs/SCHEMA.md`.
+new row announcing a new version and never an amendment to an existing one; the registry's insert path
+appends that event in the same transaction as the row, so a published version and the record of its
+publication cannot diverge, and a publication whose label is already stored appends nothing. The
+thresholds and the process are `docs/STANDARD-SGI-SO-1.0.0.md` and `docs/governance/SGI-PROPOSALS.md`;
+the column that holds them is `docs/SCHEMA.md`.
 
 **An appeal is opened against a report and ruled through an appended event.** A developer calls
 `POST /api/v1/evaluations/{id}/appeals` (developer, `201` with the appeal in status `open`; `404` for a
@@ -423,11 +440,13 @@ than being rewritten to a generic name, and takes its status from the one map in
 
 | Status | Code | Meaning |
 | --- | --- | --- |
-| `400` | `validation_error` | The request failed the shape its endpoint validates — a value that fails `type`, `enum` or `minimum`, or an absent or empty `X-Demo-Account` header, which this status answers because the failure concerns that header |
+| `400` | `validation_error` | The request failed the shape its endpoint validates — a value that fails `type`, `enum`, `minimum` or `maxLength` (every free-text field carries a stated maximum), or an absent or empty `X-Demo-Account` header, which this status answers because the failure concerns that header |
 | `401` | `unauthorized` | The demo header is absent, blank, or names no seeded account |
 | `403` | `forbidden` | The resolved demo account's role is not one the row accepts, or the resource belongs to another developer |
 | `404` | `not_found` | The named row does not exist — an unknown listing or version, a hidden listing for a non-operator, an unknown report, proposal, appeal or transaction — or the path, or the method on that path, is not registered |
 | `409` | `conflict` | The resource cannot take the write in the state it is in: a duplicate version string, an already-decided proposal, an already-ruled appeal, an already fully refunded transaction |
+| `413` | `payload_too_large` | The request body is larger than the route's limit — 1 MiB by default — which Fastify refuses before any schema runs |
+| `415` | `unsupported_media_type` | The request's media type has no parser registered, which Fastify refuses before any schema runs |
 | `422` | `unprocessable` | The request is well formed and the state forbids it: a submission with no recorded output for a fixture case, an offer model the listing does not make, an amount above the net remaining |
 | `429` | `rate_limited` | More than 60 write requests per minute per client; the response carries `Retry-After` |
 | `500` | `internal_error` | A defect rather than a client condition; the client receives a fixed sentence naming no path, identifier or cause |
@@ -450,6 +469,7 @@ The domain refusal codes, each mapped to one of the statuses above:
 | `invalid_appeal` | `400` | The appeal's reason is empty or whitespace |
 | `standard_drift` | `400` | The stored standard definition and its fixture set disagree |
 | `invalid_amount` | `400` | The amount is not a whole count of at least one minor unit |
+| `unrenderable_value` | `400` | A recorded output holds a value canonical JSON cannot represent, such as a number JSON cannot carry |
 
 **Limits.** Page size is 20 and there is no page-size parameter. Writes are capped at 60 requests per
 minute per client, answered `429` with `Retry-After` beyond that; reads are unlimited. Evaluation is
@@ -497,7 +517,7 @@ unregistered path, or an unregistered method on a registered path ------> 404 no
 
 ```text
 developer -- { candidate_version_id, standard_version_id, recorded_outputs: [{ case_id, output }] }
-   |           no retest field: additionalProperties: false removes one before the handler runs
+   |           no retest field: the body policy answers an undeclared one 400 before the handler runs
    v
 [rate limit] -> [schema] -> [401] -> [developer role 403]
    v

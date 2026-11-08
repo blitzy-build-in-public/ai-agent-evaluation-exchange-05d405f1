@@ -26,7 +26,7 @@ workspaces from the single committed lockfile.
 | `npm run build` | Compiles the workspaces with `tsc --build` and bundles the web application into `apps/web/dist`. |
 | `npm run typecheck` | The static gate: `tsc --build` over the workspace project references. There is no linter or formatter in this repository — the dependency inventory is closed and names none — so this is the check that stands in its place. |
 | `npm test` | Unit tests, integration tests and the exclusion scan's self-test. |
-| `npm run test:unit` | Every `<name>.test.ts` beside its source under `apps/`, `packages/`, `examples/` and `scripts/`. |
+| `npm run test:unit` | Every `<name>.test.ts` beside its source under `apps/`, `packages/`, `examples/` and `scripts/`, except the exclusion scan's own self-test, which `npm run test:scan` owns so that no test file is run twice. |
 | `npm run test:integration` | The suites in `apps/api/test/integration/`, which start the real server on an ephemeral port against an in-memory database. |
 | `npm run test:e2e` | The browser suites in `e2e/` that exercise the developer-to-buyer loop and walk every public page. |
 | `npm run test:a11y` | Accessibility and responsiveness at 1280 px and 360 px. |
@@ -58,7 +58,9 @@ Three details save a contributor time:
   Keeping the seed out of the service's own start command is what makes a restart on the persisted
   volume safe.
 - **Two optional variables, both with working defaults**: `ADEM_PORT` (default `3000`) and
-  `ADEM_DB_PATH` (default `<repository root>/.adem/adem.sqlite`). Nothing has to be set to install,
+  `ADEM_DB_PATH` (default `<repository root>/.adem/adem.sqlite`, and a relative value is resolved
+  against that same repository root rather than against the command's own working directory, so
+  `npm run seed` and `npm start` open one file for one value). Nothing has to be set to install,
   build, test, seed or start. Setting `ADEM_PORT` while developing the UI also means pointing the
   web development server's proxy at it, because `apps/web/vite.config.ts` proxies `/api` to the API's
   documented default port.

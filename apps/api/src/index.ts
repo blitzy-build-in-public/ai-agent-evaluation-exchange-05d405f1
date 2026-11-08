@@ -25,12 +25,13 @@
  * 2. `./db/connection`'s `openDatabase()` opens the one connection, bringing `.adem/` into being on a
  *    fresh checkout and requesting the three pragmas the schema relies on.
  * 3. `./db/migrate`'s `runMigrations()` brings that connection's schema up to date before any route is
- *    reachable, on the connection this start-up owns. A refusal — an applied migration file whose
- *    bytes no longer hash to the checksum recorded in `schema_migrations` — aborts the start-up with a
- *    non-zero exit and the runner's own message naming the file, and never leaves a listening socket
- *    or an open handle behind.
+ *    reachable, on the connection this start-up owns, and reports what it did to step 4. A refusal — an
+ *    applied migration file whose bytes no longer hash to the checksum recorded in `schema_migrations` —
+ *    aborts the start-up with a non-zero exit and the runner's own message naming the file, and never
+ *    leaves a listening socket or an open handle behind.
  * 4. `./server`'s `createApp()`, through {@link createServer}, builds the instance over that
- *    connection and the resolved configuration.
+ *    connection, the run step 3 made on it — which is what spares the composition root a second run over
+ *    the same files — and the resolved configuration.
  * 5. The instance listens on `0.0.0.0` — never Fastify's default loopback bind, which would leave the
  *    published container port unanswered — and the address it resolved and the schema version it
  *    started from are logged at info level through Fastify's own logger, which is the API's whole
@@ -41,6 +42,17 @@
  *    the hook that closes a connection only for a handle it opened itself, and a caller-supplied
  *    handle deliberately outlives the instance — which is what lets the integration harness read its
  *    database after each request.
+ *
+ * **What a failure report carries, and what cannot reach one.** A failed start-up is reported as one
+ * line built from the thrown value's own message — see {@link detailOf} — which is the detail that
+ * makes a refusal actionable: `./config` names the variable and the value it refused, and
+ * `./db/migrate` names the migration file whose bytes no longer hash to the checksum that
+ * `schema_migrations` records. The configured database path can therefore appear in a report, and
+ * that is deliberate: it is a local file the operator named, it is not a secret, and naming it is
+ * what tells them which database to look at. Nothing else of that kind can reach a log from this
+ * module — it reads no environment variable and holds no secret, and no credential, personal datum,
+ * request body or `X-Demo-Account` value passes through it, that header being resolved in the route
+ * groups and never here.
  *
  * **What this file does not do.** It reads no environment variable, holds no secret and opens no
  * second resource; it carries no migration SQL and no migration bookkeeping, that being `./db/migrate`'s;
@@ -88,13 +100,15 @@ export type { CreateServerOptions };
  * missing built-web directory is a supported state, and a migration refusal surfaces from the
  * migration runner rather than from here.
  *
- * @param options The caller's database handle or path, its port and built web directory, and its
- *   configuration overrides. Every member is optional, and an absent one resolves to the
- *   configuration's own value, so `createServer()` alone builds the instance the documented
- *   `npm start` runs. `port` settles the port the configuration *resolves* — `./config` accepts a
- *   whole number between 1 and 65535 for it — and never the port the instance listens on: the caller
- *   chooses that in its own `listen` call, which is how the integration harness reaches an ephemeral
- *   port while this factory is handed the resolved one.
+ * @param options The caller's database handle or path, the run it already made on that handle, its
+ *   port and built web directory, and its configuration overrides. Every member is optional, and an
+ *   absent one resolves to the configuration's own value — except the recorded run, which is read only
+ *   beside a handle and is what keeps one start-up to one run over the migration files — so
+ *   `createServer()` alone builds the instance the documented `npm start` runs. `port` settles the port
+ *   the configuration *resolves* — `./config` accepts a whole number between 1 and 65535 for it — and
+ *   never the port the instance listens on: the caller chooses that in its own `listen` call, which is
+ *   how the integration harness reaches an ephemeral port while this factory is handed the resolved
+ *   one.
  * @returns The instance, with every route, handler and hook registered, before it is listening.
  */
 export function createServer(options?: CreateServerOptions): FastifyInstance {
@@ -189,14 +203,15 @@ async function startFromEnvironment(started: StartedInstance): Promise<void> {
 
   try {
     // The schema before the routes: a fresh database has none of the tables the route groups query.
-    // The composition root applies this same runner to the handle it is given, which is a no-op —
-    // a recorded version is applied once — so the entry point can report what a run applied.
+    // The run goes to the composition root with the handle it was made on, so the start-up reads and
+    // hashes each migration file once rather than once here and once inside the instance's builder,
+    // and this entry point can still report what the run applied.
     const migration = runMigrations(database);
 
-    // The handle goes in, and the resolved configuration goes in as the override: resolving it once
-    // here keeps the port the process binds and the port the instance was built with the same value,
-    // and re-applying the resolved values over themselves is a no-op.
-    instance = createServer({ database, port: config.port, webDir: config.webDir, config });
+    // The handle goes in with the run made on it, and the resolved configuration goes in as the
+    // override: resolving it once here keeps the port the process binds and the port the instance was
+    // built with the same value, and re-applying the resolved values over themselves is a no-op.
+    instance = createServer({ database, port: config.port, webDir: config.webDir, config, migration });
     started.instance = instance;
 
     // `LISTEN_HOST` and not Fastify's default loopback bind: the container publishes this port, so a
@@ -330,7 +345,10 @@ function reportStartupFailure(started: StartedInstance, error: unknown): void {
 }
 
 /**
- * The sentence a thrown value is reported with.
+ * The sentence a thrown value is reported with, and the one function both failure reports above go
+ * through. What a report built from it may carry is the module contract's business: the refused
+ * value's own message, the configured database path included, and with it nothing else this process
+ * was given.
  *
  * @param error The thrown value, of any type.
  * @returns The value's own message when it has one — an `Error` and every subclass, the configuration

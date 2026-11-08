@@ -96,6 +96,7 @@ import type {
   CompareResult,
   EvaluationReportDetail,
   FounderAllocationLedgerReadResult,
+  GovernanceEvent,
   Inquiry,
   LedgerEntry,
   LedgerReadResult,
@@ -115,9 +116,11 @@ import type {
   Transaction,
 } from "@adem/shared";
 import {
+  COLLECTION_PAGE_SIZE,
   COMPARE_MAX_IDS,
   COMPARE_MIN_IDS,
   LISTING_PAGE_SIZE,
+  PAGE_NUMBER_MAX,
   REPORT_LABEL_SAMPLE,
   SYNTHETIC_CURRENCY_LABEL,
   WRITE_RATE_LIMIT_MAX,
@@ -1221,10 +1224,19 @@ describe("route walk: every row of the API contract table", () => {
 
       expect(response.status).toBe(200);
 
-      const ruled = response.json<Appeal>();
+      // The answer carries the ruled appeal beside the governance event the ruling appended, so the
+      // operator's stated ground is readable where the decision is shown. The event's own fields —
+      // its reason, its actor, its payload — are asserted against the stored row by the immutability
+      // suite, which owns the append; what this walk pins is that the answer carries an event at all,
+      // and that it is the one for the appeal the ruling acted on.
+      const { appeal: ruled, event } = response.json<{
+        readonly appeal: Appeal;
+        readonly event: GovernanceEvent;
+      }>();
 
       expect(ruled.id).toBe(appealId);
       expect(ruled.status).toBe("upheld");
+      expect(event.subject_id).toBe(appealId);
 
       // The operator's power is additive: a ruling appends the record of the decision and no request
       // it accepts can reach a report. A byte-for-byte comparison of the stored rows is the
@@ -1909,7 +1921,37 @@ describe("route walk: every row of the API contract table", () => {
       ["the founder-allocation collection", "/ledger/founder-allocation", "founder_allocation"],
     ];
 
-    it.each(collections)("answers %s for the operator", async (_label, path, ledger) => {
+    /**
+     * How many entries one of the three ledgers holds in all, read from the table itself.
+     *
+     * The count is taken through the harness's own connection rather than from a response, so the
+     * bounded read's `total` is compared against the ledger rather than against itself.
+     */
+    const ledgerEntryCount = (ledger: string): number =>
+      firstRow<{ readonly count: number }>(
+        "SELECT COUNT(*) AS count FROM ledger_entries WHERE ledger = ?",
+        ledger,
+      ).count;
+
+    /**
+     * The identifiers of one page of the audit feed exactly as the read answers them: the page is
+     * windowed over the newest end of the feed's own order — `created_at` descending with the table's
+     * `rowid` as the tie-break, which is the order the writes happened read backwards — and the page's
+     * rows are then put back into that order ascending, which is the insertion order the feed documents.
+     */
+    const auditPageIds = (page: number): string[] =>
+      server
+        .query<{ readonly id: string }>(
+          `SELECT id FROM (
+             SELECT id, created_at, rowid AS position FROM audit_events
+             ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?
+           ) ORDER BY created_at ASC, position ASC`,
+          COLLECTION_PAGE_SIZE,
+          COLLECTION_PAGE_SIZE * (page - 1),
+        )
+        .map((row) => row.id);
+
+    it.each(collections)("answers %s for the operator, one page at a time", async (_label, path, ledger) => {
       const response = await server.get(path, actingAs("operator"));
 
       expect(response.status).toBe(200);
@@ -1919,6 +1961,13 @@ describe("route walk: every row of the API contract table", () => {
       expect(body.ledger).toBe(ledger);
       expect(Array.isArray(body.entries)).toBe(true);
       expect(body.entries.length).toBeGreaterThan(0);
+
+      // The read is bounded and says so: one page of the fixed page size, page 1 when no page is asked
+      // for, with the number of entries the ledger holds in all stated beside it, read here from the
+      // table rather than from the response.
+      expect(body.page).toBe(1);
+      expect(body.entries.length).toBeLessThanOrEqual(COLLECTION_PAGE_SIZE);
+      expect(body.total).toBe(ledgerEntryCount(ledger));
 
       for (const entry of body.entries) {
         // Every amount is a whole count of the synthetic currency, labelled as such: there is no real
@@ -1937,17 +1986,30 @@ describe("route walk: every row of the API contract table", () => {
       expectRefusal(await server.get(path), 401, "unauthorized");
     });
 
-    it("answers the append-only audit feed for the operator", async () => {
+    it("answers the append-only audit feed for the operator, one page at a time", async () => {
       const response = await server.get("/audit-events", actingAs("operator"));
 
       expect(response.status).toBe(200);
 
-      const feed = response.json<{ readonly items: readonly AuditEvent[] }>();
+      const feed = response.json<{
+        readonly items: readonly AuditEvent[];
+        readonly total: number;
+        readonly page: number;
+      }>();
 
       expect(Array.isArray(feed.items)).toBe(true);
       // Every write this walk made is recorded, so the feed is not empty by the time it is read, and
       // each row carries the five facts of an audited write rather than a request body.
       expect(feed.items.length).toBeGreaterThan(0);
+
+      // The read is bounded, and it states the record's size: one page of the fixed page size — page 1
+      // when no page is asked for — with the number of events the whole feed holds counted from
+      // `audit_events` itself, which is also the page's own rows in the insertion order the feed
+      // documents.
+      expect(feed.page).toBe(1);
+      expect(feed.items.length).toBeLessThanOrEqual(COLLECTION_PAGE_SIZE);
+      expect(feed.total).toBe(countOf("SELECT COUNT(*) AS count FROM audit_events"));
+      expect(feed.items.map((event) => event.id)).toStrictEqual(auditPageIds(1));
 
       for (const event of feed.items) {
         expect(event.actor_account_id.length).toBeGreaterThan(0);
@@ -1958,10 +2020,267 @@ describe("route walk: every row of the API contract table", () => {
       }
     });
 
+    it("answers the page before the last writes for ?page=2, with the whole feed's own count on both", async () => {
+      const first = await server.get("/audit-events", actingAs("operator"));
+      const second = await server.get("/audit-events", { ...actingAs("operator"), query: { page: 2 } });
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+
+      const firstPage = first.json<{
+        readonly items: readonly AuditEvent[];
+        readonly total: number;
+        readonly page: number;
+      }>();
+      const secondPage = second.json<{
+        readonly items: readonly AuditEvent[];
+        readonly total: number;
+        readonly page: number;
+      }>();
+
+      // Both pages describe the same feed — only the page number moves — and each answers its own window
+      // of the feed's order, so the two never hold the same event twice. A feed holding no more than one
+      // page answers the empty list on page 2 with the same total, which is an ordinary answer rather
+      // than an error: what matters is that neither page claims to be the whole record.
+      expect(secondPage.page).toBe(2);
+      expect(secondPage.total).toBe(firstPage.total);
+      expect(secondPage.items.map((event) => event.id)).toStrictEqual(auditPageIds(2));
+      expect(firstPage.items.length).toBeLessThanOrEqual(COLLECTION_PAGE_SIZE);
+
+      const firstPageIds = new Set(firstPage.items.map((event) => event.id));
+      expect(secondPage.items.some((event) => firstPageIds.has(event.id))).toBe(false);
+    });
+
     it("refuses the audit feed for a resolvable non-operator and for no header", async () => {
       expectRefusal(await server.get("/audit-events", actingAs("buyer")), 403, "forbidden");
       expectRefusal(await server.get("/audit-events"), 401, "unauthorized");
     });
+  });
+
+  /**
+   * The upper bound of `page` on the eight bounded collection reads, and the largest page each read
+   * admits.
+   *
+   * Each of those reads turns its page into a number it hands the storage layer — the offset of the
+   * page, and on the catalogue the rank the page ends on — and those numbers are reproduced exactly
+   * only at or below `PAGE_NUMBER_MAX` (`@adem/shared`). A page above it used to reach that arithmetic
+   * and round, which the storage layer refused with `SQLITE_MISMATCH` or with a `RangeError` and the
+   * single error handler answered `500 internal_error`; it is a value the schema itself refuses now,
+   * which is the `400` the row's error column documents. The listing search is not among them: it
+   * declares the lower bound alone and refuses the page whose offset the store cannot address in its
+   * own route, which is that row's refusal and is asserted where that row's statuses are. The largest
+   * page a read's bound admits is at the same time an ordinary request: every read here, the search
+   * included, answers it `200` with an empty page and the collection's own size, which is the
+   * documented empty page rather than an error.
+   */
+  describe("the page bound every collection read carries", () => {
+    /**
+     * What one answer states about the page it answered: the page itself — `null` where the read states
+     * only the collection's size — the number of rows the page carries, and the size of the whole
+     * collection the same answer states beside it.
+     */
+    interface AnsweredPage {
+      readonly page: number | null;
+      readonly rows: number;
+      readonly statedTotal: number;
+    }
+
+    /** One catalogue item, as this block reads it: its own page of proposals and the standard's total. */
+    interface CatalogueItem {
+      readonly proposals: readonly StandardProposal[];
+      readonly proposal_total: number;
+    }
+
+    /**
+     * One read the bound applies to: where it is served, the header it needs, and how its body states
+     * the page, the page's rows and the collection's size.
+     *
+     * The path and the options are functions because neither exists when this table is built:
+     * `beforeAll` fills the walk's captured identifiers and starts the server after this file's
+     * describes are evaluated, so a path or an account read here would be the empty string.
+     */
+    interface PagedRead {
+      readonly label: string;
+      readonly path: () => string;
+      readonly options: () => RequestOptions;
+      readonly answered: (response: TestResponse) => AnsweredPage;
+      /**
+       * Whether the read's own query schema bounds `page` above at `PAGE_NUMBER_MAX`. Only the
+       * listing search does not: its schema declares the lower bound alone, and its route refuses a
+       * page whose offset the store cannot address — that row's own refusal, asserted where that
+       * row's statuses are — so the search is left out of the bound probe and kept in the
+       * largest-page probe below.
+       */
+      readonly boundedAbove?: boolean;
+    }
+
+    /** The three ledger reads, which are the operator's and answer one body shape. */
+    const ledgerPaths: readonly string[] = [
+      "/ledger/marketplace",
+      "/ledger/gate-fees",
+      "/ledger/founder-allocation",
+    ];
+
+    const reads: readonly PagedRead[] = [
+      {
+        label: "the listing search",
+        path: () => "/listings",
+        options: () => ({}),
+        // Its own query schema bounds `page` at the lower end only: the upper end is the route's
+        // judgement about the offset it binds, asserted with the rest of this row's statuses.
+        boundedAbove: false,
+        answered: (response) => {
+          const page = response.json<ListingSearchResult>();
+
+          return { page: page.page, rows: page.items.length, statedTotal: page.total };
+        },
+      },
+      {
+        label: "the listing detail's version history",
+        path: () => `/listings/${captured(walk.seededListingId, "the seeded listing")}`,
+        options: () => ({}),
+        answered: (response) => {
+          const detail = response.json<ListingDetail>();
+
+          // This read states the size of the history in `version_total` and no page of its own: the
+          // page it answered is not a member of its body, which is why it is the one row whose page is
+          // asserted as the `null` the read itself carries.
+          return { page: null, rows: detail.versions.length, statedTotal: detail.version_total };
+        },
+      },
+      {
+        label: "the challenges board",
+        path: () => "/challenges",
+        options: () => ({}),
+        answered: (response) => {
+          const board = response.json<{
+            readonly items: readonly Challenge[];
+            readonly total: number;
+            readonly page: number;
+          }>();
+
+          return { page: board.page, rows: board.items.length, statedTotal: board.total };
+        },
+      },
+      {
+        label: "the threads board",
+        path: () => "/threads",
+        options: () => ({}),
+        answered: (response) => {
+          const board = response.json<{
+            readonly items: readonly Thread[];
+            readonly total: number;
+            readonly page: number;
+          }>();
+
+          return { page: board.page, rows: board.items.length, statedTotal: board.total };
+        },
+      },
+      {
+        label: "the standards catalogue",
+        path: () => "/standards",
+        options: () => ({}),
+        answered: (response) => {
+          const catalogue = response.json<{
+            readonly items: readonly CatalogueItem[];
+            readonly page: number;
+          }>();
+
+          // The page of proposals is nested in each item, and each item states that standard's whole
+          // proposal history: the page is every item's proposals together, and the size the read states
+          // beside it is those histories added up.
+          return {
+            page: catalogue.page,
+            rows: catalogue.items.reduce((rows, item) => rows + item.proposals.length, 0),
+            statedTotal: catalogue.items.reduce(
+              (total, item) => total + item.proposal_total,
+              0,
+            ),
+          };
+        },
+      },
+      {
+        label: "the audit feed",
+        path: () => "/audit-events",
+        options: () => actingAs("operator"),
+        answered: (response) => {
+          const feed = response.json<{
+            readonly items: readonly AuditEvent[];
+            readonly total: number;
+            readonly page: number;
+          }>();
+
+          return { page: feed.page, rows: feed.items.length, statedTotal: feed.total };
+        },
+      },
+      ...ledgerPaths.map(
+        (path): PagedRead => ({
+          label: `the ledger at ${path}`,
+          path: () => path,
+          options: () => actingAs("operator"),
+          answered: (response) => {
+            const ledger = response.json<LedgerReadResult>();
+
+            return {
+              page: ledger.page,
+              rows: ledger.entries.length,
+              statedTotal: ledger.total,
+            };
+          },
+        }),
+      ),
+    ];
+
+    /**
+     * The pages a read must refuse: the first page above the bound, and the two the finder reported as
+     * `500 internal_error` when the bound did not exist — `2^53 + 1`, the first whole number whose
+     * offset the arithmetic rounds, and a page beyond every range the arithmetic can state.
+     */
+    const refusedPages: readonly string[] = [
+      String(PAGE_NUMBER_MAX + 1),
+      "9007199254740993",
+      "999999999999999999999",
+    ];
+
+    /** The reads whose own schema bounds `page` above: every read above but the listing search. */
+    const boundedReads = reads.filter((read) => read.boundedAbove !== false);
+
+    it.each(boundedReads)("refuses a page above the bound on $label, in the one envelope", async (read) => {
+      for (const page of refusedPages) {
+        expectRefusal(
+          await server.get(read.path(), { ...read.options(), query: { page } }),
+          400,
+          "validation_error",
+        );
+      }
+    });
+
+    it.each(reads)(
+      "answers the largest page the bound admits on $label with an empty page and the collection's own size",
+      async (read) => {
+        const first = await server.get(read.path(), { ...read.options(), query: { page: 1 } });
+        const last = await server.get(read.path(), {
+          ...read.options(),
+          query: { page: PAGE_NUMBER_MAX },
+        });
+
+        expect(first.status).toBe(200);
+        expect(last.status).toBe(200);
+
+        const firstPage = read.answered(first);
+        const lastPage = read.answered(last);
+
+        // The page number moves and nothing else does. The answer at the bound is the empty page of the
+        // same collection — the ordinary answer a page past the end earns, never a refusal — and the
+        // size it states is the size the first page states, so the bound bounds the window a request
+        // may ask for rather than the collection it pages. Eight of the nine reads echo the page they
+        // answered; the listing detail states only its history's size, so its own shape is followed here.
+        expect(lastPage.page).toBe(firstPage.page === null ? null : PAGE_NUMBER_MAX);
+        expect(lastPage.rows).toBe(0);
+        expect(lastPage.statedTotal).toBeGreaterThan(0);
+        expect(lastPage.statedTotal).toBe(firstPage.statedTotal);
+      },
+    );
   });
 
   describe("sponsored slots", () => {

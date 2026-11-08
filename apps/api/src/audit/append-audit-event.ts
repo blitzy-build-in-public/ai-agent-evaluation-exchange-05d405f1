@@ -31,10 +31,11 @@
  * `apps/api/test/integration/immutability.test.ts` is what proves it.
  *
  * A row carries exactly the five facts an audited write fixes — actor, action,
- * resource, status and reason — and nothing more. No column here holds a request
- * body, a header value, a query string or anything about a person, which is why
- * `reason` is a short phrase the route states rather than a string assembled from
- * request text: this product holds no real personal information anywhere, and
+ * resource, status and reason — and nothing more. The one value a caller passes on
+ * from a request is `reason`: the single field the decision itself states, handed
+ * over as the route's schema validated it, and never a string this layer assembled
+ * from a body, a header value or a query string. No column here holds anything about
+ * a person: this product holds no real personal information anywhere, and
  * `npm run scan:exclusions` fails the build on a finding.
  *
  * The database handle belongs to the caller (ports and adapters): this module opens
@@ -114,13 +115,21 @@ export interface AuditEventInput {
   /** The HTTP status the write answers with, as the route is about to send it. */
   readonly statusCode: number;
   /**
-   * The stated reason where the write carries one — a moderation action's reason,
-   * an appeal ruled with one — and absent where it has none. An absent reason is
-   * stored as SQL `NULL`: the column is nullable and the row type declares
-   * `string | null`, so the row states the absence rather than an empty string.
+   * The caller's own single stated ground for the write, where the write states one, and absent
+   * where it states none. An absent reason is stored as SQL `NULL`, never as `""`: the column is
+   * nullable and the row type declares `string | null`, so a row whose write stated no ground
+   * reports the absence rather than an empty string, and a caller that has none passes no member at
+   * all.
    *
-   * It is a short phrase the route states, never request text: nothing concatenated
-   * from a body, a header value or a query string may reach this member.
+   * The routes under `apps/api/src/routes/` that state one pass that decision's own field and nothing
+   * else: `moderation.ts` the operator's schema-validated reason for the action it applies,
+   * `standards.ts` the operator's ground for a proposal review, and `appeals.ts` the developer's
+   * ground for an opening and the operator's for a ruling. Every other audited write states none.
+   *
+   * What may never reach this member is anything *beyond* that one stated field: no header value, no
+   * query string, no text assembled or concatenated from several request members, and never a driver
+   * message, a stack frame or a path. The feed records what was written, so a row carrying request
+   * text of its own would be a second and weaker copy of the request rather than a reason for it.
    */
   readonly reason?: string;
 }

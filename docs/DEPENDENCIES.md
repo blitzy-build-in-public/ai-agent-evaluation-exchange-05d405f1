@@ -31,7 +31,7 @@ the runtime graph, because a licence permitted for development must not be distr
 
 ## Dependencies
 
-308 entries: 143 in the runtime graph, 157 in the development graph and 8 this repository's own
+309 entries: 143 in the runtime graph, 158 in the development graph and 8 this repository's own
 workspaces. A package reachable only through a `devDependencies` map is a development dependency; an
 in-repo workspace is listed from its own manifest rather than by reachability, so it belongs to
 neither graph, and the `@adem/*` workspaces list the licence their own manifest declares: they are
@@ -90,6 +90,7 @@ not third-party dependencies, and they are exempt from the allowlist check.
 | @playwright/test | 1.45.3 | Apache-2.0 | direct | development |
 | @remix-run/router | 1.17.1 | MIT | transitive | runtime |
 | @rollup/rollup-linux-x64-gnu | 4.67.5 | MIT | transitive | development |
+| @rollup/rollup-linux-x64-musl | 4.67.5 | MIT | transitive | development |
 | @sinclair/typebox | 0.27.12 | MIT | transitive | development |
 | @types/babel__core | 7.20.5 | MIT | transitive | development |
 | @types/babel__generator | 7.27.0 | MIT | transitive | development |

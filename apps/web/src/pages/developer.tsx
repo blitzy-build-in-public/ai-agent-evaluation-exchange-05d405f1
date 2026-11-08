@@ -19,10 +19,10 @@
  * **"This developer's listings" is derived, because the contract has no per-developer read.** The
  * workspace reads the public catalogue once through the shared catalogue reader — the page size is the
  * contract's fixed {@link LISTING_PAGE_SIZE} and is never a parameter — and keeps the listings whose
- * developer handle is the selected account's. A listing's version history, its claims and the evidence
- * linked to its newest version are then read once per listing under {@link OWNED_DETAIL_READ_LIMIT}, and
- * a listing whose detail cannot be read (a hidden or removed listing is not readable by its id) is left
- * out and counted rather than blanking the workspace.
+ * developer handle is the selected account's. A listing's newest page of versions, its claims and the
+ * evidence linked to its newest version are then read once per listing under
+ * {@link OWNED_DETAIL_READ_LIMIT}, and a listing whose detail cannot be read (a hidden or removed
+ * listing is not readable by its id) is left out and counted rather than blanking the workspace.
  *
  * **The evaluation submission is one labelled JSON field.** No route exposes the fixture case set and
  * this workspace may not reach the fixture data, so a per-case input list cannot exist: the field
@@ -33,15 +33,17 @@
  * **Nothing is executed and nothing is edited.** A submission is declarative data compared as
  * canonical JSON; an evaluation appends a report, a retest appends a new report beside it, and an
  * appeal appends a governance event while leaving the report it concerns exactly as it stands. This
- * page therefore offers no control that could change a stored measurement, and offers no appeal
- * ruling, which is an operator's action and has no surface in the plan.
+ * page therefore offers no control that could change a stored measurement. Ruling an appeal is an
+ * operator's action, and its surface is the report page's: `/reports/:id` mounts the ruling controls
+ * for the operator demo account, which is where an operator decides an appeal this page's form opens.
  *
  * The operator half reads the three append-only ledgers through `../components/ledger-table` and the
- * audit feed as a table in the order the events were written. It re-sorts nothing, re-computes no
- * amount and reformats no entry: a ledger is read as history, and an appended reversal stays after
- * the entry it reverses. Every amount stays an integer count of minor units of the synthetic
- * currency `DEMO` with the disclosure label stored beside it, and the founder-allocation ledger
- * states that its contract structure is undecided and carries no personal identity, beneficiary
+ * audit feed as a table in the order the events were written, one page of each at a time: all four of
+ * those reads answer the most recent page of their collection and state its whole size. It re-sorts
+ * nothing, re-computes no amount and reformats no entry: a ledger is read as history, and an appended
+ * reversal stays after the entry it reverses. Every amount stays an integer count of minor units of
+ * the synthetic currency `DEMO` with the disclosure label stored beside it, and the founder-allocation
+ * ledger states that its contract structure is undecided and carries no personal identity, beneficiary
  * account or entitlement.
  */
 
@@ -68,8 +70,10 @@ import { LedgerTable } from "../components/ledger-table";
 import { mapWithConcurrency } from "../concurrency";
 import { findDemoAccount } from "../data/demo-accounts";
 import type { DemoAccount } from "../data/demo-accounts";
-import { describeRetryWait, isRecord, readText, readWriteFailure, statusOf } from "../payload-reading";
+import { describePricingModel } from "../labels";
+import { Timestamp, describeRetryWait, isRecord, readInstant, readText, readWriteFailure, statusOf } from "../payload-reading";
 import {
+  COLLECTION_PAGE_SIZE,
   FOUNDER_ALLOCATION_CONTRACT_LABEL,
   LEDGER_NAMES,
   LISTING_PAGE_SIZE,
@@ -190,29 +194,75 @@ const CHALLENGES_UNAVAILABLE_NOTE =
   "The challenge counts are not shown on the listings below: the public challenges board could not " +
   "be read. Every other part of the listing is unaffected.";
 
+/**
+ * One listing's challenge count as the workspace read it: the challenges counted, and whether the
+ * read that counted them covered the whole board.
+ *
+ * The board answers one page of itself — its most recent page — so a count taken from one read is
+ * the board's own count only while that page came back shorter than `COLLECTION_PAGE_SIZE`. A page
+ * that came back exactly full may have challenges older than it that no read here ever counted,
+ * which is what the second field tells the sentence to state rather than to hide.
+ */
+interface ChallengeCountReading {
+  /** How many challenges the page of the board that was read named for this listing. */
+  readonly count: number;
+  /** Whether that read covered the whole board, so the count is the board's own count. */
+  readonly boardComplete: boolean;
+}
+
 /** How many challenges one listing has collected, said as a sentence rather than as a bare number. */
-function describeChallengeCount(count: number): string {
+function describeChallengeCount(reading: ChallengeCountReading): string {
+  const count = reading.count;
+  if (reading.boardComplete) {
+    if (count === 0) {
+      return "No challenge has been asked about this listing yet.";
+    }
+    if (count === 1) {
+      return "One challenge has been asked about this listing.";
+    }
+    return `${count} challenges have been asked about this listing.`;
+  }
   if (count === 0) {
-    return "No challenge has been asked about this listing yet.";
+    return "No challenge on the board's most recent page asks about this listing; a challenge older than that page is not counted here.";
   }
   if (count === 1) {
-    return "One challenge has been asked about this listing.";
+    return "One challenge on the board's most recent page concerns this listing; a challenge older than that page is not counted here.";
   }
-  return `${count} challenges have been asked about this listing.`;
+  return `${count} challenges on the board's most recent page concern this listing; challenges older than that page are not counted here.`;
 }
 
 /** The heading of one listing's version history. */
 const VERSIONS_HEADING = "Version history";
 
 /**
+ * How many versions the listing has published, said beside the page of them the read carried.
+ *
+ * The count comes from the payload's own `version_total` rather than from the page, which answers
+ * one page of the history rather than the history itself: a page shorter than the history is the
+ * newest page of a longer one, and a page that holds every version is the history. Neither is
+ * inferred here from the size of the list.
+ */
+function describeVersionTotal(versionTotal: number, listed: number): string {
+  const published = `This listing has published ${versionTotal} ${versionTotal === 1 ? "version" : "versions"}`;
+  return listed < versionTotal
+    ? `${published}; its ${listed} most recent ${listed === 1 ? "is" : "are"} listed here.`
+    : `${published}.`;
+}
+
+/**
  * What the version history states about the evidence linked beside it, including the one thing the
  * listing payload does not carry: which version the linked report measured.
+ *
+ * It names the versions the payload carries rather than the listing's versions at large, because the
+ * detail read answers one page of the history and states the history's whole size in `version_total`,
+ * which is rendered beside this sentence.
  */
 const VERSIONS_EXPLANATION =
-  "Every version this listing has published, newest first. A version is never edited, so a change is " +
-  "a new version. The evidence linked beside the newest version is the report the listing payload " +
-  "carries, which is the one measured against that version; a report is read from its own link, and a " +
-  "version that was never evaluated is stated as having no report rather than linked to one.";
+  "The versions of this listing that the read carries, newest first. A version is never edited, so a " +
+  "change is a new version. The evidence linked beside the newest version is the report the listing " +
+  "payload carries, which is the one measured against that version; a report is read from its own " +
+  "link, and a version that was never evaluated is stated as having no report rather than linked to " +
+  "one.";
 
 /** The sentence rendered for a listing that has published no version, whose history is empty. */
 const NO_VERSIONS_NOTE =
@@ -356,7 +406,7 @@ const UNREADABLE_VERSION_FAILURE =
 
 /** What a published version is announced as, once the service has answered. */
 function describePublishedVersion(version: ListingVersion): string {
-  return `Published ${version.version_string} as a new version of this listing — version ${version.id}, recorded at ${version.created_at}. An evaluation can now name it as the candidate version it measures.`;
+  return `Published ${version.version_string} as a new version of this listing — version ${version.id}, recorded at ${readInstant(version.created_at).text}. An evaluation can now name it as the candidate version it measures.`;
 }
 
 /** The label of the create form's submit control, and the sentence the status region announces. */
@@ -537,7 +587,8 @@ const APPEAL_EXPLANATION =
   "An appeal asks for a report's outcome to be reviewed, with the developer's stated ground. It is " +
   "opened by the developer that owns the measured version, and it leaves the report exactly as it " +
   "stands: a ruling is appended as a governance event, so the report reads the same afterwards. " +
-  "Deciding an appeal is an operator's action, and no control for it is offered here.";
+  "Deciding an appeal is the operator's action, and the controls for it are offered on the report " +
+  "page to the operator demo account.";
 
 /** The appeal form's report select and its reason field. */
 const APPEAL_REPORT_FIELD_LABEL = "Report to appeal";
@@ -602,14 +653,19 @@ const OPERATOR_LEDGERS_HEADING = "The three ledgers";
 /**
  * What the ledger section states about the three ledgers, in this page's own words.
  *
+ * The bound is stated here as well as in each ledger's own count below, because every one of the
+ * three reads answers one page of its ledger rather than the whole history: the ledgers are
+ * append-only, so a reader who took a page for the record would be reading a part as the whole.
+ *
  * The founder-allocation ledger's contract structure is stated here as well as on the ledger view
  * itself, so the words a reader must see are present wherever this section is read, and the currency
  * label is stated here rather than left to be inferred from an amount: every amount in every ledger
  * is a whole number of minor units of the synthetic currency named below.
  */
 const OPERATOR_LEDGERS_EXPLANATION =
-  `The marketplace ledger, the gate-fee ledger and the founder-allocation ledger, each read in the ` +
-  `order its entries were appended. An amount is a whole number of minor units of the synthetic ` +
+  `The marketplace ledger, the gate-fee ledger and the founder-allocation ledger, each read one page ` +
+  `at a time — the page it answers is the ledger's most recent entries, in the order they were ` +
+  `appended. An amount is a whole number of minor units of the synthetic ` +
   `currency ${SYNTHETIC_CURRENCY_LABEL}, and every entry carries its own disclosure label: this is a ` +
   `nonfunctional demonstration in which no real payment, settlement or payout exists, and no amount ` +
   `here is a payment of any kind. The founder-participation contract structure is ` +
@@ -634,6 +690,20 @@ function describeLedgerLoading(ledger: LedgerName): string {
 }
 
 /**
+ * How many entries the ledger holds, said above the page of them the read answered.
+ *
+ * The count is the read's own `total` rather than the length of the page, because the read answers one
+ * page of the ledger: a page shorter than the ledger is its most recent page, and a page that holds
+ * every entry is the ledger itself. Neither is inferred here from the size of the list.
+ */
+function describeLedgerTotal(total: number, listed: number): string {
+  const held = `This ledger holds ${total} ${total === 1 ? "entry" : "entries"}`;
+  return listed < total
+    ? `${held}; its ${listed} most recent ${listed === 1 ? "is" : "are"} listed here.`
+    : `${held}.`;
+}
+
+/**
  * What a failed ledger or audit read adds when the refusal was a role refusal.
  *
  * The operator half is mounted only for the operator account, so this should be unreachable; it is
@@ -649,10 +719,11 @@ const AUDIT_HEADING = "The audit feed";
 
 const AUDIT_EXPLANATION =
   "The append-only feed of what was written — the actor, the action, the resource, its status and " +
-  "the reason — in the order the writes happened. It is distinct from the governance events that " +
-  "record decisions: a moderation action, a proposal review and an appeal ruling append a " +
-  "governance event, and every write appends an audit event. Neither feed is ever amended, and " +
-  "nothing here is sorted, filtered or re-keyed.";
+  "the reason — in the order the writes happened. The feed is read one page at a time, its most " +
+  "recent page first, so the rows below are that page of events and not the whole record. It is " +
+  "distinct from the governance events that record decisions: a moderation action, a proposal " +
+  "review and an appeal ruling append a governance event, and every write appends an audit event. " +
+  "Neither feed is ever amended, and nothing here is sorted, filtered or re-keyed.";
 
 /** The state an audit feed with nothing in it renders, and the caption the table carries. */
 const AUDIT_EMPTY_HEADING = "Nothing in the audit feed yet";
@@ -664,18 +735,31 @@ const AUDIT_EMPTY_EXPLANATION =
 const AUDIT_LOADING_SENTENCE = "Reading the audit feed…";
 
 const AUDIT_TABLE_CAPTION =
-  "Audit events, in the order the writes happened. Each row is a write that was recorded, and no " +
-  "row is amended afterwards.";
+  "Audit events, in the order the writes happened: the feed's most recent page, because the read " +
+  "answers one page of it at a time. Each row is a write that was recorded, and no row is amended " +
+  "afterwards.";
 
-/** The audit table's columns, each stated in words rather than as a field name. */
+/**
+ * The audit table's seven column labels, in the order the reading route records them and each stated
+ * in words rather than as a field name. They are named here because the header row and the label
+ * every cell prints below the breakpoint are the same seven strings.
+ */
+const ACTOR_COLUMN_LABEL = "Actor";
+const ACTION_COLUMN_LABEL = "Action";
+const RESOURCE_TYPE_COLUMN_LABEL = "Resource type";
+const RESOURCE_ID_COLUMN_LABEL = "Resource ID";
+const STATUS_COLUMN_LABEL = "Status";
+const REASON_COLUMN_LABEL = "Reason";
+const RECORDED_COLUMN_LABEL = "Recorded";
+
 const AUDIT_COLUMNS: readonly string[] = Object.freeze([
-  "Actor",
-  "Action",
-  "Resource type",
-  "Resource ID",
-  "Status",
-  "Reason",
-  "Recorded",
+  ACTOR_COLUMN_LABEL,
+  ACTION_COLUMN_LABEL,
+  RESOURCE_TYPE_COLUMN_LABEL,
+  RESOURCE_ID_COLUMN_LABEL,
+  STATUS_COLUMN_LABEL,
+  REASON_COLUMN_LABEL,
+  RECORDED_COLUMN_LABEL,
 ]);
 
 /** What a column renders for a field the row left empty, so no cell is rendered blank. */
@@ -701,7 +785,16 @@ function throttledSentence(kept: string, retryAfterSeconds: number | null): stri
  */
 type WriteFailureReading =
   | { readonly kind: "field"; readonly sentence: string; readonly statusSentence: string }
-  | { readonly kind: "explained"; readonly sentence: string; readonly offersBrowse: boolean }
+  | {
+      readonly kind: "explained";
+      readonly sentence: string;
+      /**
+       * The notice variant the explanation renders in: the warning triple for the write rate limit,
+       * which the reader waits out and sends again, and the error triple for every other refusal.
+       */
+      readonly variant: "notice--error" | "notice--warning";
+      readonly offersBrowse: boolean;
+    }
   | { readonly kind: "notice"; readonly error: unknown; readonly detail: ReactNode };
 
 /** Whether a raised value is a role refusal, read for the ledger and audit reads' explanation. */
@@ -739,10 +832,11 @@ function fieldSentenceOf(reading: WriteFailureReading | null): string | null {
  */
 function ExplainedFailureNotice(props: {
   readonly sentence: string;
+  readonly variant: "notice--error" | "notice--warning";
   readonly offersBrowse: boolean;
 }): JSX.Element {
   return (
-    <div className="notice notice--error">
+    <div className={`notice ${props.variant}`}>
       <p>{props.sentence}</p>
       {props.offersBrowse ? (
         <p>
@@ -778,7 +872,7 @@ function describeVersionFailure(error: unknown): WriteFailureReading | null {
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { kind: "explained", sentence: UNREADABLE_VERSION_FAILURE, offersBrowse: false };
+    return { kind: "explained", sentence: UNREADABLE_VERSION_FAILURE, variant: "notice--error", offersBrowse: false };
   }
   switch (failure.status) {
     case 400:
@@ -788,11 +882,11 @@ function describeVersionFailure(error: unknown): WriteFailureReading | null {
         statusSentence: REFUSED_VERSION_STATUS,
       };
     case 401:
-      return { kind: "explained", sentence: NO_ACCOUNT_VERSION_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: NO_ACCOUNT_VERSION_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 403:
-      return { kind: "explained", sentence: WRONG_ROLE_VERSION_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: WRONG_ROLE_VERSION_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 404:
-      return { kind: "explained", sentence: MISSING_LISTING_VERSION_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: MISSING_LISTING_VERSION_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 409:
       return {
         kind: "field",
@@ -806,6 +900,7 @@ function describeVersionFailure(error: unknown): WriteFailureReading | null {
           "The text you typed has been kept.",
           failure.retryAfterSeconds,
         ),
+        variant: "notice--warning",
         offersBrowse: false,
       };
     default:
@@ -820,15 +915,15 @@ function describeCreateFailure(error: unknown): WriteFailureReading | null {
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { kind: "explained", sentence: UNREADABLE_CREATE_FAILURE, offersBrowse: false };
+    return { kind: "explained", sentence: UNREADABLE_CREATE_FAILURE, variant: "notice--error", offersBrowse: false };
   }
   switch (failure.status) {
     case 400:
       return { kind: "notice", error, detail: <p>{CREATE_REFUSED_DETAIL}</p> };
     case 401:
-      return { kind: "explained", sentence: NO_ACCOUNT_CREATE_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: NO_ACCOUNT_CREATE_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 403:
-      return { kind: "explained", sentence: WRONG_ROLE_CREATE_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: WRONG_ROLE_CREATE_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 429:
       return {
         kind: "explained",
@@ -836,6 +931,7 @@ function describeCreateFailure(error: unknown): WriteFailureReading | null {
           "Everything you typed is still in the fields.",
           failure.retryAfterSeconds,
         ),
+        variant: "notice--warning",
         offersBrowse: false,
       };
     default:
@@ -860,7 +956,7 @@ function describeEvaluationFailure(
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { kind: "explained", sentence: UNREADABLE_EVALUATION_FAILURE, offersBrowse: false };
+    return { kind: "explained", sentence: UNREADABLE_EVALUATION_FAILURE, variant: "notice--error", offersBrowse: false };
   }
   switch (failure.status) {
     case 400:
@@ -870,11 +966,11 @@ function describeEvaluationFailure(
         statusSentence: REFUSED_OUTPUTS_STATUS,
       };
     case 401:
-      return { kind: "explained", sentence: NO_ACCOUNT_EVALUATION_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: NO_ACCOUNT_EVALUATION_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 403:
-      return { kind: "explained", sentence: WRONG_ROLE_EVALUATION_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: WRONG_ROLE_EVALUATION_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 404:
-      return { kind: "explained", sentence: UNRESOLVED_EVALUATION_SENTENCE, offersBrowse: true };
+      return { kind: "explained", sentence: UNRESOLVED_EVALUATION_SENTENCE, variant: "notice--error", offersBrowse: true };
     case 422:
       return { kind: "notice", error, detail: <p>{incompleteOutputsDetail(totalCases)}</p> };
     case 429:
@@ -884,6 +980,7 @@ function describeEvaluationFailure(
           "The submission is still in the field.",
           failure.retryAfterSeconds,
         ),
+        variant: "notice--warning",
         offersBrowse: false,
       };
     default:
@@ -898,7 +995,7 @@ function describeAppealFailure(error: unknown): WriteFailureReading | null {
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { kind: "explained", sentence: UNREADABLE_APPEAL_FAILURE, offersBrowse: false };
+    return { kind: "explained", sentence: UNREADABLE_APPEAL_FAILURE, variant: "notice--error", offersBrowse: false };
   }
   switch (failure.status) {
     case 400:
@@ -908,11 +1005,11 @@ function describeAppealFailure(error: unknown): WriteFailureReading | null {
         statusSentence: REFUSED_REASON_STATUS,
       };
     case 401:
-      return { kind: "explained", sentence: NO_ACCOUNT_APPEAL_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: NO_ACCOUNT_APPEAL_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 403:
-      return { kind: "explained", sentence: WRONG_ROLE_APPEAL_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: WRONG_ROLE_APPEAL_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 404:
-      return { kind: "explained", sentence: MISSING_REPORT_APPEAL_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: MISSING_REPORT_APPEAL_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 429:
       return {
         kind: "explained",
@@ -920,6 +1017,7 @@ function describeAppealFailure(error: unknown): WriteFailureReading | null {
           "The reason you wrote has been kept.",
           failure.retryAfterSeconds,
         ),
+        variant: "notice--warning",
         offersBrowse: false,
       };
     default:
@@ -1152,11 +1250,14 @@ interface CandidateVersionOption {
 }
 
 /**
- * Every version of this developer's own listings, as the evaluation form offers them.
+ * The versions of this developer's own listings that their detail reads carry, as the evaluation
+ * form offers them.
  *
  * Only these versions are offered, because the route requires the selected developer to own the
  * candidate version: an option this page could not submit would be a control that always refuses.
- * The order is the order the version histories were read in, newest first within each listing.
+ * The order is the order the version histories were read in, newest first within each listing, and
+ * each listing contributes the newest page of its history because that is what its detail read
+ * answered with.
  */
 function candidateVersionOptions(listings: readonly OwnedListing[]): CandidateVersionOption[] {
   const options: CandidateVersionOption[] = [];
@@ -1226,7 +1327,7 @@ function categoryOptions(listings: readonly ListingSummary[]): Category[] {
   return options;
 }
 
-/** How many challenges each listing has collected, from one read of the public board. */
+/** How many challenges each listing has collected, counted over one read of the public board. */
 function challengeCounts(challenges: readonly ChallengeListItem[]): ReadonlyMap<string, number> {
   const counts = new Map<string, number>();
   for (const challenge of challenges) {
@@ -1374,9 +1475,10 @@ export function DeveloperPage(): JSX.Element {
  *
  * The section's reads are independent and each is re-read on its own token, so a refusal of one read
  * is explained and retried without touching the others: the listings and their details, the public
- * challenges board the counts come from, and the standards catalogue the evaluation form offers. A
- * write re-reads the listings, because a listing a write created, a version it published and a report
- * it recorded are all read from the service rather than added to this page's own copy of them.
+ * challenges board the counts come from — read as its most recent page, which is what the board
+ * answers with — and the standards catalogue the evaluation form offers. A write re-reads the
+ * listings, because a listing a write created, a version it published and a report it recorded are
+ * all read from the service rather than added to this page's own copy of them.
  */
 function DeveloperWorkspace(props: { readonly account: DemoAccount }): JSX.Element {
   const handle = props.account.handle;
@@ -1423,6 +1525,15 @@ function DeveloperWorkspace(props: { readonly account: DemoAccount }): JSX.Eleme
       challengeRows === null ? null : challengeCounts(challengeRows),
     [challengeRows],
   );
+
+  /**
+   * Whether the board read the counts were taken from covered the whole board.
+   *
+   * The public board answers one page of itself, so only a page that came back shorter than the
+   * product's fixed page size says the board held nothing more; a page that came back exactly full
+   * may have left older challenges uncounted, and the sentence states which of the two it is.
+   */
+  const boardComplete = challengeRows !== null && challengeRows.length < COLLECTION_PAGE_SIZE;
 
   const categories = useMemo(
     (): Category[] =>
@@ -1527,7 +1638,11 @@ function DeveloperWorkspace(props: { readonly account: DemoAccount }): JSX.Eleme
                 <li key={entry.summary.id} className="item-list__item">
                   <ListingBlock
                     entry={entry}
-                    challengeCount={counts === null ? null : (counts.get(entry.summary.id) ?? 0)}
+                    challengeCount={
+                      counts === null
+                        ? null
+                        : { count: counts.get(entry.summary.id) ?? 0, boardComplete }
+                    }
                     onVersionPublished={reloadListings}
                   />
                 </li>
@@ -1661,7 +1776,7 @@ function LinkedEvidence(props: {
  */
 function ListingBlock(props: {
   readonly entry: OwnedListing;
-  readonly challengeCount: number | null;
+  readonly challengeCount: ChallengeCountReading | null;
   readonly onVersionPublished: () => void;
 }): JSX.Element {
   const summary = props.entry.summary;
@@ -1680,7 +1795,7 @@ function ListingBlock(props: {
 
       <p className="listing-card__meta">
         <span>{categoryLabel(summary.category)}</span>
-        <span>{`Pricing model: ${summary.pricing_model}`}</span>
+        <span>{`Pricing model: ${describePricingModel(summary.pricing_model)}`}</span>
         <span>{`License: ${summary.license_code}`}</span>
         <span>{`Newest version: ${summary.version_string === "" ? NO_VERSIONS_NOTE : summary.version_string}`}</span>
       </p>
@@ -1691,6 +1806,13 @@ function ListingBlock(props: {
 
       <h4 id={versionsHeadingId}>{VERSIONS_HEADING}</h4>
       <p>{VERSIONS_EXPLANATION}</p>
+
+      {/* The size of the history, from the payload's own total: the detail read answers one page of
+          it, so the block states what the listing has published in all beside the page it carries.
+          A listing that has published no version is stated by the note below rather than twice. */}
+      {detail.versions.length === 0 ? null : (
+        <p>{describeVersionTotal(detail.version_total, detail.versions.length)}</p>
+      )}
 
       {detail.versions.length === 0 ? (
         <p>{NO_VERSIONS_NOTE}</p>
@@ -1705,7 +1827,7 @@ function ListingBlock(props: {
                   <p>
                     <strong>{version.version_string}</strong>
                     {", recorded "}
-                    <time dateTime={version.created_at}>{version.created_at}</time>
+                    <Timestamp value={version.created_at} />
                   </p>
 
                   {version.notes === "" ? null : (
@@ -1912,7 +2034,11 @@ function PublishVersionForm(props: {
           </div>
         )}
         {reading !== null && reading.kind === "explained" ? (
-          <ExplainedFailureNotice sentence={reading.sentence} offersBrowse={reading.offersBrowse} />
+          <ExplainedFailureNotice
+            sentence={reading.sentence}
+            variant={reading.variant}
+            offersBrowse={reading.offersBrowse}
+          />
         ) : null}
         {reading !== null && reading.kind === "field" ? <p>{reading.statusSentence}</p> : null}
       </div>
@@ -2017,7 +2143,7 @@ function CreateListingForm(props: {
 
   const serviceReading = describeCreateFailure(failure);
   const reading: WriteFailureReading | null = hasCreateFieldErrors(fieldErrors)
-    ? { kind: "explained", sentence: CREATE_INCOMPLETE_SENTENCE, offersBrowse: false }
+    ? { kind: "explained", sentence: CREATE_INCOMPLETE_SENTENCE, variant: "notice--error", offersBrowse: false }
     : serviceReading;
 
   const handleTitleChange = (event: ChangeEvent<HTMLInputElement>): void => {
@@ -2233,7 +2359,7 @@ function CreateListingForm(props: {
           {PRICING_MODELS.map(
             (model: PricingModel): JSX.Element => (
               <option key={model} value={model}>
-                {model}
+                {describePricingModel(model)}
               </option>
             ),
           )}
@@ -2271,7 +2397,11 @@ function CreateListingForm(props: {
           </div>
         )}
         {reading !== null && reading.kind === "explained" ? (
-          <ExplainedFailureNotice sentence={reading.sentence} offersBrowse={reading.offersBrowse} />
+          <ExplainedFailureNotice
+            sentence={reading.sentence}
+            variant={reading.variant}
+            offersBrowse={reading.offersBrowse}
+          />
         ) : null}
         {reading !== null && reading.kind === "field" ? <p>{reading.statusSentence}</p> : null}
       </div>
@@ -2502,7 +2632,11 @@ function EvaluationForm(props: {
           </div>
         )}
         {reading !== null && reading.kind === "explained" ? (
-          <ExplainedFailureNotice sentence={reading.sentence} offersBrowse={reading.offersBrowse} />
+          <ExplainedFailureNotice
+            sentence={reading.sentence}
+            variant={reading.variant}
+            offersBrowse={reading.offersBrowse}
+          />
         ) : null}
         {reading !== null && reading.kind === "field" ? <p>{reading.statusSentence}</p> : null}
       </div>
@@ -2524,8 +2658,9 @@ function EvaluationForm(props: {
  *
  * The report comes from the selection and the ground from the reason field; the appellant's identity
  * is the demo account selected in the header, so neither is a field. Opening an appeal is the only
- * action this form offers — a ruling is an operator's action, has no function in the API client and
- * no surface in the plan, and this form therefore offers no control for it and says so.
+ * action this form offers: ruling one is the operator's action, and its controls are mounted on
+ * `/reports/:id` for the operator demo account, so this form offers none and its copy says where they
+ * are rather than implying that an appeal cannot be decided here.
  */
 function AppealForm(props: { readonly reports: readonly OwnedReport[] }): JSX.Element {
   const idPrefix = useId();
@@ -2672,7 +2807,11 @@ function AppealForm(props: { readonly reports: readonly OwnedReport[] }): JSX.El
           </div>
         )}
         {reading !== null && reading.kind === "explained" ? (
-          <ExplainedFailureNotice sentence={reading.sentence} offersBrowse={reading.offersBrowse} />
+          <ExplainedFailureNotice
+            sentence={reading.sentence}
+            variant={reading.variant}
+            offersBrowse={reading.offersBrowse}
+          />
         ) : null}
         {reading !== null && reading.kind === "field" ? <p>{reading.statusSentence}</p> : null}
       </div>
@@ -2754,6 +2893,10 @@ function OperatorSurfaces(): JSX.Element {
 /**
  * One ledger: its read, and the view that renders whatever it answered with.
  *
+ * The ledger's own size is stated above the view, from the read's `total`, because the read answers
+ * one page of the ledger rather than the whole history and a page on its own cannot tell a short
+ * ledger from a clipped one.
+ *
  * A ledger with no entries is an ordinary state and is rendered as an explanation rather than as a
  * table with unexplained header rows, and a failed read is rendered as the explanation the error
  * notice carries with a retry control. A refusal for want of the operator role adds what the notice
@@ -2802,15 +2945,26 @@ function LedgerPanel(props: {
 
   // The result is handed to the ledger view exactly as it was read: nothing here re-sorts,
   // re-computes, aggregates or reformats an entry, and the refund control the view owns appends
-  // through the service rather than editing anything this page holds.
-  return <LedgerTable ledger={ledger} result={state.value} onRefunded={props.onRefunded} />;
+  // through the service rather than editing anything this page holds. The ledger's own size is
+  // stated beside the view, because the read answers one page of the ledger and that page is what
+  // the view renders.
+  return (
+    <>
+      <p className="ledger-table__note">
+        {describeLedgerTotal(state.value.total, state.value.entries.length)}
+      </p>
+      <LedgerTable ledger={ledger} result={state.value} onRefunded={props.onRefunded} />
+    </>
+  );
 }
 
 /**
  * The audit feed: one read, and the table that renders whatever it answered with.
  *
- * The feed is what was *written*, and it is read in the order the events were written — an
- * append-only feed whose order is its meaning. Nothing here sorts, filters, paginates or re-keys it.
+ * The feed is what was *written*, and the page the read answers is in the order the events were
+ * written — an append-only feed whose order is its meaning. Nothing here sorts, filters or re-keys
+ * it: the rows rendered are the rows the read answered, and the page's own bound is stated in the
+ * section's explanation and in the table's caption.
  */
 function AuditFeed(props: {
   readonly reloadToken: number;
@@ -2845,14 +2999,15 @@ function AuditFeed(props: {
 /**
  * The audit events as a table, in the order the read returned them.
  *
- * Five facts and two timestamps, each rendered as it was stored: the action is copied verbatim as
- * the writing route recorded it rather than narrowed to a vocabulary this page invents, and an event
- * that recorded no reason states that it recorded none instead of rendering a blank cell.
+ * Five facts and two timestamps, the two instants rendered through the workspace's one reading of a
+ * stored instant: the action is copied verbatim as the writing route recorded it rather than narrowed
+ * to a vocabulary this page invents, and an event that recorded no reason states that it recorded
+ * none instead of rendering a blank cell.
  */
 function AuditTable(props: { readonly events: readonly AuditEvent[] }): JSX.Element {
   return (
     <div className="table__wrapper">
-      <table className="table table--ledger">
+      <table className="table table--ledger table--dense">
         <caption>{AUDIT_TABLE_CAPTION}</caption>
         <thead>
           <tr>
@@ -2869,18 +3024,20 @@ function AuditTable(props: { readonly events: readonly AuditEvent[] }): JSX.Elem
           {props.events.map(
             (event: AuditEvent): JSX.Element => (
               <tr key={event.id}>
-                <td>
+                <td data-label={ACTOR_COLUMN_LABEL}>
                   <span className="table__identifier">{event.actor_account_id}</span>
                 </td>
-                <td>{event.action}</td>
-                <td>{event.resource_type}</td>
-                <td>
+                <td data-label={ACTION_COLUMN_LABEL}>{event.action}</td>
+                <td data-label={RESOURCE_TYPE_COLUMN_LABEL}>{event.resource_type}</td>
+                <td data-label={RESOURCE_ID_COLUMN_LABEL}>
                   <span className="table__identifier">{event.resource_id}</span>
                 </td>
-                <td>{event.status_code}</td>
-                <td>{event.reason === null ? <em>{NO_REASON_NOTE}</em> : event.reason}</td>
-                <td>
-                  <time dateTime={event.created_at}>{event.created_at}</time>
+                <td data-label={STATUS_COLUMN_LABEL}>{event.status_code}</td>
+                <td data-label={REASON_COLUMN_LABEL}>
+                  {event.reason === null ? <em>{NO_REASON_NOTE}</em> : event.reason}
+                </td>
+                <td data-label={RECORDED_COLUMN_LABEL}>
+                  <Timestamp value={event.created_at} />
                 </td>
               </tr>
             ),

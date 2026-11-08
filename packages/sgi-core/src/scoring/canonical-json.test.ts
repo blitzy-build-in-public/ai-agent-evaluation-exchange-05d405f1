@@ -16,8 +16,9 @@ import { canonicalize, UnrenderableValueError } from "./canonical-json";
  * The walk's totality is pinned here as well, because determinism needs it: a document nested
  * twenty thousand levels deep renders, and renders identically twice, because the depth of a value
  * is not a limit of the evaluator; while the values JSON has no canonical text for — one that
- * refers to itself, one holding a member that cannot be read, one that is not JSON data at all —
- * refuse with the coded `UnrenderableValueError` rather than a raw engine error.
+ * refers to itself, one holding a member that cannot be read, a number JSON cannot carry, one that
+ * is not JSON data at all — refuse with the coded `UnrenderableValueError` rather than a raw engine
+ * error.
  *
  * The behaviour is exercised through the function's arguments alone, which is why the module
  * loads no fixture file, opens no database and reads no environment.
@@ -184,7 +185,7 @@ describe("canonicalize", () => {
     });
   });
 
-  describe("totality at any depth, and the three refusals", () => {
+  describe("totality at any depth, and the four refusals", () => {
     /**
      * The depth the documents below are nested to.
      *
@@ -243,13 +244,21 @@ describe("canonicalize", () => {
      * One value JSON has no canonical text for, with the label its case is named by.
      *
      * `undefined` and the bigint are cast because handing one in is exactly what these cases are
-     * about: the argument type says JSON data, and a caller can still pass a value that is not.
+     * about: the argument type says JSON data, and a caller can still pass a value that is not. The
+     * non-finite numbers need no cast: `JSON.parse` reads the `1e999` a client can send as
+     * `Infinity`, so a caller reaches one through ordinary JSON text, and `JSON.stringify` writes
+     * each of them as `null` — which would compare equal to an expected `null` and store evidence
+     * differing from the submission.
      */
     const unrenderable: ReadonlyArray<readonly [string, JsonValue]> = [
       ["a value that refers to itself", cyclic as unknown as JsonValue],
       ["a revoked proxy", revoked.proxy as unknown as JsonValue],
       ["undefined", undefined as unknown as JsonValue],
       ["a bigint", 1n as unknown as JsonValue],
+      ["positive infinity", Number.POSITIVE_INFINITY],
+      ["negative infinity", Number.NEGATIVE_INFINITY],
+      ["NaN", Number.NaN],
+      ["the infinity JSON.parse reads from 1e999", JSON.parse("1e999") as JsonValue],
     ];
 
     it.each(unrenderable)(

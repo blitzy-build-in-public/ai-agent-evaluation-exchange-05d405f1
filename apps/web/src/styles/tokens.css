@@ -114,11 +114,12 @@
   --color-notice-info-text: #1a5490; /* 6.86:1 on its surface */
 
   /* ---- Colour: disclosures ------------------------------------------------
-     Three labels that must stay legible rather than decorative, because each one
-     tells the reader what a thing is: the sample-badge chip on a report, the
-     "Sponsored" label on a sponsored item, and the persistent demo banner that
-     states the session is a demonstration. Each keeps its text above 4.5:1 on its
-     own surface at the small type the UI renders these at. */
+     Labels that must stay legible rather than decorative, because each one tells
+     the reader what a thing is: the sample-badge chip on a report, the report
+     label's own chip on a listing card, the "Sponsored" label on a sponsored item,
+     and the persistent demo banner that states the session is a demonstration.
+     Each keeps its text above 4.5:1 on its own surface at the small type the UI
+     renders these at. */
 
   --color-badge-surface: #eef1f5;
   --color-badge-border: #5b7290; /* 4.36:1 on its surface */
@@ -133,9 +134,13 @@
   --color-banner-text: #123c69; /* 9.67:1 on its surface */
 
   /* ---- Colour: outcome chip -----------------------------------------------
-     The PASS/FAIL chip listing-card.tsx and report.tsx render. These six names
-     alias the success and error notice triples rather than restating them, so an
-     outcome and its notice can never drift apart and one edit moves both. */
+     The PASS/FAIL chip the listing card, the listing detail page and the report
+     page render — one chip (app.css's .chip) for every consumer of a report's own
+     values, so the same datum is drawn the same way wherever it is read. These six
+     names alias the success and error notice triples rather than restating them,
+     so an outcome and its notice can never drift apart and one edit moves both.
+     The report label's chip, beside the outcome on the card, uses the badge
+     triples above: a label is a disclosure rather than a pass or a failure. */
 
   --color-outcome-pass-surface: var(--color-notice-success-surface);
   --color-outcome-pass-border: var(--color-notice-success-border);
@@ -225,9 +230,19 @@
      here introduces a horizontal scrollbar.
 
      --touch-target-min is the smallest a control may be, as a minimum rather than
-     a size — it covers the navigation disclosure button, the filter controls, the
-     compare selection controls and the demo-account switcher. In rem, so the
-     target grows with the reader's font size like the text inside it. */
+     a size — it covers every control of this UI, including the navigation
+     disclosure button, the search and filter controls, the compare selection
+     control, the demo-account switcher and the bypass link. A control whose own
+     box is drawn smaller keeps the whole target on the label around it: the
+     checkbox and radio controls are drawn at 1.25rem inside a label that holds
+     this minimum.
+
+     A link that is part of a sentence, or that is a row's own text — a listing
+     title, a board row's question or listing, a link to a report — is exempt:
+     its box is the line box it sits in, so padding it to this minimum would
+     push the text around it apart, and WCAG 2.1 AA sets no target-size
+     criterion in any case; this is the plan's own value for controls. In rem,
+     so the target grows with the reader's font size like the text inside it. */
 
   --layout-max-width: 75rem; /* 1200px */
   --breakpoint-narrow: 48rem; /* 768px — documentation; app.css repeats the literal in its media conditions */

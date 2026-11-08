@@ -245,14 +245,16 @@ export const recordedOutputItemSchema = {
  * version): the deterministic, synchronous evaluation that writes the report.
  *
  * **The body carries no retest field, and `additionalProperties: false` is how
- * that is expressed structurally.** Fastify 4 validates with `removeAdditional:
- * true` among its Ajv defaults, so an unexpected field — a client-supplied
- * `prior_report_id`, say — is **removed before the handler runs** rather than
- * producing a `400`; likewise a numeric-looking string such as `"42"` is coerced
- * under `coerceTypes: 'array'`, so a `candidate_version_id` of `"42"` arrives as
- * the string it already is. The consequence matters to a handler author: no
- * handler may rely on seeing an unknown field, and none needs to, because the
- * prior-report link is server-derived. `apps/api/src/routes/evaluations.ts` takes
+ * that is expressed structurally.** The API holds a body to this closed object
+ * before its validator runs — the check in
+ * `apps/api/src/routes/request-body-policy.ts` — so an unexpected field, a
+ * client-supplied `prior_report_id` say, is answered **`400 validation_error`**
+ * rather than **removed before the handler runs**, and a value of the wrong JSON
+ * type for a declared field is answered the same way rather than converted:
+ * `candidate_version_id: 42` is refused instead of being read as the string
+ * `"42"`. The consequence matters to a handler author: no handler may rely on
+ * seeing an unknown field, and none needs to, because the prior-report link is
+ * server-derived. `apps/api/src/routes/evaluations.ts` takes
  * the newest existing report for the submitted `candidate_version_id` and
  * `standard_version_id`, records its id in `prior_report_id`, and records no link
  * (`null`) when that version has no prior report.
@@ -355,10 +357,11 @@ export const appealIdParamsSchema = {
  * The report being appealed comes from the **path**, through
  * {@link evaluationIdParamsSchema}, and never from this body, so a caller cannot
  * appeal a report it did not target. The appellant's identity comes from the
- * resolved `X-Demo-Account` header and is not a field here either: Fastify 4
- * strips an unexpected field before the handler runs, so a client-supplied
- * `developer_account_id`, `report_id`, `status` or `created_at` has no effect and
- * no handler may rely on one.
+ * resolved `X-Demo-Account` header and is not a field here either: the
+ * request-body policy refuses an unexpected field with `400 validation_error`
+ * before the handler runs, so a client-supplied `developer_account_id`,
+ * `report_id`, `status` or `created_at` is answered rather than ignored, and no
+ * handler may rely on one.
  *
  * `reason` is **required** — an appeal is opened against a report *with a stated
  * reason* — and it carries `minLength: 1` so an empty string states nothing
@@ -366,21 +369,28 @@ export const appealIdParamsSchema = {
  * it, and the contract's `409` for an already-decided appeal belongs to that
  * ruling route.
  *
+ * `reason` also carries a stated `maxLength` of 1000: it is served with the appeal
+ * the write answers with and is what the operator's ruling is decided against, so
+ * a field with no ceiling lets one client inflate every payload that carries the
+ * appeal. The number is this module's own choice, large enough to state an
+ * appeal's grounds in full and no larger.
+ *
  * A ruling on the appeal appends a governance event and leaves the report
  * **byte-identical**: `evaluation_reports` is append-only, this route is not
  * among its writers, and no field below can express a change to it.
  *
- * Statuses: `400` for a missing or empty `reason`, `404` for an unknown report,
- * `401` for a missing or unresolvable demo header, `403` for a resolvable
- * account whose role is not `developer` or which does not own the appealed
- * report. Success is `201` with the appeal in status `open`.
+ * Statuses: `400` for a missing or empty `reason` or a `reason` over its stated
+ * maximum, `404` for an unknown report, `401` for a missing or unresolvable demo
+ * header, `403` for a resolvable account whose role is not `developer` or which
+ * does not own the appealed report. Success is `201` with the appeal in status
+ * `open`.
  */
 export const appealCreateBodySchema = {
   body: {
     type: 'object',
     required: ['reason'],
     properties: {
-      reason: { type: 'string', minLength: 1 },
+      reason: { type: 'string', minLength: 1, maxLength: 1000 },
     },
     additionalProperties: false,
   },
@@ -406,14 +416,20 @@ export const appealCreateBodySchema = {
  *
  * `reason` is optional — a ruling is not obliged to justify itself — and when
  * present it travels into the appended event's payload rather than into the
- * appeal row. The operator's power is additive only: this body touches no
- * report, no case result and no ledger entry, and an upheld appeal certifies
- * nothing and changes no badge, so `evaluation_reports` stays byte-identical.
+ * appeal row. The operator's power is additive only: this body touches no report,
+ * no case result and no ledger entry, and an upheld appeal certifies nothing and
+ * changes no badge, so `evaluation_reports` stays byte-identical.
  *
- * Statuses: `400` for a missing `status` or a value outside the enum, `404` for
- * an unknown appeal, `409` for an appeal already ruled, `401` for a missing or
- * unresolvable demo header, and `403` for a resolvable account whose role is not
- * `operator`.
+ * `reason` carries a stated `maxLength` of 1000: it travels into that appended
+ * event, which the governance trail and the operator's audit feed read back, so a
+ * field with no ceiling lets one client inflate every payload that carries the
+ * ruling. The number is this module's own choice, large enough to state a
+ * ruling's reasoning in full and no larger.
+ *
+ * Statuses: `400` for a missing `status`, a value outside the enum or a `reason`
+ * over its stated maximum, `404` for an unknown appeal, `409` for an appeal
+ * already ruled, `401` for a missing or unresolvable demo header, and `403` for a
+ * resolvable account whose role is not `operator`.
  */
 export const appealRulingBodySchema = {
   body: {
@@ -421,7 +437,7 @@ export const appealRulingBodySchema = {
     required: ['status'],
     properties: {
       status: { type: 'string', enum: APPEAL_RULINGS },
-      reason: { type: 'string' },
+      reason: { type: 'string', maxLength: 1000 },
     },
     additionalProperties: false,
   },

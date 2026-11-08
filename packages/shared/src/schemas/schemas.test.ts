@@ -98,10 +98,12 @@ import {
 
 import {
   BADGE_SCOPE,
+  COLLECTION_PAGE_SIZE,
   DEMO_AUTHENTICATION_LABEL,
   FOUNDER_ALLOCATION_CONTRACT_LABEL,
   LISTING_PAGE_SIZE,
   NO_REPORT_LABEL,
+  PAGE_NUMBER_MAX,
   REPORT_LABEL_SAMPLE,
   REPORT_LABEL_VERIFIED_IN_DEMO,
   SPONSORED_LABEL,
@@ -162,8 +164,34 @@ describe('listingSearchQuerySchema', () => {
     });
   });
 
+  it('bounds page above at the page size the offset arithmetic still states exactly', () => {
+    // The upper bound the bounded collection reads declare is not a taste: past it the
+    // product could not state where a page starts, because `page` times the page size
+    // would leave `Number.MAX_SAFE_INTEGER` and round, and a rounded offset is what the
+    // storage layer refuses. The bound is therefore the page at the edge of that range
+    // and the page after it is outside it, asserted here as the exactness the constant
+    // exists for rather than as a literal.
+    expect(PAGE_NUMBER_MAX).toBe(Math.floor(Number.MAX_SAFE_INTEGER / COLLECTION_PAGE_SIZE));
+    expect(COLLECTION_PAGE_SIZE * PAGE_NUMBER_MAX).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
+    expect(COLLECTION_PAGE_SIZE * (PAGE_NUMBER_MAX + 1)).toBeGreaterThan(
+      Number.MAX_SAFE_INTEGER,
+    );
+  });
+
   it('closes the query object, so an unexpected key is stripped rather than accepted', () => {
     expect(listingSearchQuerySchema.querystring.additionalProperties).toBe(false);
+  });
+
+  it('bounds each free-text filter at the length its own kind needs', () => {
+    // A query value reaches work that grows with it: `q` becomes a `LIKE` pattern compared
+    // with every listing's title and summary, so a filter with no ceiling lets one client make
+    // a single read arbitrarily expensive. The bounds are this module's own choice, sized to
+    // a search phrase, a category slug, a licence code and a standard code.
+    const properties = listingSearchQuerySchema.querystring.properties;
+    expect(properties.q.maxLength).toBe(200);
+    expect(properties.category.maxLength).toBe(64);
+    expect(properties.license.maxLength).toBe(64);
+    expect(properties.standard.maxLength).toBe(64);
   });
 });
 
@@ -196,6 +224,18 @@ describe('listingCreateBodySchema', () => {
     ]);
     expect(listingCreateBodySchema.body.additionalProperties).toBe(false);
   });
+
+  it('bounds the three text fields a collection read carries', () => {
+    // A stored value is served by every page that lists the listing, so a text field with no
+    // ceiling lets one client inflate every such payload and lengthen every search pattern the
+    // text matches. `category_id` carries no bound, and must not: it is an identifier resolved
+    // against the catalogue rather than text a reader is meant to read.
+    const properties = listingCreateBodySchema.body.properties;
+    expect(properties.title.maxLength).toBe(200);
+    expect(properties.summary.maxLength).toBe(2000);
+    expect(properties.license_code.maxLength).toBe(64);
+    expect(properties.category_id).not.toHaveProperty('maxLength');
+  });
 });
 
 describe('listingVersionCreateBodySchema', () => {
@@ -223,6 +263,13 @@ describe('listingVersionCreateBodySchema', () => {
       expect(new RegExp(versionString.pattern).test(versionLabel)).toBe(true);
     },
   );
+
+  it('bounds the optional notes a version publishes', () => {
+    // The notes are served with the version history on every read of the listing, which is why this
+    // one free-text field of the row carries a maximum. The version string's own two bounds stay
+    // exactly as the group above asserts them.
+    expect(listingVersionCreateBodySchema.body.properties.notes.maxLength).toBe(2000);
+  });
 });
 
 describe('compareQuerySchema', () => {
@@ -404,7 +451,7 @@ describe('evaluationSubmissionBodySchema', () => {
   it('offers no field through which a retest link could be addressed', () => {
     // The server derives `prior_report_id` from the newest existing report for the
     // submitted candidate version and standard version, so the client has no way to
-    // point at a predecessor; with `removeAdditional: true` an injected field is removed
+    // point at a predecessor; an injected field is refused with `400 validation_error`
     // before the handler runs, and no handler may rely on seeing one.
     const serialised = JSON.stringify(evaluationSubmissionBodySchema);
     expect(serialised).not.toMatch(/prior_report_id/i);
@@ -443,6 +490,13 @@ describe('the evaluation and appeal parameter and body contracts', () => {
     // `409` for an already-decided appeal coherent.
     expect(APPEAL_RULINGS).not.toContain('open');
   });
+
+  it('bounds the stated reason on an appeal and on the ruling that decides it', () => {
+    // The reason is served with the appeal and travels into the ruling's appended event, so an
+    // unbounded one would be carried by every payload that reads either.
+    expect(appealCreateBodySchema.body.properties.reason.maxLength).toBe(1000);
+    expect(appealRulingBodySchema.body.properties.reason.maxLength).toBe(1000);
+  });
 });
 
 describe('demoAccountHeaderSchema', () => {
@@ -477,6 +531,27 @@ describe('demoAccountHeaderSchema', () => {
   });
 });
 
+describe('the buyer challenge and discussion-thread bodies', () => {
+  it('bounds each free-text field the two public boards carry', () => {
+    // Both boards are public reads that serve the rows they hold, so a field with no ceiling
+    // lets one client inflate every payload that carries the challenge, the response, the
+    // thread or the post.
+    // Each number is the module's own choice, large enough for the content of that kind.
+    expect(challengeCreateBodySchema.body.properties.question.maxLength).toBe(1000);
+    expect(challengeResponseBodySchema.body.properties.body.maxLength).toBe(4000);
+    expect(threadCreateBodySchema.body.properties.title.maxLength).toBe(200);
+    expect(threadPostBodySchema.body.properties.body.maxLength).toBe(4000);
+  });
+
+  it('leaves the identifiers unbounded, because an identifier is resolved rather than read', () => {
+    // A path parameter and a foreign key name a row; neither is text a reader is meant to read, so
+    // neither carries a length bound.
+    expect(challengeCreateBodySchema.body.properties.listing_id).not.toHaveProperty('maxLength');
+    expect(challengeIdParamsSchema.params.properties.id).not.toHaveProperty('maxLength');
+    expect(threadIdParamsSchema.params.properties.id).not.toHaveProperty('maxLength');
+  });
+});
+
 describe('inquiryCreateBodySchema', () => {
   it('requires the listing and the message, and declares no other property', () => {
     expect(Object.keys(inquiryCreateBodySchema)).toEqual(['body']);
@@ -492,6 +567,7 @@ describe('inquiryCreateBodySchema', () => {
     expect(inquiryCreateBodySchema.body.properties.message).toEqual({
       type: 'string',
       minLength: 1,
+      maxLength: 2000,
     });
     expect(inquiryCreateBodySchema.body.additionalProperties).toBe(false);
   });
@@ -568,6 +644,7 @@ describe('moderationActionBodySchema', () => {
     expect(moderationActionBodySchema.body.properties.reason).toEqual({
       type: 'string',
       minLength: 1,
+      maxLength: 1000,
     });
     expect(moderationActionBodySchema.body.additionalProperties).toBe(false);
     expect(MODERATION_ACTIONS).toEqual(['flag', 'hide', 'restore']);
@@ -605,6 +682,17 @@ describe('the standards proposal and review bodies', () => {
     expect(standardProposalReviewBodySchema.body.properties.status.enum).not.toContain(
       'submitted',
     );
+  });
+
+  it('bounds the proposal text and the review reason', () => {
+    // A proposal is read back by the governance trail that decides it and by the page that
+    // lists it, and a review's reason travels into the event that trail appends.
+    expect(standardProposalCreateBodySchema.body.properties.title.maxLength).toBe(200);
+    expect(standardProposalCreateBodySchema.body.properties.rationale.maxLength).toBe(4000);
+    expect(standardProposalCreateBodySchema.body.properties.standard_id).not.toHaveProperty(
+      'maxLength',
+    );
+    expect(standardProposalReviewBodySchema.body.properties.reason.maxLength).toBe(1000);
   });
 });
 

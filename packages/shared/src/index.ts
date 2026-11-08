@@ -48,6 +48,7 @@ export * from "./types/sponsored";
 export type * from "./types/demo-label";
 
 export * from "./schemas/listings-schema";
+export * from "./schemas/pagination-schema";
 export * from "./schemas/evaluations-schema";
 export * from "./schemas/commerce-schema";
 export * from "./schemas/auth-header-schema";

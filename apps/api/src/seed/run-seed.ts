@@ -89,8 +89,10 @@ try {
 } catch (error: unknown) {
   // One line, and the thrown message is the only detail carried into it. The seed's own refusal
   // names the database and the variable that selects another one, which is the remedy an operator
-  // acts on; `seedDatabase`'s single transaction is what guarantees the database holds nothing from
-  // this run, so there is no partial state to describe or to clean up here.
+  // acts on, and the path such a refusal names is deliberately not a secret: it is the local file the
+  // operator chose and naming it is what makes the refusal actionable. `seedDatabase`'s single
+  // transaction is what guarantees the database holds nothing from this run, so there is no partial
+  // state to describe or to clean up here.
   const detail =
     error instanceof Error ? error.message : "the seed could not be applied and the failure carried no message.";
   console.error(`seed: failed: ${detail}`);

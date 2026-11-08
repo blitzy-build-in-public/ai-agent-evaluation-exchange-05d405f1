@@ -70,6 +70,7 @@ import {
   SEED_LISTING_CLAIMS,
   SEED_LISTINGS,
   SEED_LISTING_VERSIONS,
+  SEED_OPERATOR_ACCOUNT_ID,
   SEED_SPONSORED_SLOTS,
   SEED_STANDARD,
   SEED_THREADS,
@@ -186,8 +187,11 @@ export function seedDatabase(database: Database): SeedSummary {
     insertStandard(database);
     // The versioned criteria are the domain's data, written through the domain's only writer rather
     // than by a hand-written insert: a row this file built itself could state criteria the evaluator
-    // does not read.
-    registerStandardVersion(database, SGI_SO_1_0_0);
+    // does not read. The publisher is this seed's own operator account, the account the product gives
+    // the power to manage policy versions (AAP §0.1), and the demo seed publishes the provisional
+    // standard version under it; the writer appends the publication to the governance log beside the
+    // row, in its own transaction.
+    registerStandardVersion(database, SGI_SO_1_0_0, SEED_OPERATOR_ACCOUNT_ID);
 
     insertSponsoredSlots(database);
 

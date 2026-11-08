@@ -5,8 +5,11 @@
  * Six decisions are deliberate.
  *
  * **The reason is enforced twice, and only the second enforcement is the contract.** The
- * submit control is disabled while the reason is blank, so an obviously invalid write costs no
- * round trip, and the handler refuses a blank reason without sending anything. The API's schema
+ * handler refuses a blank reason without sending anything, and that refusal is rendered where
+ * the field is: the sentence beside the reason field, its `aria-invalid` and the notice the
+ * status region announces. A blank submit is therefore explained on an attempted submit rather
+ * than met by a control that is simply unavailable, so the same sentence the server's own
+ * refusal produces is reachable without a round trip. The API's schema
  * requires `reason` with `minLength: 1` all the same, so this panel keeps the server able to
  * refuse: a `400` renders as a sentence tied to the reason field, with the typed reason left in
  * place so it can be corrected rather than retyped. A component that prevented the blank case
@@ -172,6 +175,12 @@ interface ModerationRefusal {
   readonly reasonError: string | null;
   /** The sentence the status region announces. */
   readonly notice: string;
+  /**
+   * The notice variant that sentence renders in: the warning triple for the write rate limit, which
+   * the operator waits out and applies the action again, and the error triple for every other
+   * refusal.
+   */
+  readonly variant: "notice--error" | "notice--warning";
   /** Whether the refusal was an unknown listing, which the panel answers with a way back to browse. */
   readonly backToBrowse: boolean;
 }
@@ -228,24 +237,59 @@ function throttledNotice(retryAfterSeconds: number | null): string {
 function describeRefusal(error: unknown): ModerationRefusal {
   const failure = readFailure(error);
   if (failure === null) {
-    return { reasonError: null, notice: UNEXPECTED_FAILURE_NOTICE, backToBrowse: false };
+    return {
+      reasonError: null,
+      notice: UNEXPECTED_FAILURE_NOTICE,
+      variant: "notice--error",
+      backToBrowse: false,
+    };
   }
   if (failure.code === TRANSPORT_ERROR_CODE) {
-    return { reasonError: null, notice: TRANSPORT_FAILURE_NOTICE, backToBrowse: false };
+    return {
+      reasonError: null,
+      notice: TRANSPORT_FAILURE_NOTICE,
+      variant: "notice--error",
+      backToBrowse: false,
+    };
   }
   switch (failure.status) {
     case 400:
-      return { reasonError: REASON_REFUSED_MESSAGE, notice: REASON_REFUSED_NOTICE, backToBrowse: false };
+      return {
+        reasonError: REASON_REFUSED_MESSAGE,
+        notice: REASON_REFUSED_NOTICE,
+        variant: "notice--error",
+        backToBrowse: false,
+      };
     case 401:
-      return { reasonError: null, notice: NO_ACCOUNT_NOTICE, backToBrowse: false };
+      return { reasonError: null, notice: NO_ACCOUNT_NOTICE, variant: "notice--error", backToBrowse: false };
     case 403:
-      return { reasonError: null, notice: NOT_OPERATOR_NOTICE, backToBrowse: false };
+      return {
+        reasonError: null,
+        notice: NOT_OPERATOR_NOTICE,
+        variant: "notice--error",
+        backToBrowse: false,
+      };
     case 404:
-      return { reasonError: null, notice: MISSING_LISTING_NOTICE, backToBrowse: true };
+      return {
+        reasonError: null,
+        notice: MISSING_LISTING_NOTICE,
+        variant: "notice--error",
+        backToBrowse: true,
+      };
     case 429:
-      return { reasonError: null, notice: throttledNotice(failure.retryAfterSeconds), backToBrowse: false };
+      return {
+        reasonError: null,
+        notice: throttledNotice(failure.retryAfterSeconds),
+        variant: "notice--warning",
+        backToBrowse: false,
+      };
     default:
-      return { reasonError: null, notice: UNEXPECTED_FAILURE_NOTICE, backToBrowse: false };
+      return {
+        reasonError: null,
+        notice: UNEXPECTED_FAILURE_NOTICE,
+        variant: "notice--error",
+        backToBrowse: false,
+      };
   }
 }
 
@@ -320,7 +364,12 @@ export function ModerationActions(props: ModerationActionsProps): JSX.Element {
     event.preventDefault();
 
     if (isReasonBlank) {
-      setRefusal({ reasonError: REASON_REQUIRED_MESSAGE, notice: BLANK_REASON_NOTICE, backToBrowse: false });
+      setRefusal({
+        reasonError: REASON_REQUIRED_MESSAGE,
+        notice: BLANK_REASON_NOTICE,
+        variant: "notice--error",
+        backToBrowse: false,
+      });
       return;
     }
 
@@ -412,7 +461,7 @@ export function ModerationActions(props: ModerationActionsProps): JSX.Element {
       <button
         type="submit"
         className="button button--destructive"
-        disabled={isSubmitting || isReasonBlank}
+        disabled={isSubmitting}
         aria-busy={isSubmitting}
         aria-describedby={submitHint === "" ? undefined : submitHintId}
       >
@@ -429,7 +478,7 @@ export function ModerationActions(props: ModerationActionsProps): JSX.Element {
           once here rather than declared twice by an aria-live attribute beside it. */}
       <div className="status-region" role="status">
         {refusal !== null ? (
-          <div className="notice notice--error">
+          <div className={`notice ${refusal.variant}`}>
             <p>{refusal.notice}</p>
             {refusal.backToBrowse ? (
               <p>

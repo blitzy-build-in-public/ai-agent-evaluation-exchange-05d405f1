@@ -117,8 +117,9 @@ interface ModerationRouteParams {
  * vocabulary and the reason the contract requires with it.
  *
  * The operator's identity is not a body member and must not become one: it is resolved server-side
- * from the `X-Demo-Account` header, so a client-supplied actor is stripped by the schema's
- * `additionalProperties: false` rather than honoured.
+ * from the `X-Demo-Account` header, so a client-supplied actor is refused by the schema's
+ * `additionalProperties: false` — the scope's request-body policy answers it `400 validation_error`
+ * before the handler runs — rather than honoured.
  */
 interface ModerationRequestBody {
   readonly action: ModerationAction;
@@ -356,10 +357,10 @@ function moderateListing(
  * Registers this group's one route — `POST /moderation/listings/:id/actions` — on the instance it is
  * handed.
  *
- * The path is prefix-relative: the versioned prefix — `API_PREFIX`, from `apps/api/src/server.ts` —
- * is applied exactly once, by `./register-routes`, which calls this function with its encapsulated
- * scope. That literal appears nowhere in this file and must not: a group that spelled it would be
- * the second place the prefix is decided.
+ * The path is prefix-relative: the versioned prefix — `API_PREFIX`, declared once in the sibling
+ * `./register-routes` — is applied exactly once, by `./register-routes`, which calls this function with
+ * its encapsulated scope. That literal appears nowhere in this file and must not: a group that spelled
+ * it would be the second place the prefix is decided.
  *
  * The options carry three things. The `schema` spread is the request's whole contract — the path
  * parameter, the body and the demo-session header, each from `@adem/shared` so the API and the web

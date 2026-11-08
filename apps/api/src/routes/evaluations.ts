@@ -18,7 +18,8 @@
  * (`403`), the candidate version read from this workspace's own `listing_versions` table (`404`),
  * the ownership check (`403`), the versioned criteria and the fixture case set (`404`, `400`), the
  * scoring, and then — inside one transaction — the label, the server-derived retest link, the
- * report with its evidence, the gate fee and the audit event.
+ * report with its evidence, the `retest_created` governance event the link is recorded in, the gate
+ * fee and the audit event.
  *
  * **The `422` fires before anything is written.** A submission that records no output for a fixture
  * case is refused by the scorer as `incomplete_submission`, which maps to the contract's `422`, and
@@ -31,10 +32,12 @@
  * submission body names a file, a command or an endpoint.
  *
  * **The retest link is the server's and never a client's.** The body carries no retest field, and
- * its `additionalProperties: false` means a field a client did add is removed before this handler
- * runs. The prior report is derived here from the reports already stored for the submitted
+ * its `additionalProperties: false` is what the scope's request-body policy holds a submission to: a
+ * field a client did add is refused with `400 validation_error` before this handler runs. The prior
+ * report is derived here from the reports already stored for the submitted
  * candidate version and standard version, so a retest appends a report pointing at its predecessor
- * while the predecessor stays byte-identical.
+ * while the predecessor stays byte-identical, and the link is recorded in the append-only governance
+ * log as a `retest_created` event beside the report it created.
  *
  * **What it never touches.** No statement here updates or deletes anything, and none carries a
  * replace-style conflict resolution, because `evaluation_reports` and `report_case_results` are
@@ -65,6 +68,7 @@ import {
 import type { ReportRecord, StandardVersionRecord } from "@adem/sgi-core";
 import {
   SGI_SO_1_0_0,
+  appendEvent,
   buildReport,
   deriveReportLabel,
   findLatestReportId,
@@ -306,16 +310,17 @@ function toEvaluationReportDetail(report: ReportRecord): EvaluationReportDetail 
  * Registers this group's two routes — the deterministic evaluation and its report read — on the
  * instance it is handed.
  *
- * The paths are prefix-relative: the versioned prefix — `API_PREFIX`, from `apps/api/src/server.ts` —
- * is applied exactly once, by `./register-routes`, which calls this function with its encapsulated
- * scope. That literal appears nowhere in this file and must not: a group that spelled it would be
- * the second place the prefix is decided. The two routes are registered in contract-table order.
+ * The paths are prefix-relative: the versioned prefix — `API_PREFIX`, declared once in the sibling
+ * `./register-routes` — is applied exactly once, by `./register-routes`, which calls this function with
+ * its encapsulated scope. That literal appears nowhere in this file and must not: a group that spelled it
+ * would be the second place the prefix is decided. The two routes are registered in contract-table order.
  *
  * The write carries two schema sections and one option. `demoAccountHeaderSchema` is what makes an
  * absent or empty `X-Demo-Account` a validation failure at the edge, which the server's single error
  * handler answers `401 unauthorized` for this header, and `evaluationSubmissionBodySchema` validates
- * the declarative submission, whose `additionalProperties: false` is what removes a client-supplied
- * retest field before this handler runs. The rate-limit option is the contract's write limit, read
+ * the declarative submission, whose `additionalProperties: false` is what the scope's request-body
+ * policy holds a client to, refusing a client-supplied retest field with `400 validation_error`
+ * before this handler runs. The rate-limit option is the contract's write limit, read
  * from the resolved configuration rather than restated, and it is attached to this route alone: the
  * plugin is registered without a global default, so a route that wants the limit names it and every
  * read stays unlimited.
@@ -376,9 +381,12 @@ export function registerEvaluationRoutes(
         );
       }
 
-      // Step 4 — the versioned criteria and the case set. `404` when no published standard version
-      // matches, `400` when the standard's definition and its fixture set have drifted apart; both
-      // are the domain's refusals, mapped by the error handler from their own codes.
+      // Step 4 — the versioned criteria and the case set, from one resolution. `404` when no published
+      // standard version matches, `400` when the standard's definition and its fixture set have
+      // drifted apart; both are the domain's refusals, mapped by the error handler from their own
+      // codes. The resolution happens here and once: the record it returns names the criteria the
+      // scorer reads and is handed to the case-set loader below, so the row behind it is neither read
+      // nor re-parsed a second time in this request.
       const standardVersion = resolveStandardVersion(
         context.database,
         body.standard_version_id,
@@ -390,14 +398,16 @@ export function registerEvaluationRoutes(
         );
       }
 
-      const caseSet = getStandardCaseSet(context.database, body.standard_version_id);
+      const caseSet = getStandardCaseSet(context.database, standardVersion);
 
       // Step 5 — scoring. The pass rule is applied inside `scoreSubmission`, which reads the
       // thresholds from the versioned criteria resolved above; its refusals are the contract's:
       // `incomplete_submission` (a fixture case with no recorded output) is `422`, `unknown_case` and
-      // `duplicate_case` are `400`. They are raised here, before any write, so a refused submission
-      // leaves the report, evidence and ledger tables exactly as they were. Nothing submitted is
-      // executed on this path.
+      // `duplicate_case` are `400`, and a recorded output holding a number JSON cannot represent —
+      // the `1e999` a client can send, because the submission schema leaves `output` unconstrained —
+      // is `unrenderable_value`, also `400`. They are raised here, before any write, so a refused
+      // submission leaves the report, evidence and ledger tables exactly as they were. Nothing
+      // submitted is executed on this path.
       const scored = scoreSubmission(
         standardVersion.definition,
         caseSet,
@@ -413,23 +423,25 @@ export function registerEvaluationRoutes(
         scored.outcome,
       );
 
-      // Steps 7 to 9 — one act. The report with its per-case evidence, the gate fee and the audit
-      // event are written inside one enclosing transaction: a completed evaluation can therefore
-      // never leave a report without its fee record or without the audit row that says who wrote it,
-      // and a failure anywhere in them rolls the whole attempt back. `insertReport` opens its own
-      // transaction for the report and its evidence; better-sqlite3 nests it as a savepoint, so the
-      // two are one act rather than two. `appendAuditEvent` opens none of its own, which is why it
-      // is called inside this one.
+      // Steps 7 to 10 — one act. The report with its per-case evidence, the retest's governance event,
+      // the gate fee and the audit event are written inside one enclosing transaction: a completed
+      // evaluation can therefore never leave a report without its fee record or without the audit row
+      // that says who wrote it, and a failure anywhere in them rolls the whole attempt back.
+      // `insertReport` opens its own transaction for the report and its evidence; better-sqlite3 nests
+      // it as a savepoint, so the two are one act rather than two. `appendEvent` and `appendAuditEvent`
+      // open none of their own, which is why they are called inside this one.
       const report = context.database.transaction((): ReportRecord => {
         // A retest link, derived from the reports already stored for this candidate version and this
         // standard version and never accepted from the client. `null` when that version has no report
         // yet; the newest report's identifier otherwise. The link is read inside the same transaction
         // that appends the report it points away from, so the predecessor a report cites cannot
-        // change between the read and the write.
+        // change between the read and the write. The version is the record resolved in step 4 and not
+        // its label again: a label would have to be resolved to the row identifier the column stores,
+        // which would read and re-parse the same row this request already holds.
         const priorReportId = findLatestReportId(
           context.database,
           body.candidate_version_id,
-          scored.standardVersionId,
+          standardVersion,
         );
 
         const record = buildReport(scored, {
@@ -439,7 +451,32 @@ export function registerEvaluationRoutes(
           priorReportId,
         });
 
-        insertReport(context.database, record);
+        // The version resolved in step 4 is handed in, so the report is stored against the row that
+        // request already resolved rather than against a second resolution of the same label: the
+        // function stores that record's identifier after checking it is the label this report cites.
+        insertReport(context.database, record, standardVersion);
+
+        // The retest is recorded where its link is derived, in the transaction that appends the report
+        // it points away from: the append-only log is the record of what was decided, and a report
+        // linking to a predecessor is exactly that decision. A first submission for this candidate
+        // version and standard version has no predecessor — `priorReportId` is `null` — so it appends
+        // nothing new and the log gains one event per retest rather than one per submission. No reason
+        // is passed: a retest decides by what it points at, and the report's own audit row records the
+        // write beside it.
+        if (priorReportId !== null) {
+          appendEvent(context.database, {
+            subjectType: "evaluation_report",
+            subjectId: record.reportId,
+            eventType: "retest_created",
+            actorAccountId: account.id,
+            payload: {
+              reportId: record.reportId,
+              priorReportId,
+              candidateVersionId: record.candidateVersionId,
+              standardVersionId: record.standardVersionId,
+            },
+          });
+        }
 
         // The flat fictional gate fee, once per completed evaluation and whether the outcome is
         // `PASS` or `FAIL`. The call is handed the completed report's identifier and the resolved

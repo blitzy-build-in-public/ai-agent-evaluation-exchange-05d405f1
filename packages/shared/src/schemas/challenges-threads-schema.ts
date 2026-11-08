@@ -26,16 +26,24 @@
  *
  * A challenge is created `open`. The buyer's identity is resolved server-side
  * from the `X-Demo-Account` header — attached as this route's header contract
- * from `./auth-header-schema.ts` — and is never a body field. Because Fastify 4
- * validates with `removeAdditional: true`, a client-supplied `account_id`,
- * `status` or `created_at` is stripped before the handler runs instead of
- * producing a `400`, so no handler may rely on seeing a client-supplied
- * identity, status or timestamp.
+ * from `./auth-header-schema.ts` — and is never a body field. The API holds a
+ * request body to this closed object before its validator runs — the check in
+ * `apps/api/src/routes/request-body-policy.ts` — so a client-supplied
+ * `account_id`, `status` or `created_at` is answered `400 validation_error`
+ * rather than stripped, and a value of the wrong JSON type for a declared field
+ * is answered the same way rather than converted. No handler may rely on seeing
+ * a client-supplied identity, status or timestamp, and a client is no longer
+ * left believing one was accepted.
  *
- * Validation produces `400` for a missing or empty `listing_id` or `question`;
- * the route's own checks produce `404` for an unknown listing, `401` for a
- * missing or unresolvable demo header, and `403` for a resolvable account whose
- * role is not `buyer`.
+ * Validation produces `400` for a missing or empty `listing_id` or `question`,
+ * or a `question` over its stated maximum; the route's own checks produce `404`
+ * for an unknown listing, `401` for a missing or unresolvable demo header, and
+ * `403` for a resolvable account whose role is not `buyer`.
+ *
+ * `question` carries a stated `maxLength` of 1000. A challenge is read by every
+ * visitor who opens the board it belongs to, so a field with no ceiling lets one
+ * client inflate every payload that carries the question. The number is this
+ * module's own choice, large enough to state a question in full and no larger.
  */
 export const challengeCreateBodySchema = {
   body: {
@@ -43,7 +51,7 @@ export const challengeCreateBodySchema = {
     required: ['listing_id', 'question'],
     properties: {
       listing_id: { type: 'string', minLength: 1 },
-      question: { type: 'string', minLength: 1 },
+      question: { type: 'string', minLength: 1, maxLength: 1000 },
     },
     additionalProperties: false,
   },
@@ -74,20 +82,27 @@ export const challengeIdParamsSchema = {
  * from the resolved demo session and no route updates or deletes it. Writing a
  * response is what moves the challenge's status from `open` to `responded`, and
  * that transition happens in the domain layer — `status` is never a client
- * field, and a client-supplied value would be stripped before the handler runs.
+ * field, and a client-supplied value is refused with `400 validation_error`
+ * before the handler runs.
  *
  * A route attaches this schema beside `challengeIdParamsSchema`
  * (`{ ...challengeIdParamsSchema, ...challengeResponseBodySchema }`).
- * Validation produces `400` for a missing or empty `body`; the route's own
- * checks produce `404` for an unknown challenge id, `401` for a missing or
- * unresolvable demo header, and `403` for a role the row does not accept.
+ * Validation produces `400` for a missing or empty `body`, or a `body` over its
+ * stated maximum; the route's own checks produce `404` for an unknown challenge
+ * id, `401` for a missing or unresolvable demo header, and `403` for a role the
+ * row does not accept.
+ *
+ * `body` carries a stated `maxLength` of 4000. A response is served beside its
+ * challenge by the board read, which is public, so a field with no ceiling lets
+ * one client inflate every payload that carries the answer. The number is this
+ * module's own choice, large enough for a developer's full answer and no larger.
  */
 export const challengeResponseBodySchema = {
   body: {
     type: 'object',
     required: ['body'],
     properties: {
-      body: { type: 'string', minLength: 1 },
+      body: { type: 'string', minLength: 1, maxLength: 4000 },
     },
     additionalProperties: false,
   },
@@ -100,17 +115,23 @@ export const challengeResponseBodySchema = {
  * `X-Demo-Account` header resolves. The author is resolved from that header —
  * attached as this route's header contract from `./auth-header-schema.ts` — and
  * is never a body field; a client-supplied `author_account_id` or `created_at`
- * is stripped before the handler runs.
+ * is refused with `400 validation_error` before the handler runs.
  *
- * Validation produces `400` for a missing or empty `title`; the route's own
- * checks produce `401` for a missing or unresolvable demo header.
+ * Validation produces `400` for a missing or empty `title`, or a `title` over
+ * its stated maximum; the route's own checks produce `401` for a missing or
+ * unresolvable demo header.
+ *
+ * `title` carries a stated `maxLength` of 200. Every read of the board serves
+ * the title of each thread it lists, so a field with no ceiling lets one client
+ * inflate every payload that carries the thread. The number is this module's own
+ * choice, large enough for a thread's subject line and no larger.
  */
 export const threadCreateBodySchema = {
   body: {
     type: 'object',
     required: ['title'],
     properties: {
-      title: { type: 'string', minLength: 1 },
+      title: { type: 'string', minLength: 1, maxLength: 200 },
     },
     additionalProperties: false,
   },
@@ -141,19 +162,25 @@ export const threadIdParamsSchema = {
  * from the resolved demo session and no route updates or deletes it. As with a
  * thread, every demo role may post, so the only role rule is that the header
  * resolves, and a client-supplied `author_account_id` or `created_at` is
- * stripped before the handler runs.
+ * refused with `400 validation_error` before the handler runs.
  *
  * A route attaches this schema beside `threadIdParamsSchema`
  * (`{ ...threadIdParamsSchema, ...threadPostBodySchema }`). Validation produces
- * `400` for a missing or empty `body`; the route's own checks produce `404` for
- * an unknown thread id and `401` for a missing or unresolvable demo header.
+ * `400` for a missing or empty `body`, or a `body` over its stated maximum; the
+ * route's own checks produce `404` for an unknown thread id and `401` for a
+ * missing or unresolvable demo header.
+ *
+ * `body` carries a stated `maxLength` of 4000. A post is served beside its
+ * thread by the board read, which is public, so a field with no ceiling lets one
+ * client inflate every payload that carries the reply. The number is this
+ * module's own choice, large enough for a full reply and no larger.
  */
 export const threadPostBodySchema = {
   body: {
     type: 'object',
     required: ['body'],
     properties: {
-      body: { type: 'string', minLength: 1 },
+      body: { type: 'string', minLength: 1, maxLength: 4000 },
     },
     additionalProperties: false,
   },

@@ -41,11 +41,15 @@
  * outputs, so sending it unchanged re-runs exactly what was measured; on success the page announces
  * the new report, links to it, and says plainly that the report being read is untouched.
  *
- * **An appeal changes nothing, and this page offers no way to rule one.** Opening an appeal asks an
+ * **An appeal changes nothing, and the ruling surface is the operator's.** Opening an appeal asks an
  * operator to review the outcome; a ruling is appended as a governance event and the report is left
- * byte for byte as it stands. The ruling route has no function in `../api-client` and no surface in
- * the plan, so this page has no control for it and says so rather than implying that a reader could
- * rule their own appeal.
+ * byte for byte as it stands. The page therefore carries the developer's opening form and, for the
+ * operator demo account alone, the surface that decides the appeals awaiting a ruling — the operator's
+ * documented power, reachable in the product rather than only at the API. Which appeals await a ruling
+ * is read from the operator's own audit feed, because the contract names no read that lists appeals: an
+ * opening and a ruling are the two writes the feed records for one. The two surfaces are mounted per
+ * role rather than hidden, so an account that cannot use one makes no request for it, and the feed read
+ * fires for the operator and for no other account.
  *
  * **The rubric reference is text, never a link.** The API serves the built application and no
  * documentation directory, so a link to the document the reference names would be answered with the
@@ -55,24 +59,47 @@
  *
  * Appearance belongs to the `.page`, `.field*`, `.table*`, `.notice*`, `.status-region` and
  * `.button*` rules of the workspace stylesheet; this file imports no stylesheet, carries no inline
- * style and reads no storage, cookie, environment value or configuration of its own.
+ * style and reads no cookie, environment value or configuration of its own. The selected demo account
+ * is read through `../api-client`'s `getSelectedDemoAccountId` and resolved by `../data/demo-accounts`,
+ * which is how the page knows whose surfaces to mount; nothing else of the reader's is stored or read.
  */
 
 import { useCallback, useEffect, useId, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  APPEAL_RULINGS,
   BADGE_SCOPE,
   REPORT_LABEL_SAMPLE,
   REPORT_LABEL_VERIFIED_IN_DEMO,
 } from "@adem/shared";
-import type { Appeal, EvaluationReportDetail, RecordedOutput, ReportCaseResult } from "@adem/shared";
+import type {
+  Appeal,
+  AppealRuling,
+  AppealRulingBody,
+  AuditEvent,
+  EvaluationReportDetail,
+  GovernanceEvent,
+  RecordedOutput,
+  ReportCaseResult,
+  ReportOutcome,
+} from "@adem/shared";
 
-import { createEvaluation, getReport, openAppeal } from "../api-client";
+import {
+  createEvaluation,
+  getReport,
+  getSelectedDemoAccountId,
+  listAuditEvents,
+  openAppeal,
+  ruleAppeal,
+} from "../api-client";
+import type { AppealRulingResult } from "../api-client";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { SampleBadge } from "../components/sample-badge";
+import { findDemoAccount } from "../data/demo-accounts";
 import {
+  Timestamp,
   describeRetryWait,
   isRecord,
   readText,
@@ -113,6 +140,16 @@ const MATCH_LABEL = "Match";
 const NO_MATCH_LABEL = "No match";
 
 /**
+ * The five column labels of the per-case evidence table, named once here so the header row and the
+ * label each cell prints below the breakpoint are the same five strings and cannot drift apart.
+ */
+const CASE_COLUMN_LABEL = "Case";
+const SEVERITY_COLUMN_LABEL = "Severity";
+const EXPECTED_OUTPUT_COLUMN_LABEL = "Expected output";
+const RECORDED_OUTPUT_COLUMN_LABEL = "Recorded output";
+const RESULT_COLUMN_LABEL = "Result";
+
+/**
  * The reading of a failed write, as the two forms of this page render it.
  *
  * A discriminated union rather than one shape with nullable members, because the three readings
@@ -138,6 +175,11 @@ type WriteFailureReading =
       /** Nothing about the field is wrong: the sentence belongs in the status region. */
       readonly kind: "explained";
       readonly sentence: string;
+      /**
+       * The notice variant the explanation renders in: the warning triple for the write rate limit,
+       * which the reader waits out and sends again, and the error triple for every other refusal.
+       */
+      readonly variant: "notice--error" | "notice--warning";
       /** Whether the state offers the way back to browsing. */
       readonly offersBrowse: boolean;
     };
@@ -328,27 +370,29 @@ function describeAppealFailure(error: unknown): WriteFailureReading | null {
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { kind: "explained", sentence: UNREADABLE_APPEAL_FAILURE, offersBrowse: false };
+    return { kind: "explained", sentence: UNREADABLE_APPEAL_FAILURE, variant: "notice--error", offersBrowse: false };
   }
   switch (failure.status) {
     case 400:
       return { kind: "field", sentence: REFUSED_REASON_SENTENCE, statusSentence: REFUSED_REASON_STATUS };
     case 401:
-      return { kind: "explained", sentence: NO_ACCOUNT_APPEAL_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: NO_ACCOUNT_APPEAL_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 403:
-      return { kind: "explained", sentence: WRONG_ROLE_APPEAL_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: WRONG_ROLE_APPEAL_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 404:
-      return { kind: "explained", sentence: MISSING_REPORT_APPEAL_SENTENCE, offersBrowse: true };
+      return { kind: "explained", sentence: MISSING_REPORT_APPEAL_SENTENCE, variant: "notice--error", offersBrowse: true };
     case 429:
       return {
         kind: "explained",
         sentence: throttledAppealSentence(failure.retryAfterSeconds),
+        variant: "notice--warning",
         offersBrowse: false,
       };
     default:
       return {
         kind: "explained",
         sentence: `The appeal was not opened. ${withFullStop(failure.message)} The reason you wrote has been kept.`,
+        variant: "notice--error",
         offersBrowse: false,
       };
   }
@@ -368,7 +412,7 @@ function describeRetestFailure(error: unknown): WriteFailureReading | null {
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { kind: "explained", sentence: UNREADABLE_RETEST_FAILURE, offersBrowse: false };
+    return { kind: "explained", sentence: UNREADABLE_RETEST_FAILURE, variant: "notice--error", offersBrowse: false };
   }
   switch (failure.status) {
     case 400:
@@ -378,23 +422,25 @@ function describeRetestFailure(error: unknown): WriteFailureReading | null {
         statusSentence: REFUSED_SUBMISSION_STATUS,
       };
     case 401:
-      return { kind: "explained", sentence: NO_ACCOUNT_RETEST_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: NO_ACCOUNT_RETEST_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 403:
-      return { kind: "explained", sentence: WRONG_ROLE_RETEST_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: WRONG_ROLE_RETEST_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 404:
-      return { kind: "explained", sentence: UNRESOLVED_VERSION_RETEST_SENTENCE, offersBrowse: false };
+      return { kind: "explained", sentence: UNRESOLVED_VERSION_RETEST_SENTENCE, variant: "notice--error", offersBrowse: false };
     case 422:
       return { kind: "incomplete", error };
     case 429:
       return {
         kind: "explained",
         sentence: throttledRetestSentence(failure.retryAfterSeconds),
+        variant: "notice--warning",
         offersBrowse: false,
       };
     default:
       return {
         kind: "explained",
         sentence: `The evaluation was not run. ${withFullStop(failure.message)} The submission is still in the field.`,
+        variant: "notice--error",
         offersBrowse: false,
       };
   }
@@ -449,6 +495,16 @@ function CaseIdList(props: { readonly caseIds: readonly string[] }): JSX.Element
 }
 
 /**
+ * The chip class for one report outcome: `.chip` carries the geometry every consumer of a report's
+ * own values shares, and the direction modifier carries the tint the outcome tokens name, so this
+ * page states an outcome in the same treatment the listing card gives the same value. The word
+ * itself is the meaning, so the chip reads without its tint.
+ */
+function outcomeChipClass(outcome: ReportOutcome): string {
+  return outcome === "PASS" ? "chip chip--pass" : "chip chip--fail";
+}
+
+/**
  * The plain-language summary of one report: what the run did, which cases did not match, whether any
  * of those were critical, and what the standard's rule makes of it.
  *
@@ -466,7 +522,7 @@ function OutcomeSummary(props: { readonly report: EvaluationReportDetail }): JSX
     <p>
       This run matched <strong>{report.matched_count}</strong> of{" "}
       <strong>{report.total_count}</strong> cases, and the service recorded it as{" "}
-      <strong>{report.outcome}</strong>.{" "}
+      <span className={outcomeChipClass(report.outcome)}>{report.outcome}</span>.{" "}
       {summary.failedCaseIds.length === 0 ? (
         "Every case in the report matched."
       ) : summary.failedCaseIds.length === 1 ? (
@@ -505,10 +561,11 @@ function OutcomeSummary(props: { readonly report: EvaluationReportDetail }): JSX
 /** The notice a failure that says nothing about the field renders, with the way back to browsing. */
 function ExplainedFailureNotice(props: {
   readonly sentence: string;
+  readonly variant: "notice--error" | "notice--warning";
   readonly offersBrowse: boolean;
 }): JSX.Element {
   return (
-    <div className="notice notice--error">
+    <div className={`notice ${props.variant}`}>
       <p>{props.sentence}</p>
       {props.offersBrowse ? (
         <p>
@@ -572,11 +629,12 @@ function readFailureState(error: unknown): ReportPageState {
 /**
  * The provenance of one report: every field it states about itself, in one definition list.
  *
- * The instant is rendered exactly as it was stored — an ISO-8601 UTC string — rather than through a
- * date formatter, because a formatted instant would differ per browser, per machine and per locale,
- * and this page shows a record rather than a rendering of one. The earlier report, when there is one,
- * is the retest chain: the address is the page's own route for that report, which is a route of this
- * application and never an address of the service.
+ * The instant renders through the workspace's one reading of a stored instant, which takes the date
+ * and the time from the stored string and states the instant is in UTC — no locale- or
+ * timezone-dependent formatter, no clock and no reader-dependent output, so this page shows a record
+ * rather than a rendering of one and the same record reads identically everywhere. The earlier
+ * report, when there is one, is the retest chain: the address is the page's own route for that
+ * report, which is a route of this application and never an address of the service.
  */
 function ProvenanceSection(props: { readonly report: EvaluationReportDetail }): JSX.Element {
   const report = props.report;
@@ -603,7 +661,9 @@ function ProvenanceSection(props: { readonly report: EvaluationReportDetail }): 
           <code>{report.standard_version_id}</code>
         </dd>
         <dt>Outcome</dt>
-        <dd>{report.outcome}</dd>
+        <dd>
+          <span className={outcomeChipClass(report.outcome)}>{report.outcome}</span>
+        </dd>
         <dt>Cases matched</dt>
         <dd>
           {report.matched_count} of {report.total_count}
@@ -611,9 +671,7 @@ function ProvenanceSection(props: { readonly report: EvaluationReportDetail }): 
         <dt>Critical cases that failed</dt>
         <dd>{report.critical_failures}</dd>
         <dt>Recorded at</dt>
-        <dd>
-          <code>{report.created_at}</code>
-        </dd>
+        <dd><Timestamp value={report.created_at} /></dd>
         <dt>Earlier report for this candidate version</dt>
         <dd>
           {report.prior_report_id === null ? (
@@ -722,36 +780,38 @@ function EvidenceSection(props: { readonly report: EvaluationReportDetail }): JS
             submission reads the same here on every run.
           </p>
           <div className="table__wrapper">
-            <table className="table">
+            <table className="table table--dense">
               <caption>
                 Per-case evidence for report <code>{report.id}</code>, in the order the evaluation
                 recorded it.
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Case</th>
-                  <th scope="col">Severity</th>
-                  <th scope="col">Expected output</th>
-                  <th scope="col">Recorded output</th>
-                  <th scope="col">Result</th>
+                  <th scope="col">{CASE_COLUMN_LABEL}</th>
+                  <th scope="col">{SEVERITY_COLUMN_LABEL}</th>
+                  <th scope="col">{EXPECTED_OUTPUT_COLUMN_LABEL}</th>
+                  <th scope="col">{RECORDED_OUTPUT_COLUMN_LABEL}</th>
+                  <th scope="col">{RESULT_COLUMN_LABEL}</th>
                 </tr>
               </thead>
               <tbody>
                 {report.case_results.map((result: ReportCaseResult): JSX.Element => (
                   <tr key={result.case_id}>
-                    <th scope="row">
+                    <th scope="row" data-label={CASE_COLUMN_LABEL}>
                       <code>{result.case_id}</code>
                     </th>
-                    <td>
+                    <td data-label={SEVERITY_COLUMN_LABEL}>
                       {result.severity === "critical" ? CRITICAL_SEVERITY_LABEL : STANDARD_SEVERITY_LABEL}
                     </td>
-                    <td>
+                    <td data-label={EXPECTED_OUTPUT_COLUMN_LABEL}>
                       <code>{result.expected}</code>
                     </td>
-                    <td>
+                    <td data-label={RECORDED_OUTPUT_COLUMN_LABEL}>
                       <code>{result.actual}</code>
                     </td>
-                    <td>{result.match ? MATCH_LABEL : NO_MATCH_LABEL}</td>
+                    <td data-label={RESULT_COLUMN_LABEL}>
+                      {result.match ? MATCH_LABEL : NO_MATCH_LABEL}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -765,13 +825,16 @@ function EvidenceSection(props: { readonly report: EvaluationReportDetail }): JS
 
 
 /**
- * The report page: one read of one report, and the two actions a developer has against it.
+ * The report page: one read of one report, the two actions a developer has against it, and — for the
+ * operator demo account — the surface that rules the appeals awaiting a decision.
  *
  * It owns the route's single `<main>` landmark and its single `<h1>`, so the shell — which renders the
  * header, the navigation, the demonstration banner and the account switcher — must not wrap it in
- * another landmark. Reading a report needs no demo account, so the one request this page makes is
- * public and carries no header; the two writes it offers carry the selected account, which
- * `../api-client` attaches and which a reader selects in the shell.
+ * another landmark. Reading a report needs no demo account, so the one request every reader makes is
+ * public and carries no header; the writes the page offers carry the selected account, which
+ * `../api-client` attaches and which a reader selects in the shell. Which surfaces are mounted follows
+ * the selected account's role, so an account that cannot use one makes no request for it: the ruling
+ * section's own read is one of the operator-only reads, and it fires only for the operator.
  *
  * Two states are the route's own addresses rather than failures of the request: a report the service
  * does not hold renders the absent-state page, and a report that is being read renders its heading with
@@ -785,6 +848,13 @@ export function ReportPage(): JSX.Element {
   // such an address already means, so it needs no request of its own.
   const reportId = params["id"] ?? "";
   const headingId = `${useId()}-heading`;
+
+  // Resolved on every render rather than held in state: the switcher in the page header writes the
+  // selection, and this page follows it, so switching account mounts or unmounts the operator's
+  // surface in the same update. The lookup answers `null` for an absent or unrecognised selection,
+  // which is the state of a reader who has chosen no account.
+  const account = findDemoAccount(getSelectedDemoAccountId());
+  const isOperator = account !== null && account.role === "operator";
 
   const [state, setState] = useState<ReportPageState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState<number>(0);
@@ -864,12 +934,15 @@ export function ReportPage(): JSX.Element {
           <ProvenanceSection report={state.report} />
           <ScopeSection report={state.report} />
           <EvidenceSection report={state.report} />
-          {/* Both actions are keyed by the report they act on, so a draft, a success and a failure
-              belong to one report and are dropped when the reader opens another. The two keys carry
-              the action's own prefix because they are siblings: one key for both would be the
+          {/* Both developer actions are keyed by the report they act on, so a draft, a success and a
+              failure belong to one report and are dropped when the reader opens another. The two keys
+              carry the action's own prefix because they are siblings: one key for both would be the
               duplicate React reconciles the two sections against, and a reader's appeal draft would
               be the retest form's state. */}
           <AppealSection key={`appeal-${state.report.id}`} reportId={state.report.id} />
+          {/* The operator's surface is mounted for that account alone, so no other account reads the
+              audit feed it derives the appeals from: a read that would be refused is not made. */}
+          {isOperator ? <AppealRulingSection key={`ruling-${state.report.id}`} /> : null}
           <RetestSection key={`retest-${state.report.id}`} report={state.report} />
         </>
       ) : null}
@@ -880,10 +953,12 @@ export function ReportPage(): JSX.Element {
 /**
  * The appeal action: a developer's request that this report's outcome be reviewed.
  *
- * Opening an appeal is the developer's to do and ruling one is not, which is why the section carries a
- * reason field and a submit control and nothing more. An appeal never changes the report it concerns —
- * a ruling is appended as a governance event — and the copy says so, because a reader who expected an
- * appeal to amend the evidence would read the page afterwards and think nothing had happened.
+ * Opening an appeal is the developer's to do; deciding one is the operator's, and the operator's own
+ * surface for it is {@link AppealRulingSection}, which the page mounts for that account and no other.
+ * This section therefore carries a reason field and a submit control and nothing more. An appeal never
+ * changes the report it concerns — a ruling is appended as a governance event — and the copy says so,
+ * because a reader who expected an appeal to amend the evidence would read the page afterwards and
+ * think nothing had happened.
  */
 function AppealSection(props: { readonly reportId: string }): JSX.Element {
   const idPrefix = useId();
@@ -951,8 +1026,8 @@ function AppealSection(props: { readonly reportId: string }): JSX.Element {
         An appeal asks an operator to review this report's outcome. It is opened by the developer that
         owns the measured version with a stated ground, and it leaves this report exactly as it stands:
         the ruling is recorded as an appended governance event, so the evidence above stays readable
-        whatever the ruling is. Deciding an appeal is an operator's action, which is why this page
-        carries no control for it.
+        whatever the ruling is. Deciding an appeal is the operator's action, and the surface for it is
+        offered on this page to the operator demo account alone.
       </p>
       <form onSubmit={handleSubmit} noValidate>
         <div className={fieldSentence === null ? "field" : "field field--error"}>
@@ -1016,11 +1091,578 @@ function AppealSection(props: { readonly reportId: string }): JSX.Element {
             </div>
           )}
           {reading === null || reading.kind !== "explained" ? null : (
-            <ExplainedFailureNotice sentence={reading.sentence} offersBrowse={reading.offersBrowse} />
+            <ExplainedFailureNotice
+              sentence={reading.sentence}
+              variant={reading.variant}
+              offersBrowse={reading.offersBrowse}
+            />
           )}
           {reading !== null && reading.kind === "field" ? <p>{reading.statusSentence}</p> : null}
         </div>
       </form>
+    </section>
+  );
+}
+
+
+/******* The operator's ruling surface */
+
+/** The heading of the operator's ruling section. */
+const RULING_HEADING = "Appeals awaiting a ruling";
+
+/** What the section states about the operator's power and about what a ruling does not do. */
+const RULING_SUMMARY =
+  "Ruling an appeal is the operator's action: it records the decision, appends a governance event and " +
+  "leaves the report the appeal concerns exactly as it stands. This surface is offered while the " +
+  "operator demo account is selected, and the appeals below are read from that account's own audit " +
+  "feed.";
+
+/** The appeal selection's label and the hint that says where the offered appeals come from. */
+const RULING_APPEAL_FIELD_LABEL = "Appeal to rule";
+const RULING_APPEAL_FIELD_HINT =
+  "Each appeal below has been opened and not yet ruled, newest first, read from the operator's audit " +
+  "feed: the contract names no read that lists appeals, so an opening and a ruling are what that feed " +
+  "records for one. The appeal a ruling is sent for comes from this selection rather than from the " +
+  "ground.";
+
+/** The ruling group's legend and the sentence that says what a decision does. */
+const RULING_DECISION_LEGEND = "Ruling";
+const RULING_DECISION_SUMMARY =
+  "One ruling per appeal. Each appends a governance event carrying the ground written below, and is " +
+  "recorded against the account the switcher has selected.";
+
+/**
+ * The label of each ruling the closed vocabulary offers, in the vocabulary's own order.
+ *
+ * A total `Record` over {@link AppealRuling} rather than a written-out pair, so the control renders one
+ * button per member of `APPEAL_RULINGS` — the tuple the route's request schema validates against — and
+ * a ruling added to or removed from that vocabulary fails this file's build instead of leaving a
+ * decision unreachable.
+ */
+const RULING_LABELS: Readonly<Record<AppealRuling, string>> = Object.freeze({
+  upheld: "Uphold the appeal",
+  denied: "Deny the appeal",
+});
+
+/** The ground field's label and the hint that says what a blank field means. */
+const RULING_GROUND_FIELD_LABEL = "Ground (optional)";
+const RULING_GROUND_FIELD_HINT =
+  "This field may be left blank: a ruling is not obliged to give a reason. Whatever is written here is " +
+  "recorded with the governance event the ruling appends, and that event is never edited.";
+
+/** Shown beside the controls while a ruling is in flight. */
+const RULING_SUBMITTING_HINT =
+  "Recording the ruling; the controls are unavailable until the service answers.";
+
+/** The empty state, for when the feed holds no appeal awaiting a decision. */
+const NO_PENDING_APPEALS_HEADING = "No appeal awaits a ruling";
+const NO_PENDING_APPEALS_EXPLANATION =
+  "The operator's audit feed holds no appeal that has been opened and not yet ruled, so there is " +
+  "nothing to decide here. An appeal a developer opens enters this list when the feed is read again; a " +
+  "ruled appeal never returns to it, because a ruling is final.";
+
+/** The control that reads the feed again, and what it states. */
+const RULING_RELOAD_LABEL = "Read the audit feed again";
+const RULING_RELOAD_HINT =
+  "An appeal opened since this page was read appears above once the feed is read again. The list comes " +
+  "from the service and never from this page's own copy of it.";
+
+/** What the section says when the audit feed itself could not be read. */
+const RULING_FEED_FAILURE_DETAIL =
+  "The appeals awaiting a ruling are read from the operator's audit feed, which is one of the " +
+  "operator-only reads. If the selected account is not the operator, switch to the operator demo " +
+  "account and read the list again.";
+
+/** The sentence a ruling that found no demo account renders. */
+const NO_ACCOUNT_RULING_SENTENCE =
+  "No demo account is selected, so the ruling was not sent. Choose the operator demo account in the demo account switcher and rule the appeal again — the selected account separates roles for the demonstration and is not a sign-in. The ground you wrote has been kept.";
+
+/** The sentence a ruling from an account without the operator role renders. */
+const NOT_OPERATOR_RULING_SENTENCE =
+  "Ruling an appeal needs a demo account whose role is operator, and the selected account is not the operator, so no ruling was recorded. Switch to the operator account and rule the appeal again. The ground you wrote has been kept.";
+
+/** The sentence a ruling of an appeal the service does not hold renders. */
+const MISSING_APPEAL_RULING_SENTENCE =
+  "The service does not hold that appeal, so no ruling was recorded. The audit feed is read again to show the appeals it does hold, and nothing was written.";
+
+/** The sentence a ruling of an appeal that already carries a terminal status renders. */
+const ALREADY_RULED_RULING_SENTENCE =
+  "That appeal has already been ruled, and a ruling is final: only an appeal that is still open can be ruled. The audit feed is read again to show what still awaits a decision, and nothing was written.";
+
+/** The sentence a ruling the service refused as it was sent renders. */
+const REFUSED_RULING_SENTENCE =
+  "An appeal is ruled upheld or denied, and the service did not accept the ruling sent, so nothing was recorded. Choose one of the two rulings and send it again.";
+
+/** The sentence a raised value carrying none of the facts renders for a ruling. */
+const UNREADABLE_RULING_FAILURE =
+  "The ruling was not recorded. Send it again; the ground you wrote has been kept.";
+
+/** The sentence a throttled ruling renders. */
+function throttledRulingSentence(retryAfterSeconds: number | null): string {
+  return `This client has sent the maximum number of writes allowed in a minute. ${describeRetryWait(retryAfterSeconds, "then send it again.")} The ground you wrote has been kept.`;
+}
+
+/**
+ * Reads a ruling's failure into what the section renders, and `null` when nothing has failed.
+ *
+ * The sentences are this section's own rather than the service's, because the status says what the
+ * operator can do about the failure — which account to switch to, whether the record has moved on —
+ * while the service's single sentence for a client error says only that the request was not accepted.
+ * The `409` and the `404` both re-read the audit feed where they are handled, because in both cases the
+ * list on screen is out of date rather than the request being wrong.
+ */
+function describeRulingFailure(error: unknown): WriteFailureReading | null {
+  if (error === null) {
+    return null;
+  }
+  const failure = readWriteFailure(error);
+  if (failure === null) {
+    return {
+      kind: "explained",
+      sentence: UNREADABLE_RULING_FAILURE,
+      variant: "notice--error",
+      offersBrowse: false,
+    };
+  }
+  switch (failure.status) {
+    case 400:
+      return {
+        kind: "explained",
+        sentence: REFUSED_RULING_SENTENCE,
+        variant: "notice--error",
+        offersBrowse: false,
+      };
+    case 401:
+      return { kind: "explained", sentence: NO_ACCOUNT_RULING_SENTENCE, variant: "notice--error", offersBrowse: false };
+    case 403:
+      return { kind: "explained", sentence: NOT_OPERATOR_RULING_SENTENCE, variant: "notice--error", offersBrowse: false };
+    case 404:
+      return { kind: "explained", sentence: MISSING_APPEAL_RULING_SENTENCE, variant: "notice--error", offersBrowse: false };
+    case 409:
+      return { kind: "explained", sentence: ALREADY_RULED_RULING_SENTENCE, variant: "notice--error", offersBrowse: false };
+    case 429:
+      return {
+        kind: "explained",
+        sentence: throttledRulingSentence(failure.retryAfterSeconds),
+        variant: "notice--warning",
+        offersBrowse: false,
+      };
+    default:
+      return {
+        kind: "explained",
+        sentence: `The ruling was not recorded. ${withFullStop(failure.message)} The ground you wrote has been kept.`,
+        variant: "notice--error",
+        offersBrowse: false,
+      };
+  }
+}
+
+/**
+ * The action each of the two writes records against an appeal, as `apps/api`'s audit vocabulary spells
+ * them.
+ *
+ * They are written here rather than imported because that vocabulary is declared in the API
+ * workspace's own audit module, which this workspace cannot reach: what crosses the boundary is the
+ * audit row, not the code that spells it. A rename on the API side would therefore leave this
+ * derivation finding nothing rather than failing to compile, which is why the empty list it then
+ * produces is an explained state — "no appeal awaits a ruling" — and not a silent blank.
+ */
+const APPEAL_OPENED_ACTION = "appeal.opened";
+const APPEAL_RULED_ACTION = "appeal.ruled";
+
+/** The resource type both of those writes record, and which this derivation requires. */
+const APPEAL_RESOURCE_TYPE = "appeal";
+
+/**
+ * One appeal the operator may rule, as the audit feed states it.
+ *
+ * The feed is the only read that names an appeal: the contract's appeals rows are a write-only pair,
+ * so what is known about one here is what its opening recorded — which row it is, when it was opened
+ * and which account opened it. The developer's own ground is not in this row and is not needed to rule
+ * an appeal; the operator's ground is what the ruling records.
+ */
+export interface PendingAppeal {
+  /** The appeal's identifier: the `resource_id` both writes name. */
+  readonly appealId: string;
+  /** When the appeal was opened, as the opening's audit row recorded it. */
+  readonly openedAt: string;
+  /** The account that opened it, as that row recorded the actor. */
+  readonly developerAccountId: string;
+}
+
+/**
+ * The appeals awaiting a ruling, derived from the operator's audit feed, newest first.
+ *
+ * An appeal awaits a ruling when the feed holds an `appeal.opened` row for it and no `appeal.ruled`
+ * row for the same resource: the two writes are the whole life of an appeal in the log, and a ruled
+ * appeal is excluded by that second row rather than by a status this page would have to be told. The
+ * feed arrives in the order the writes happened — oldest first — so the result is reversed to put the
+ * newest opening first, which is the order an operator wants to work through.
+ *
+ * It is a pure function of the events it is handed: no request, no clock and no storage, so the list
+ * is determined by the feed and by nothing else. An empty feed and a feed holding no open appeal both
+ * answer the empty list, which the section renders as an explained state rather than as a failure.
+ */
+export function appealsAwaitingRuling(events: readonly AuditEvent[]): readonly PendingAppeal[] {
+  const isAppealRow = (event: AuditEvent): boolean =>
+    event.resource_type === APPEAL_RESOURCE_TYPE;
+
+  const ruled = new Set(
+    events
+      .filter(
+        (event: AuditEvent): boolean => isAppealRow(event) && event.action === APPEAL_RULED_ACTION,
+      )
+      .map((event: AuditEvent): string => event.resource_id),
+  );
+
+  return events
+    .filter(
+      (event: AuditEvent): boolean =>
+        isAppealRow(event) && event.action === APPEAL_OPENED_ACTION && !ruled.has(event.resource_id),
+    )
+    .map(
+      (event: AuditEvent): PendingAppeal => ({
+        appealId: event.resource_id,
+        openedAt: event.created_at,
+        developerAccountId: event.actor_account_id,
+      }),
+    )
+    .reverse();
+}
+
+/** The state of the section's one read: the audit feed, and what went wrong when it did. */
+type PendingAppealsState =
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed"; readonly error: unknown }
+  | { readonly kind: "ready"; readonly events: readonly AuditEvent[] };
+
+/**
+ * The ruling the closed vocabulary states this page renders for an event's ground, or the sentence that
+ * says the ruling recorded none.
+ *
+ * A ground is optional on the route, and a ruling taken without one stores the absence — an empty
+ * string in the appended event's `reason`, which is how this page reads it — so neither reading renders
+ * a blank. The ground itself is rendered exactly as the event stores it, because it is the operator's
+ * own words and the record of why the decision was taken.
+ */
+function RulingGround(props: { readonly event: GovernanceEvent }): JSX.Element {
+  const stated = readText(props.event.reason);
+
+  return stated === null ? (
+    <em>No ground was recorded with this ruling.</em>
+  ) : (
+    <>{stated}</>
+  );
+}
+
+/**
+ * The operator's ruling surface: the appeals awaiting a decision, the ruling to record against one, and
+ * the event that records it.
+ *
+ * **The appeals are read from the operator's own audit feed.** The contract names no read that lists
+ * appeals — an appeal is opened and ruled through two write rows and returned by neither — so the feed
+ * of what was written is how an operator sees one to decide, and {@link appealsAwaitingRuling} derives
+ * the list from it. It is one of the operator-only reads, which is why the section is mounted only for
+ * the operator account: an account that cannot use this surface makes no request for it.
+ *
+ * **A ruling is final and changes no measurement.** The write moves the appeal's own status and
+ * appends a governance event; the report above is read from the service and reads the same before and
+ * after a ruling. Both the control's copy and the notice say so, because an operator who expected a
+ * ruling to alter the evidence would read the page afterwards and think nothing had happened.
+ *
+ * **The decision and its record are rendered together.** The notice states the appeal's new status and
+ * the appended event's identifier, type, actor, stated ground and instant, because the event is the
+ * only place the ground exists: the appeal row carries no ruling reason, so a surface that reported
+ * only the status would hide the decision's ground from the person who stated it. An answer that
+ * carried no event is reported as such rather than passed over.
+ *
+ * **A refusal is a sentence, never a trace.** Each status the ruling row can answer is rendered as this
+ * section's own words: which account to switch to (`401`, `403`), that the record has moved on (`404`,
+ * `409`, both of which re-read the feed), that the field itself was refused (`400`) and how long a
+ * throttled write must wait (`429`). No status code, no response body and no server sentence is shown
+ * for a refusal this section explains in full, which is the same treatment the two forms above give
+ * their own failures.
+ */
+function AppealRulingSection(): JSX.Element {
+  const idPrefix = useId();
+  const headingId = `${idPrefix}-ruling-heading`;
+  const appealFieldId = `${idPrefix}-appeal`;
+  const appealHintId = `${idPrefix}-appeal-hint`;
+  const groundFieldId = `${idPrefix}-ground`;
+  const groundHintId = `${idPrefix}-ground-hint`;
+  const decisionHintId = `${idPrefix}-decision-hint`;
+  const reloadHintId = `${idPrefix}-reload-hint`;
+
+  const [state, setState] = useState<PendingAppealsState>({ kind: "loading" });
+  const [readToken, setReadToken] = useState<number>(0);
+  const [chosenAppealId, setChosenAppealId] = useState<string | null>(null);
+  const [ground, setGround] = useState<string>("");
+  const [pending, setPending] = useState<AppealRuling | null>(null);
+  const [failure, setFailure] = useState<unknown>(null);
+  const [ruled, setRuled] = useState<AppealRulingResult | null>(null);
+
+  useEffect((): (() => void) => {
+    // The flag is what keeps a slow answer from a feed the operator has moved on from writing over the
+    // list now on screen, which a plain sequence of requests would do.
+    let cancelled = false;
+    setState({ kind: "loading" });
+    void listAuditEvents().then(
+      (events: AuditEvent[]): void => {
+        if (!cancelled) {
+          setState({ kind: "ready", events });
+        }
+      },
+      (caught: unknown): void => {
+        if (!cancelled) {
+          setState({ kind: "failed", error: caught });
+        }
+      },
+    );
+    return (): void => {
+      cancelled = true;
+    };
+  }, [readToken]);
+
+  const reloadFeed = useCallback((): void => {
+    setReadToken((current: number): number => current + 1);
+  }, []);
+
+  const awaiting = state.kind === "ready" ? appealsAwaitingRuling(state.events) : [];
+  // The selection is resolved against the appeals actually offered, so an appeal a re-read no longer
+  // lists cannot remain selected and be ruled as a stale identifier. Until the operator chooses one, the
+  // newest opening is the appeal the controls act on.
+  const chosen =
+    awaiting.find((appeal: PendingAppeal): boolean => appeal.appealId === chosenAppealId) ??
+    awaiting[0] ??
+    null;
+
+  const isBusy = pending !== null;
+  const canRule = chosen !== null && !isBusy;
+  const reading = describeRulingFailure(failure);
+
+  const handleGroundChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
+    setGround(event.target.value);
+  };
+
+  const applyRuling = async (ruling: AppealRuling): Promise<void> => {
+    if (chosen === null || isBusy) {
+      return;
+    }
+
+    setFailure(null);
+    setRuled(null);
+    setPending(ruling);
+
+    // The body is built with the ground present only when one was written: an optional field carried as
+    // an explicit empty string would state a ground of nothing, and the contract's shape admits absent
+    // and string alike while the product distinguishes the two.
+    const stated = ground.trim();
+    const body: AppealRulingBody =
+      stated === "" ? { status: ruling } : { status: ruling, reason: stated };
+
+    try {
+      const result = await ruleAppeal(chosen.appealId, body);
+      setGround("");
+      setChosenAppealId(result.appeal.id);
+      setRuled(result);
+      // A ruled appeal leaves the list, and the list is the service's answer rather than this page's
+      // assumption: the feed is read again so what appears is what the service now holds.
+      reloadFeed();
+    } catch (caught: unknown) {
+      setFailure(caught);
+      // A refusal that says the list on screen is stale reads it again: a `409` means the appeal has
+      // been ruled since the feed was read, and a `404` means the service no longer holds it at all.
+      // Neither is fixed by sending the same ruling again, so no retry is offered for either.
+      const status = statusOf(caught);
+      if (status === 404 || status === 409) {
+        reloadFeed();
+      }
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <section aria-labelledby={headingId}>
+      <h2 id={headingId}>{RULING_HEADING}</h2>
+      <p>{RULING_SUMMARY}</p>
+
+      {state.kind === "failed" ? (
+        <ErrorNotice
+          error={state.error}
+          onRetry={reloadFeed}
+          detail={statusOf(state.error) === 403 ? <p>{RULING_FEED_FAILURE_DETAIL}</p> : null}
+        />
+      ) : null}
+
+      {state.kind === "loading" ? (
+        <div className="status-region" role="status" aria-live="polite">
+          <p>
+            Reading the appeals awaiting a ruling. This section fills in when the service answers; the
+            audit feed is one of the operator-only reads, so an account that is not the operator is
+            answered with a refusal here rather than with a list.
+          </p>
+        </div>
+      ) : null}
+
+      {state.kind === "ready" && awaiting.length === 0 ? (
+        <EmptyState
+          headingLevel={3}
+          heading={NO_PENDING_APPEALS_HEADING}
+          explanation={NO_PENDING_APPEALS_EXPLANATION}
+        />
+      ) : null}
+
+      {chosen === null ? null : (
+        <>
+          <div className="field">
+            <label className="field__label" htmlFor={appealFieldId}>
+              {RULING_APPEAL_FIELD_LABEL}
+            </label>
+            <select
+              id={appealFieldId}
+              value={chosen.appealId}
+              onChange={(event: ChangeEvent<HTMLSelectElement>): void =>
+                setChosenAppealId(event.target.value)
+              }
+              aria-describedby={appealHintId}
+            >
+              {awaiting.map(
+                (appeal: PendingAppeal): JSX.Element => (
+                  <option key={appeal.appealId} value={appeal.appealId}>
+                    {`${appeal.appealId} — opened ${appeal.openedAt} by ${appeal.developerAccountId}`}
+                  </option>
+                ),
+              )}
+            </select>
+            <p className="field__hint" id={appealHintId}>
+              {RULING_APPEAL_FIELD_HINT}
+            </p>
+          </div>
+
+          <fieldset className="field">
+            <legend className="field__label">{RULING_DECISION_LEGEND}</legend>
+            <p className="field__hint" id={decisionHintId}>
+              {RULING_DECISION_SUMMARY}
+            </p>
+
+            <div className="field">
+              <label className="field__label" htmlFor={groundFieldId}>
+                {RULING_GROUND_FIELD_LABEL}
+              </label>
+              {/* A free-text statement of why an appeal is upheld or denied has no autofill purpose, so
+                  this field declares none rather than claiming one it does not have. */}
+              <textarea
+                id={groundFieldId}
+                rows={4}
+                value={ground}
+                onChange={handleGroundChange}
+                autoComplete="off"
+                aria-describedby={groundHintId}
+              />
+              <p className="field__hint" id={groundHintId}>
+                {RULING_GROUND_FIELD_HINT}
+              </p>
+            </div>
+
+            {/* One control per member of the closed vocabulary, labelled from a total record over it, so
+                a ruling added to `APPEAL_RULINGS` becomes reachable here rather than needing a new
+                control to be written. A ruling that leaves the vocabulary fails the build instead. */}
+            {APPEAL_RULINGS.map(
+              (ruling: AppealRuling): JSX.Element => (
+                <button
+                  key={ruling}
+                  type="button"
+                  className="button button--primary"
+                  disabled={!canRule}
+                  aria-busy={pending === ruling}
+                  aria-describedby={decisionHintId}
+                  onClick={(): void => {
+                    void applyRuling(ruling);
+                  }}
+                >
+                  {RULING_LABELS[ruling]}
+                </button>
+              ),
+            )}
+
+            {pending === null ? null : (
+              <p className="field__hint">{RULING_SUBMITTING_HINT}</p>
+            )}
+          </fieldset>
+
+          <p>
+            <button
+              type="button"
+              className="button button--secondary"
+              aria-describedby={reloadHintId}
+              onClick={reloadFeed}
+            >
+              {RULING_RELOAD_LABEL}
+            </button>
+          </p>
+          <p className="field__hint" id={reloadHintId}>
+            {RULING_RELOAD_HINT}
+          </p>
+        </>
+      )}
+
+      {/* The region is rendered whether or not an appeal is offered, and it is rendered with the section
+          so the node exists before the status it announces does. That placement is required rather than
+          cosmetic: a ruling the service records takes an appeal out of the list, so the last appeal ruled
+          leaves nothing for the controls above to act on, and a notice written inside that block would
+          unmount with it before anyone read it. `role="status"` is already a polite live region; the
+          assertion beside it is for a reader who maps the role differently. */}
+      <div className="status-region" role="status" aria-live="polite">
+        {ruled === null ? null : (
+          <div className="notice notice--success">
+            <p>
+              Appeal <code>{ruled.appeal.id}</code> is now{" "}
+              <strong>{ruled.appeal.status}</strong>. This report has not changed: the evidence above is
+              read from the report the service holds, and a ruling appends a governance event rather than
+              amending a measurement.
+            </p>
+            {ruled.event === null ? (
+              <p>
+                The service's answer carried no record of the appended event, so its trail cannot be
+                shown here. The ruling itself was recorded: the appeal's status above is the one the
+                service holds, and the feed is read again so the appeals listed above are the ones still
+                awaiting a decision.
+              </p>
+            ) : (
+              <dl>
+                <dt>Appended event</dt>
+                <dd>
+                  <code>{ruled.event.id}</code>
+                </dd>
+                <dt>Event type</dt>
+                <dd>
+                  <code>{ruled.event.event_type}</code>
+                </dd>
+                <dt>Recorded by</dt>
+                <dd>
+                  <code>{ruled.event.actor_account_id}</code>
+                </dd>
+                <dt>Stated ground</dt>
+                <dd>
+                  <RulingGround event={ruled.event} />
+                </dd>
+                <dt>Recorded at</dt>
+                <dd>
+                  <code>{ruled.event.created_at}</code>
+                </dd>
+              </dl>
+            )}
+          </div>
+        )}
+        {reading === null || reading.kind !== "explained" ? null : (
+          <ExplainedFailureNotice
+            sentence={reading.sentence}
+            variant={reading.variant}
+            offersBrowse={reading.offersBrowse}
+          />
+        )}
+      </div>
     </section>
   );
 }
@@ -1181,7 +1823,7 @@ function RetestSection(props: { readonly report: EvaluationReportDetail }): JSX.
             <div className="notice notice--success">
               <p>
                 Evaluation recorded as a new report: <code>{created.id}</code>, with the outcome{" "}
-                <strong>{created.outcome}</strong>.
+                <span className={outcomeChipClass(created.outcome)}>{created.outcome}</span>.
               </p>
               <p>
                 <Link to={`/reports/${created.id}`}>Read the new report</Link>
@@ -1200,7 +1842,11 @@ function RetestSection(props: { readonly report: EvaluationReportDetail }): JSX.
             </div>
           )}
           {reading === null || reading.kind !== "explained" ? null : (
-            <ExplainedFailureNotice sentence={reading.sentence} offersBrowse={reading.offersBrowse} />
+            <ExplainedFailureNotice
+              sentence={reading.sentence}
+              variant={reading.variant}
+              offersBrowse={reading.offersBrowse}
+            />
           )}
           {reading !== null && reading.kind === "field" ? <p>{reading.statusSentence}</p> : null}
         </div>

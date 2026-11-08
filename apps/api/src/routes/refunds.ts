@@ -183,12 +183,12 @@ interface RefundReversalResult {
  * an absent header a failure at the edge, which the server's single error handler answers `401`
  * rather than the framework's `400`; `transactionIdParamsSchema` requires the non-empty transaction
  * identifier in the path; `refundCreateBodySchema` requires `amount_minor_units` and nothing else,
- * so a client that sends a `transaction_id` or an amount field of its own alongside a valid body has
- * the field removed before this handler runs rather than acted on — the transaction comes from the
- * path and the amount from the one field, so neither can be stated twice in two places that could
- * disagree. The rate limit is the resolved write limit from the configuration, applied to this route
- * alone because `@fastify/rate-limit` is registered `global: false`: writes are capped and reads are
- * not, and exceeding the cap is answered `429` with a `Retry-After` header by the plugin.
+ * so a client that sends a `transaction_id` or an amount field of its own alongside a valid body is
+ * refused with `400 validation_error` before this handler runs rather than acted on — the transaction
+ * comes from the path and the amount from the one field, so neither can be stated twice in two places
+ * that could disagree. The rate limit is the resolved write limit from the configuration, applied to
+ * this route alone because `@fastify/rate-limit` is registered `global: false`: writes are capped and
+ * reads are not, and exceeding the cap is answered `429` with a `Retry-After` header by the plugin.
  *
  * Nothing is caught in the handler. The server's single error handler owns
  * `{ error: { code, message } }`, so a refusal thrown here — this file's own, from the domain's

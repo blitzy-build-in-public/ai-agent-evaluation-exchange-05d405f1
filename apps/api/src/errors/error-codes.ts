@@ -22,20 +22,29 @@
  * here adds it deliberately, which is a contract change, never an inline string at
  * a call site; and no route derives or overrides a status.
  *
- * The API's own eight codes, one per status the HTTP surface itself produces:
+ * The API's own ten codes, one per status the HTTP surface itself produces:
  * `validation_error` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404,
- * `conflict` 409, `unprocessable` 422, `rate_limited` 429, `internal_error` 500.
+ * `conflict` 409, `payload_too_large` 413, `unsupported_media_type` 415,
+ * `unprocessable` 422, `rate_limited` 429, `internal_error` 500.
+ *
+ * The two transport codes are the pair the framework raises for a body it will not
+ * parse — one above the route's limit, one carrying a media type no parser is
+ * registered for — and each is answered at the status it was raised with, so a client
+ * that caused the failure is told its request was refused rather than that the server
+ * failed. They are members of this vocabulary rather than a framework spelling passed
+ * through, because the status a client reads back and the code beside it are still
+ * chosen here and nowhere else.
  *
  * The domain refusal codes, each named exactly as the package that produces it
  * names it, because a route maps a refusal by that string and never by its class
  * name — `@adem/sgi-core`: 404 `unknown_standard`, 409 `already_decided`,
  * 409 `already_ruled`, 422 `incomplete_submission`, 400 `unknown_case`,
  * 400 `duplicate_case`, 400 `invalid_proposal`, 400 `invalid_appeal`,
- * 400 `standard_drift`; `@adem/commerce-sim`: 404 `transaction_not_found`,
- * 409 `already_fully_refunded`, 422 `not_offered`, 422 `exceeds_net_remaining`,
- * 400 `invalid_amount`. `not_found` is a single member carrying a single status,
- * because both an API route and `@adem/sgi-core`'s proposal, appeal and report
- * lookups produce it.
+ * 400 `standard_drift`, 400 `unrenderable_value`; `@adem/commerce-sim`: 404
+ * `transaction_not_found`, 409 `already_fully_refunded`, 422 `not_offered`,
+ * 422 `exceeds_net_remaining`, 400 `invalid_amount`. `not_found` is a single member
+ * carrying a single status, because both an API route and `@adem/sgi-core`'s
+ * proposal, appeal and report lookups produce it.
  *
  * `invalid_amount` is normally caught first by the shared JSON schema at the edge,
  * so its entry here is the second line rather than the first.
@@ -46,6 +55,8 @@ export type ApiErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'conflict'
+  | 'payload_too_large'
+  | 'unsupported_media_type'
   | 'unprocessable'
   | 'rate_limited'
   | 'internal_error'
@@ -62,7 +73,8 @@ export type ApiErrorCode =
   | 'invalid_proposal'
   | 'invalid_appeal'
   | 'standard_drift'
-  | 'invalid_amount';
+  | 'invalid_amount'
+  | 'unrenderable_value';
 
 /**
  * The status for every code in {@link ApiErrorCode}.
@@ -79,6 +91,8 @@ export const ERROR_STATUS: Readonly<Record<ApiErrorCode, number>> = Object.freez
   forbidden: 403,
   not_found: 404,
   conflict: 409,
+  payload_too_large: 413,
+  unsupported_media_type: 415,
   unprocessable: 422,
   rate_limited: 429,
   internal_error: 500,
@@ -96,18 +110,26 @@ export const ERROR_STATUS: Readonly<Record<ApiErrorCode, number>> = Object.freez
   invalid_appeal: 400,
   standard_drift: 400,
   invalid_amount: 400,
+  unrenderable_value: 400,
 });
 
 /**
  * The inverse map, for a failure that arrives with only a numeric status: a Fastify
- * schema-validation failure (400), any other Fastify transport error (its own
- * status), the write rate-limit path (429) and everything else (500). Every call
- * site is in `apps/api/src/server.ts`.
+ * schema-validation failure (400), a transport failure the framework raised at a status
+ * this map carries — a body above the route's limit (413), a media type no parser is
+ * registered for (415) — the write rate-limit path (429) and everything else (500).
+ * Every call site is in `apps/api/src/server.ts`.
+ *
+ * The two transport entries are what answer a framework-raised 413 or 415 at its own
+ * status with the code for it: before them the lookup missed and the failure was
+ * answered 500 `internal_error`, which told a client the server had failed when its own
+ * request had. A status this map does not carry still answers 500, so widening a
+ * framework's vocabulary is an edit here and never a status passed through with no code.
  *
  * Partial on purpose: `noUncheckedIndexedAccess` turns every lookup into
  * `ApiErrorCode | undefined`, so a caller writes
  * `STATUS_DEFAULT_CODE[status] ?? 'internal_error'` and a status outside these
- * eight answers 500 `internal_error` instead of passing a status through with no
+ * ten answers 500 `internal_error` instead of passing a status through with no
  * code. A failure known only by its status still needs a code, and no module but
  * this one chooses it.
  */
@@ -117,6 +139,8 @@ export const STATUS_DEFAULT_CODE: Readonly<Partial<Record<number, ApiErrorCode>>
   403: 'forbidden',
   404: 'not_found',
   409: 'conflict',
+  413: 'payload_too_large',
+  415: 'unsupported_media_type',
   422: 'unprocessable',
   429: 'rate_limited',
   500: 'internal_error',

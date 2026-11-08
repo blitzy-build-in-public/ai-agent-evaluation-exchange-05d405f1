@@ -40,9 +40,10 @@ import type { ExclusionClass, ExclusionRule, FileKind, RuleMatch } from './exclu
 const SCAN_COMMAND = 'npm run scan:exclusions';
 
 /**
- * The one exit code for a run that reached no verdict: an unexpected command line, or a scan whose own
- * rules could not be read. Distinct from `1`, which means the scan did read the tree and found
- * something, so a broken scanner is never mistaken for a dirty tree or for a clean one.
+ * The one exit code for a run that reached no verdict: an unexpected command line, a scan whose own
+ * rules could not be read, or a run that failed before it could read the tree. Distinct from `1`,
+ * which means the scan did read the tree and found something, so a broken scanner is never mistaken
+ * for a dirty tree or for a clean one.
  */
 const NO_VERDICT_EXIT_CODE = 2;
 
@@ -830,7 +831,9 @@ export function runScan(options: RunScanOptions = {}): ScanResult {
  * verbatim, because that list is the artefact's own statement of its limits and a scan must not be
  * read as covering more than it does. Excerpts are printed exactly as the rules masked them, so a
  * report can never echo a raw matched value. A run that reached no verdict closes by saying so, in
- * place of a finding count, so a scan that could not run never reads as a clean tree.
+ * place of a closing count, so a scan that could not run never reads as a clean tree. A run that did
+ * reach one closes by stating the findings it holds and the rules it applied - every rule the report
+ * grouped above, whether or not it fired - so a clean result still names the coverage the scan held.
  *
  * @param result - One run's findings, counts and notes.
  * @returns The report, ready to print, ending in a newline.
@@ -875,8 +878,10 @@ export function renderScanReport(result: ScanResult): string {
     return `${lines.join('\n')}\n`;
   }
 
-  const ruleCount = new Set(result.findings.map((finding) => finding.ruleId)).size;
-  lines.push('', `${result.findings.length} finding(s) across ${ruleCount} rule(s).`);
+  // The count is the rules the scan applies - one section per entry of `EXCLUSION_RULES` has just been
+  // printed above - not the rules that fired, so a clean run states its coverage instead of reading as
+  // though no rule ran.
+  lines.push('', `${result.findings.length} finding(s); ${EXCLUSION_RULES.length} rule(s) applied.`);
   return `${lines.join('\n')}\n`;
 }
 
@@ -919,7 +924,7 @@ if (isDirectRun()) {
       process.exitCode = result.exitCode;
     } catch (error) {
       process.stderr.write(`exclusion scan failed: ${messageOf(error)}\n`);
-      process.exitCode = 1;
+      process.exitCode = NO_VERDICT_EXIT_CODE;
     }
   }
 }

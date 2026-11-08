@@ -156,7 +156,7 @@ scripts. This table is the whole interface: if a command is not here, it is not 
 | `npm run seed` | Applies the migrations and writes the demo rows into the database named by `ADEM_DB_PATH`. | Once, against a fresh database, before the first look at the exchange. |
 | `npm run dev` | The web development server with hot reload; it proxies `/api` to the API at its default port. `npm run dev -w @adem/web` runs the same script from the workspace directly. | While working on the UI, with `npm start` (or `npm run seed`) in another shell for the API. |
 | `npm test` | `test:unit`, then `test:integration`, then `test:scan`, in that order. Exits 0 only when all three pass. | Before every commit. This is the whole-package gate. |
-| `npm run test:unit` | Every `<name>.test.ts` beside its source under `apps/`, `packages/`, `examples/` and `scripts/`, in-process: no HTTP server and no database file. `npm run test:unit -- <path>` narrows it to a workspace directory or one file. | While changing a pure function, a scoring rule, a policy or a ledger. |
+| `npm run test:unit` | Every `<name>.test.ts` beside its source under `apps/`, `packages/`, `examples/` and `scripts/`, in-process: no HTTP server and no database file. The exclusion scan's own self-test is not one of them — it has its own entry point, `npm run test:scan`, so no test file is run twice. `npm run test:unit -- <path>` narrows it to a workspace directory or one file. | While changing a pure function, a scoring rule, a policy or a ledger. |
 | `npm run test:integration` | The suites in `apps/api/test/integration/`, which start the real server on an ephemeral port against an in-memory database with the migrations applied and the seed loaded. `-- --testNamePattern=<name>` narrows it. | While changing a route, a status code or the migration runner. |
 | `npm run test:scan` | The exclusion scan's planted-violation self-test, also run by `npm test`. | While changing the scan itself. |
 | `npm run test:e2e` | The browser suites that drive the developer-to-buyer loop and walk every public page, against the application the configuration starts itself. | Before a pull request that touches the UI or the API. Requires `npm run build` and the browser below. |
@@ -185,7 +185,7 @@ install, build, test, seed or start the product.
 | Variable | Default | What it changes |
 | --- | --- | --- |
 | `ADEM_PORT` | `3000` | The port the API and the UI are served on. Set it only when `3000` is taken; the web development server proxies `/api` to `3000`, so a different port also means pointing the proxy at it. |
-| `ADEM_DB_PATH` | `<repository root>/.adem/adem.sqlite` | The SQLite file the process opens. Point it at a throwaway path, for example under `/tmp`, for a disposable run. |
+| `ADEM_DB_PATH` | `<repository root>/.adem/adem.sqlite` | The SQLite file the process opens. A relative value is resolved against the repository root, the same base the default has, so one value names one file whichever documented command opens it. Point it at a throwaway path, for example under `/tmp`, for a disposable run. |
 
 There is no other environment variable, no configuration file, no `.env` file and no secret anywhere in
 this project. Nothing at runtime calls an external network service.

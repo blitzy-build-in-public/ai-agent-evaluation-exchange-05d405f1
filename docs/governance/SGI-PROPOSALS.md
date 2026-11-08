@@ -79,7 +79,7 @@ The decision is recorded **only** as the status change plus the appended event: 
 3. **A change to the case set is a new version with its own fixture set**, not an edit to `SGI-SO-1.0.0`; `docs/starter-tasks/new-standard-version-case-set.md` is the worked contribution route for it. The `rubric_reference` a report stores is `SGI-SO-1.0.0#rubric`, which resolves to the anchor `#rubric` in `docs/STANDARD-SGI-SO-1.0.0.md`.
 4. **Applied migration files are immutable, and migrations only add:** none may drop or rewrite anything. `apps/api/src/db/migrate.ts` records each applied file's version, name and SHA-256 checksum in `schema_migrations` and refuses to start the server when an applied file's bytes changed, so a governance change is never a migration edit.
 5. **The tables are `standards`, `standard_versions`, `standard_proposals`, `governance_events` and `appeals`**, created by `packages/shared/migrations/0005_standards_and_proposals.sql` and `packages/shared/migrations/0007_governance_events_and_appeals.sql`; their columns, constraints and ownership are `docs/SCHEMA.md` and are not repeated here. `standard_versions` and `governance_events` are **append-only**; `standard_proposals` and `appeals` are mutable in the `status` column only and are **not** among the nine append-only tables.
-6. **Publication is its own act.** The closed vocabulary carries `standard_version_published` for the append site that announces a newly published version, and it never means "standard updated". No call site in this release appends it: `registerStandardVersion` writes the version row and imports no event writer, no route publishes a version, the versions are seeded, and approving a proposal publishes nothing. A report keeps citing the standard version it was scored under, because `standard_version_id` and `rubric_reference` are stored per report.
+6. **Publication is its own act.** The closed vocabulary carries `standard_version_published` for the append site that announces a newly published version, and it never means "standard updated". `registerStandardVersion`'s insert path appends it, in the same transaction that writes the version row: the event names the new `standard_version` row, the publisher and the standard's code and version label, and it stores no reason, because a publication decides by what it points at. A publication whose label is already stored appends nothing, and no route publishes a version — the versions are seeded, and approving a proposal publishes nothing. A report keeps citing the standard version it was scored under, because `standard_version_id` and `rubric_reference` are stored per report.
 
 ## Retests
 
@@ -87,7 +87,7 @@ A retest for the same candidate version and standard version creates a **new** r
 
 **The label never follows the outcome.** `deriveReportLabel` in `packages/sgi-core/src/reports/build-report.ts` decides it from one stored input, the candidate version's `is_fixture_candidate` flag: a fixture-candidate version is labelled `SAMPLE` and any other version `VERIFIED-IN-DEMO`, on `PASS` and `FAIL` alike. A **badge** is issued on `PASS` alone and names the standard version, the scope `structured output on fixture set only` and the report id; a `FAIL` report carries **no badge** and shows its per-case evidence with a plain-language summary instead. The evidence shape, the field list and the seeded outcomes are `docs/STANDARD-SGI-SO-1.0.0.md`.
 
-The retest's own record in code is the report's `prior_report_id` plus the route's audit action `evaluation.created`. The closed vocabulary carries `retest_created` for the retest append site; as with a version's publication, no call site in this release appends it.
+The retest's own record in code is the report's `prior_report_id`, the `retest_created` governance event `POST /api/v1/evaluations` appends beside the new report in the same transaction, and the route's audit action `evaluation.created`. The event names the `evaluation_report` row the retest created, the developer whose submission created it and the predecessor the link points at, and it stores no reason, because a retest decides by what it points at; a candidate version's first report for a standard version appends none.
 
 ## Appeals
 
@@ -119,8 +119,8 @@ An appended row accepts exactly one kind of write — a newly inserted row. `app
 | A listing's moderation | `listing_moderated` | `apps/api/src/routes/moderation.ts` |
 | An appeal's opening | `appeal_opened` | `packages/sgi-core/src/appeals/open-appeal.ts` |
 | An appeal's ruling | `appeal_ruled` | `packages/sgi-core/src/appeals/rule-appeal.ts` |
-| A standard version's publication | `standard_version_published` | Declared in the vocabulary; no call site appends it in this release |
-| A retest | `retest_created` | Declared in the vocabulary; no call site appends it in this release |
+| A standard version's publication | `standard_version_published` | `registerStandardVersion`'s insert path, `packages/sgi-core/src/standards/standard-registry.ts` |
+| A retest | `retest_created` | `POST /api/v1/evaluations`' transaction, `apps/api/src/routes/evaluations.ts` |
 
 **What an operator may and may not do.** An operator may moderate a listing — the action `flag`, `hide` or `restore`, moving the one mutable column `listings.status` and appending a `listing_moderated` event — review a proposal, rule an appeal, and read the ledgers and the audit feed. An operator may not alter a standard version, a report, its per-case evidence or an appended event: those routes do not exist. The operator's power is additive only.
 

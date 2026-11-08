@@ -66,6 +66,60 @@ export const SPONSORED_LABEL = "Sponsored";
 export const LISTING_PAGE_SIZE = 20;
 
 /**
+ * The fixed size of one page of a bounded collection read: the operator audit feed
+ * (`GET /audit-events`), the three ledger reads (`GET /ledger/marketplace`,
+ * `GET /ledger/gate-fees`, `GET /ledger/founder-allocation`), the challenges and threads
+ * boards (`GET /challenges`, `GET /threads`), the standards catalogue's proposals
+ * (`GET /standards`) and a listing's version history (`GET /listings/{id}`).
+ *
+ * Every one of those reads is served over a table that grows with use — an append-only
+ * ledger or feed, or a board a visitor can add to — and a response that carried the whole
+ * table would grow with it without bound. Each therefore answers with one page of its
+ * collection and states the page it answered and how many rows the collection holds, so a
+ * client can read the rest by asking for the next page. A `page` query parameter
+ * (`COLLECTION_PAGE_SIZE` rows per page) is the only paging input; there is no
+ * page-size parameter on any of those rows, exactly as there is none on the search.
+ *
+ * It is the same number as {@link LISTING_PAGE_SIZE} on purpose — the product has one page
+ * size — but it is defined separately because the two bound different surfaces: the search
+ * pages a filtered catalogue, these page an append-only or visitor-written collection.
+ */
+export const COLLECTION_PAGE_SIZE = 20;
+
+/**
+ * The largest `page` any paged read accepts: the page past which the product can no longer
+ * state where the page starts.
+ *
+ * Every paged read turns its page into numbers it hands the storage layer, and those numbers
+ * are reproduced exactly only while they stay whole: the page's own offset,
+ * `COLLECTION_PAGE_SIZE * (page - 1)` on the eight bounded collection reads and
+ * `LISTING_PAGE_SIZE * (page - 1)` on the listing search, and the rank window's end,
+ * `COLLECTION_PAGE_SIZE * page`, on the standards catalogue. A JavaScript number states
+ * whole numbers exactly only up to `Number.MAX_SAFE_INTEGER` (2^53 - 1 = 9007199254740991),
+ * so a page beyond this bound asks for a number the arithmetic rounds:
+ * `?page=9007199254740993`, the first whole number after the safe range, asks for the offset
+ * 180143985094819860 and produces 180143985094819800. The storage layer then refuses the
+ * rounded operand rather than degrading — SQLite answers `SQLITE_MISMATCH` ("datatype
+ * mismatch") for a windowed statement, and `@adem/commerce-sim`'s `listLedgerEntries`
+ * refuses an `offset` outside the safe range with a `RangeError` — and every one of those
+ * reaches the client as `500 internal_error`, a server fault for a request a client can
+ * correct.
+ *
+ * The value is `Math.floor(Number.MAX_SAFE_INTEGER / COLLECTION_PAGE_SIZE)`, the largest page
+ * for which both numbers a read forms from it stay inside that range, so the bound is the
+ * product's own statement of where its arithmetic stays exact rather than a number chosen
+ * beside it: 450359962737049 forms the offset 9007199254740960 and the rank window's end
+ * 9007199254740980, while the page after it, 450359962737050, forms 9007199254741000 and
+ * leaves the range. Every `page` the eight bounded collection reads declare therefore carries
+ * this value as its `maximum`, and a page beyond it fails that schema's constraint at the edge,
+ * refused `400 validation_error` through the one error envelope exactly as `?page=0`,
+ * `?page=-1` and `?page=abc` are. The listing search answers the other end of the same
+ * question in its own route instead: it judges the offset it is about to bind and refuses a
+ * page the store cannot address with the same `400`, naming the parameter the client sent.
+ */
+export const PAGE_NUMBER_MAX = 450359962737049;
+
+/**
  * The number of write requests allowed per window per client. A write beyond it is
  * refused with HTTP 429 and a `Retry-After` header. Consumed by the API configuration
  * and registered as the rate limit's `max`.

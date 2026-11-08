@@ -40,7 +40,7 @@ export function NotFound(props: NotFoundProps = {}): JSX.Element {
   // what lets that link move focus here without putting <main> in the tab order, so
   // the two stay in step with the shell's skip link rather than being renamed freely.
   return (
-    <main id="main-content" tabIndex={-1} className="page page-not-found not-found">
+    <main id="main-content" tabIndex={-1} className="page page-not-found">
       <h1 className="not-found__heading">{heading}</h1>
       <p className="not-found__message">{message}</p>
       <ul className="not-found__links">

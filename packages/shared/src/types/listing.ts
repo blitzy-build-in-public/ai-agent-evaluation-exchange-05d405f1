@@ -383,9 +383,16 @@ export interface ListingDetail extends Listing {
   developer_handle: string;
   /** The resolved category the listing sits in. */
   category: Category;
-  /** The version history, newest first, as published and never edited. */
+  /** The version history, newest first: the most recent page of it, newest first within the page. */
   versions: ListingVersion[];
-  /** The claims the listing's versions make, each with its stated limitation. */
+  /**
+   * How many versions the listing has published in all, so a client can tell the page `versions`
+   * carries from the whole history. A version is append-only and every publish adds one, so this
+   * read is bounded at `COLLECTION_PAGE_SIZE` versions per request rather than growing with the
+   * listing: `?page=2` carries the previous page of the history.
+   */
+  version_total: number;
+  /** The claims the versions this payload carries make, each with its stated limitation. */
   claims: ListingClaim[];
   /** The latest report for the latest version, or null when there is none. */
   report_id: string | null;

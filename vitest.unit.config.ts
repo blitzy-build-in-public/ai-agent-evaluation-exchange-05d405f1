@@ -7,6 +7,14 @@ import { defineConfig } from 'vitest/config';
  * scripts' own tests, so a new test file is discovered by placing it there: this
  * configuration is the only place the unit suite's files are found.
  *
+ * One of the scripts' tests does not run in the unit leg. The exclusion scan's own
+ * self-test, scripts/scan-exclusions.test.ts, has its own entry point — `npm run test:scan`,
+ * which `npm test` runs — and a filename filter selects from the files a configuration
+ * includes, so leaving it in both would collect and execute it twice. The `test:unit`
+ * script therefore excludes that one file on the command line, and every other
+ * <name>.test.ts under scripts/, scripts/deps-report.test.ts in particular, still runs
+ * here. No test file is collected by two entry points and each test runs exactly once.
+ *
  * `pool: 'forks'` runs every test file in a forked process rather than a worker
  * thread. packages/sgi-core and packages/commerce-sim load the better-sqlite3 native
  * addon, so a process per file keeps that addon, its file handles and each test's own

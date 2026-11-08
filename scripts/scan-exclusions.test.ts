@@ -31,7 +31,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import {
   EXCLUSION_CLASSES,
@@ -704,7 +704,7 @@ describe('the delivered repository', () => {
   it('prints the command, every stated limitation, and no absolute path', () => {
     const report = renderScanReport(runScan({ root: REPO_ROOT }));
     expect(report).toContain(SCAN_COMMAND);
-    expect(report).toContain('0 finding(s) across 0 rule(s).');
+    expect(report).toContain(`0 finding(s); ${EXCLUSION_RULES.length} rule(s) applied.`);
     expect(report).not.toContain(REPO_ROOT);
     for (const limitation of SCAN_LIMITATIONS) {
       expect(report).toContain(limitation);
@@ -753,14 +753,14 @@ describe('the real command line', () => {
     expect(run.stdout).toContain(`${ADDRESS_FILE}:${lineOf(PLANTED_ADDRESS_LINES, PLANTED_ADDRESS)}`);
     expect(run.stdout).toContain(`${CREDENTIAL_FILE}:${lineOf(PLANTED_KEY_HEADER_LINES, PLANTED_KEY_HEADER)}`);
     expect(run.stdout).toContain(`${MANIFEST_FILE}:${lineOf(PLANTED_MANIFEST_LINES, JSON.stringify(PLANTED_PROVIDER_NAME))}`);
-    expect(run.stdout).toContain(`${PLANTED_EXPECTATIONS.length} finding(s) across`);
+    expect(run.stdout).toContain(`${PLANTED_EXPECTATIONS.length} finding(s); ${EXCLUSION_RULES.length} rule(s) applied.`);
     expect(run.stderr.trim()).toBe('');
   });
 
   it('exits 0 in the delivered repository, which is criterion 10s own command', () => {
     const run = runCommandLine(REPO_ROOT);
     expect(run.status).toBe(0);
-    expect(run.stdout).toContain('0 finding(s) across 0 rule(s).');
+    expect(run.stdout).toContain(`0 finding(s); ${EXCLUSION_RULES.length} rule(s) applied.`);
   });
 
   it('exits 2 with a message for an unexpected argument, and prints no report', () => {
@@ -831,8 +831,26 @@ describe('a telephone-shaped token joined by a single hyphen', () => {
 describe('the exit code', () => {
   it('is 0 for an empty command line, 2 for any argument, and untouched by runScan', () => {
     expect(main([])).toBe(0);
-    expect(main(['--unexpected'])).toBe(NO_VERDICT_EXIT_CODE);
     expect(NO_VERDICT_EXIT_CODE).toBe(2);
+
+    // The refusal is the CLI's own message and belongs on stderr, but this case drives `main` in
+    // process, so the write is captured rather than left to reach the terminal: it is asserted below,
+    // and a passing `npm run test:scan` carries no error-shaped line. The stub is restored in `finally`
+    // so a failing assertion cannot leak it into another case.
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      expect(main(['--unexpected'])).toBe(NO_VERDICT_EXIT_CODE);
+    } finally {
+      spy.mockRestore();
+    }
+    const refusal = chunks.join('');
+    expect(refusal).toContain('takes no arguments');
+    expect(refusal).toContain('--unexpected');
+
     const before = process.exitCode;
     expect(plantedScan().exitCode).toBe(1);
     expect(runScan({ root: REPO_ROOT }).exitCode).toBe(0);
@@ -988,7 +1006,7 @@ describe('a tree of clean shapes', () => {
     expect(result.findings).toEqual([]);
     expect(result.exitCode).toBe(0);
     expect(result.filesScanned).toBe(CLEAN_FILE_CONTENTS.length);
-    expect(renderScanReport(result)).toContain('0 finding(s) across 0 rule(s).');
+    expect(renderScanReport(result)).toContain(`0 finding(s); ${EXCLUSION_RULES.length} rule(s) applied.`);
   });
 
   it('reads no history outside a work tree, and says so instead of failing', () => {
@@ -1057,5 +1075,78 @@ describe('the excerpt a finding carries', () => {
     expect(masked.length).toBeLessThanOrEqual(24);
     expect(masked).not.toContain(PLANTED_CREDENTIAL_VALUE);
     expect(maskExcerpt('   ')).toBe('');
+  });
+});
+
+describe('a line longer than any line the repository holds', () => {
+  /**
+   * Nothing bounds the length of one line: a committed bundle, one line of JSON or one base64 blob is a
+   * line of megabytes, and every rule reads it in full because the scan is required to read content. These
+   * cases are what holds that read to a bounded cost, over a line of 250,000 characters - past the point at
+   * which a rule that attempts a match from every start position needs tens of seconds for this one line,
+   * and so turns the CI gate that runs the scan into a hang with no diagnostic.
+   */
+  const LONG_LINE_CHARS = 250_000;
+
+  /**
+   * What one long-line call may cost. The bound is what makes this a failing case on such a matcher rather
+   * than a slow one: a rule that never yields cannot be interrupted by a test timeout, so it runs to
+   * completion and passes. The cost the matcher is held to here is its own, and the margin is four orders
+   * of magnitude wide, so the bound refuses a cost that grows with the square of the line's length without
+   * mistaking a loaded shared host for one.
+   */
+  const LONG_LINE_BUDGET_MS = 5_000;
+
+  /** A line of 250,000 characters out of which no address shape can be assembled. */
+  const LONG_LINE_WITHOUT_ADDRESS = 'x'.repeat(LONG_LINE_CHARS);
+
+  /** The same line with the planted address written after a space, at its very end. */
+  const LONG_LINE_WITH_ADDRESS = `${LONG_LINE_WITHOUT_ADDRESS} ${PLANTED_ADDRESS}`;
+
+  /** Names of the two files the temporary tree holds: the one with the address, and the one without. */
+  const LONG_LINE_FILE = 'long-line.txt';
+  const LONG_LINE_CLEAN_FILE = 'long-line-clean.txt';
+
+  /** Times one rule over one line through the same helper the rest of this suite reads a rule with. */
+  function timeRuleOverLine(
+    ruleId: string,
+    text: string,
+  ): { readonly matches: readonly RuleMatch[]; readonly elapsedMs: number } {
+    const context: RuleLineContext = { file: LONG_LINE_FILE, kind: 'text', line: 1, text };
+    const started = Date.now();
+    const matches = matchLineOf(ruleId, context);
+    return { matches, elapsedMs: Date.now() - started };
+  }
+
+  it.each([
+    { label: 'holds no address at all', text: LONG_LINE_WITHOUT_ADDRESS, expected: 0 },
+    { label: 'holds the planted address after a space', text: LONG_LINE_WITH_ADDRESS, expected: 1 },
+  ])('yields $expected finding(s) for a 250,000-character line that $label', ({ text, expected }) => {
+    const { matches, elapsedMs } = timeRuleOverLine('email-address', text);
+    expect(elapsedMs).toBeLessThan(LONG_LINE_BUDGET_MS);
+    expect(matches).toHaveLength(expected);
+    for (const match of matches) {
+      expect(match.excerpt).toBe(maskExcerpt(PLANTED_ADDRESS));
+    }
+  });
+
+  it('reports that one address, within the budget, when the scan reads the line from a file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'scan-exclusions-long-line-'));
+    try {
+      writeTempFile(root, LONG_LINE_FILE, `${LONG_LINE_WITH_ADDRESS}\n`);
+      writeTempFile(root, LONG_LINE_CLEAN_FILE, `${LONG_LINE_WITHOUT_ADDRESS}\n`);
+      const started = Date.now();
+      const result = runScan({ root, blockedProviderPath: DIGEST_STORE_PATH });
+      const elapsedMs = Date.now() - started;
+      expect(elapsedMs).toBeLessThan(LONG_LINE_BUDGET_MS);
+      expect(result.findings.map((finding) => finding.ruleId)).toEqual(['email-address']);
+      expect(result.findings[0]?.file).toBe(LONG_LINE_FILE);
+      expect(result.findings[0]?.line).toBe(1);
+      expect(result.findings[0]?.excerpt).toBe(maskExcerpt(PLANTED_ADDRESS));
+      expect(result.filesScanned).toBe(2);
+      expect(result.exitCode).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

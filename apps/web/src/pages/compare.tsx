@@ -47,11 +47,13 @@ import type { ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { COMPARE_ID_SEPARATOR, COMPARE_MAX_IDS, COMPARE_MIN_IDS } from "@adem/shared";
 import type { CompareEntry, ListingClaim, ListingDetail } from "@adem/shared";
-import { ApiClientError, compareListings, getListing } from "../api-client";
+import { ApiClientError, compareListings, getListing, getSelectedDemoAccountId } from "../api-client";
 import { CompareTable } from "../components/compare-table";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { InquiryForm } from "../components/inquiry-form";
+import { findDemoAccount } from "../data/demo-accounts";
+import type { DemoAccount } from "../data/demo-accounts";
 
 /**
  * The compare query's identifier parameter, spelled exactly as `GET /compare?ids=a,b,c`, as the
@@ -346,7 +348,17 @@ const RESET_EXPLANATION =
 /** The label of the control that clears an address the comparison route refuses. */
 const RESET_LABEL = "Reset the selection";
 
-/** The sentence that says how much of a comparison could not be loaded. */
+/**
+ * The sentence that says how much of a comparison could not be loaded, and which listings a reader
+ * is therefore looking at.
+ *
+ * Both halves are stated by their own count, because the sentence describes the set that is on
+ * screen: with one of two identifiers loaded, "each of them is explained below" would speak of a
+ * single column, and the reader would look for a second one that is not there. The set that loaded
+ * is named by its count — "the one listing that loaded", "the 3 listings that loaded" — and the
+ * absent set by its own, singular or plural. A comparison in which nothing loaded keeps the wording
+ * it has always carried, because then there is no listing to describe.
+ */
 function absentNote(absentCount: number, requestedCount: number, shownCount: number): string {
   const opening =
     absentCount === 1
@@ -355,7 +367,15 @@ function absentNote(absentCount: number, requestedCount: number, shownCount: num
   if (shownCount === 0) {
     return `${opening}, so there is no listing to compare here yet. Each one is explained below, and browsing the listings is the way back.`;
   }
-  return `${opening}, so this comparison shows the listings that loaded. Each of them is explained below.`;
+
+  const shown =
+    shownCount === 1 ? "the one listing that loaded" : `the ${shownCount} listings that loaded`;
+  const explained =
+    absentCount === 1
+      ? "The listing that could not be loaded is explained below."
+      : `The ${absentCount} listings that could not be loaded are explained below.`;
+
+  return `${opening}, so this comparison shows ${shown}. ${explained}`;
 }
 
 /** Why one requested identifier has no column, in words that hold whether or not other columns loaded. */
@@ -365,6 +385,24 @@ function absentExplanation(id: string): string {
 
 /** The heading over the buyer's inquiry inside one listing's block, at the level its groups use. */
 const INQUIRY_HEADING = "Ask about this listing";
+
+/** The state one block's footer shows in place of the inquiry form for an account that cannot send one. */
+const INQUIRY_ROLE_HEADING = "Sending an inquiry needs a buyer account";
+
+/**
+ * Why a column's footer offers no inquiry form: which account is selected, which role the write needs
+ * and where to choose one. `POST /inquiries` is the buyer's write, so the form is withheld from every
+ * other role rather than offered and then refused, as `/developer` withholds a half its account holds
+ * no role for. No account selected keeps the form as it was, with the write explaining the account;
+ * the remove-from-comparison control beside it belongs to the comparison and stays in every case.
+ */
+function inquiryRoleExplanation(account: DemoAccount): string {
+  return (
+    `The selected demo account is ${account.display_label}, whose role is ${account.role}. An ` +
+    "inquiry is the buyer's write, so the form is not shown for this account. Choose a buyer account " +
+    "in the demo-account switcher in the page header to send one."
+  );
+}
 
 /** Everything the rendered states read: the address's identifiers, the columns and the two actions. */
 interface ComparisonProps {
@@ -388,11 +426,26 @@ interface ComparisonProps {
  */
 function renderColumnFooter(entry: CompareEntry, props: ComparisonProps): ReactNode {
   const removesOneOfTwo = props.requestedIds.length === COMPARE_MIN_IDS;
+  // The selected demo account, resolved on every render, and whether this column can offer its
+  // inquiry: the form is the buyer's write and the service refuses every other role with `403`. The
+  // remove control below it is rendered for every account alike, because dropping a listing from the
+  // comparison writes nothing and belongs to the comparison rather than to a role.
+  const selectedAccount = findDemoAccount(getSelectedDemoAccountId());
 
   return (
     <>
-      <h4>{INQUIRY_HEADING}</h4>
-      <InquiryForm listingId={entry.listing_id} />
+      {selectedAccount !== null && selectedAccount.role !== "buyer" ? (
+        <EmptyState
+          heading={INQUIRY_ROLE_HEADING}
+          headingLevel={4}
+          explanation={inquiryRoleExplanation(selectedAccount)}
+        />
+      ) : (
+        <>
+          <h4>{INQUIRY_HEADING}</h4>
+          <InquiryForm listingId={entry.listing_id} />
+        </>
+      )}
       <button
         type="button"
         className="button button--secondary"

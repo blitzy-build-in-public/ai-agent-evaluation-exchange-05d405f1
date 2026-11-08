@@ -46,7 +46,8 @@
  * founder-allocation reversal states the basis-point rate its amount was computed from. Every amount
  * on this path is a whole number of minor units of the synthetic currency, and no arithmetic here can
  * produce a fraction — the only arithmetic in this module is the integer subtraction in
- * {@link computeNetRemaining}.
+ * {@link remainingAfterRefunds}, which both {@link computeNetRemaining} and {@link createRefund}
+ * reach, and the transaction row it subtracts from is read once per request.
  *
  * Nothing here measures anything and nothing here names anyone: no row written by this module can
  * reach an SGI report, an evaluation outcome, a badge or an ordering, and no amount is attributed to
@@ -230,6 +231,49 @@ function readTransaction(db: Database, transactionId: string): Transaction | und
 }
 
 /**
+ * Reads the sum of the refund rows that reference a transaction, in whole minor units of the
+ * synthetic currency: the figure the net remaining is derived from, and the only read of the
+ * `refunds` table beside the append itself.
+ *
+ * The statement's `COALESCE` is what makes a transaction with no refund rows answer `0` rather than a
+ * null a caller would have to interpret — a transaction with nothing refunded is the same arithmetic
+ * as one whose refunds sum to nothing — and an identifier nothing references answers `0` for the same
+ * reason: there is nothing to sum.
+ *
+ * @param db The caller's database handle.
+ * @param transactionId Identifier of the transaction whose refund rows are summed.
+ * @returns The refunded total in whole minor units, `0` when the transaction has no refund rows.
+ */
+function readRefundedTotal(db: Database, transactionId: string): number {
+  const row = db.prepare<[string], RefundedTotalRow>(SELECT_REFUNDED_TOTAL_SQL).get(transactionId);
+
+  return row?.refunded ?? 0;
+}
+
+/**
+ * What a transaction has left to refund: its own amount minus what its refund rows already account
+ * for.
+ *
+ * This is the module's one subtraction and its only arithmetic, so the figure the route's `409` and
+ * its `422` are decided on is computed in exactly one place. No rate is applied and no fraction can
+ * arise, because the amount and every refund row are whole counts of minor units, and the product's
+ * one rounding point (`../ledgers/allocate.ts`) is reached by the reversal builder rather than here.
+ *
+ * It is private and takes the transaction itself rather than reading one, because both callers
+ * already hold the row: {@link computeNetRemaining} reads it for the identifier it is handed, and
+ * {@link createRefund} reads it once and computes the net remaining from that same row rather than
+ * asking for it to be read a second time. A transaction that has been refunded in full answers `0`
+ * here, which is the arithmetic the two refusal reasons share.
+ *
+ * @param transaction The stored transaction, read by the caller.
+ * @param refundedTotal What that transaction's refund rows already account for, in minor units.
+ * @returns The transaction's amount less its refunded total, in whole minor units.
+ */
+function remainingAfterRefunds(transaction: Transaction, refundedTotal: number): number {
+  return transaction.amount_minor_units - refundedTotal;
+}
+
+/**
  * Returns what a transaction has left to refund, in whole minor units of the synthetic currency: the
  * transaction's own amount minus the sum of the refund rows that reference it.
  *
@@ -245,7 +289,10 @@ function readTransaction(db: Database, transactionId: string): Transaction | und
  * also answers `0`, which is the arithmetic both cases share.
  *
  * This function refuses nothing and throws nothing of its own: it reads two values, and both an
- * unknown identifier and an unrefunded transaction are ordinary states rather than failures.
+ * unknown identifier and an unrefunded transaction are ordinary states rather than failures. It is
+ * the answer for a caller that holds only an identifier; a caller that has already read the row
+ * computes the same figure from it through {@link remainingAfterRefunds} and {@link readRefundedTotal}
+ * rather than having this function read that row again.
  *
  * @param db The caller's database handle.
  * @param transactionId Identifier of the transaction to measure.
@@ -258,15 +305,7 @@ export function computeNetRemaining(db: Database, transactionId: string): number
     return 0;
   }
 
-  const refunded = db
-    .prepare<[string], RefundedTotalRow>(SELECT_REFUNDED_TOTAL_SQL)
-    .get(transactionId);
-
-  // The only arithmetic in this module: two whole numbers of minor units subtracted from one another.
-  // No rate is applied and no fraction can arise, because the amount and every refund row are counts
-  // of minor units, and the product's one rounding point (`../ledgers/allocate.ts`) is reached by the
-  // reversal builder rather than here.
-  return transaction.amount_minor_units - (refunded?.refunded ?? 0);
+  return remainingAfterRefunds(transaction, readRefundedTotal(db, transactionId));
 }
 
 /**
@@ -316,7 +355,15 @@ export function createRefund(
     return { ok: false, reason: "transaction_not_found" };
   }
 
-  const netRemaining = computeNetRemaining(db, input.transactionId);
+  // The net remaining is computed from the row read just above rather than by asking
+  // `computeNetRemaining` for it: that function reads the transaction row itself to answer, and a
+  // request that reads a transaction twice for one question spends a statement on a row it already
+  // holds. The arithmetic is the same one site — `remainingAfterRefunds` — and the sum of this
+  // transaction's refund rows is the only thing left to read.
+  const netRemaining = remainingAfterRefunds(
+    transaction,
+    readRefundedTotal(db, input.transactionId),
+  );
 
   // Checked before the over-large test below, and the order is load-bearing: a transaction whose
   // refunds already account for its whole amount satisfies "the amount is greater than what remains"

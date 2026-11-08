@@ -23,7 +23,10 @@
  * owns that table — before anything is written, and the read joins the two tables to hand the label
  * back. This is the one place a naive implementation departs from the contract quietly: a read
  * returning the row identifier where the label belongs would cite criteria no reader could resolve,
- * and a write storing the label where the identifier belongs would break the foreign key.
+ * and a write storing the label where the identifier belongs would break the foreign key. A caller
+ * that has already resolved the version — as the evaluation route does, once per request — hands that
+ * record in instead, and the identifier it carries is used with no second read: see
+ * {@link insertReport} and {@link findLatestReportId}.
  *
  * **Insertion order, and why the reads order by `rowid`.** The evidence is inserted in
  * `report.caseResults` order, which is case-set order, and read back with `ORDER BY rowid ASC`, so a
@@ -45,12 +48,16 @@
  * pragmas, and `packages/shared/migrations` owns the schema. No statement is prepared at module load
  * either, because one prepared then would outlive the connection it belongs to.
  *
- * **What it refuses.** Exactly one refusal: `UnknownStandardError` (`code: "unknown_standard"`,
- * imported from `../standards/standard-registry` rather than redeclared), raised when
- * `standardVersionId` names no published standard version, and raised before any row is written.
- * `apps/api` maps that code to the contract's `404`; the `409` and `422` cases in the contract belong
- * to the routes that own them and to no function here. {@link getReport} refuses nothing at all — an
- * unknown identifier is `null`, because a stored report is either there or it is not.
+ * **What it refuses.** Two refusals, both raised before any row is written and both imported from
+ * `../standards/standard-registry` rather than redeclared. `UnknownStandardError`
+ * (`code: "unknown_standard"`) when a standard version label names no published standard version,
+ * which `apps/api` maps to the contract's `404`. `StandardDriftError` (`code: "standard_drift"`) when
+ * a caller hands {@link insertReport} a resolved version whose label is not the label the report
+ * cites: a report is stored against the version it was scored against and never another, so that
+ * disagreement is refused rather than written, and `apps/api` maps the code to its `400`. The `409`
+ * and `422` cases in the contract belong to the routes that own them and to no function here.
+ * {@link getReport} refuses nothing at all — an unknown identifier is `null`, because a stored report
+ * is either there or it is not.
  *
  * **Determinism.** No function below reads a clock, a locale, a timezone, a file or a random source
  * other than `randomUUID`, which names an evidence row rather than a criterion, and no read
@@ -70,7 +77,12 @@ import { randomUUID } from "node:crypto";
 import type { CaseSeverity, ReportLabel, ReportOutcome } from "@adem/shared";
 import type { Database } from "better-sqlite3";
 
-import { UnknownStandardError, getStandardVersion } from "../standards/standard-registry";
+import type { StandardVersionRecord } from "../standards/standard-registry";
+import {
+  StandardDriftError,
+  UnknownStandardError,
+  getStandardVersion,
+} from "../standards/standard-registry";
 import type { ReportCaseResult, ReportRecord } from "./build-report";
 
 /**
@@ -277,9 +289,8 @@ function toReportCaseResult(row: CaseResultRow): ReportCaseResult {
  * this package. Reading the column directly here would make this module a second owner of another
  * module's table, so the registry is asked instead, with the label used for both of its references.
  *
- * This is the only refusal in this file: a report citing a standard version this release does not
- * publish would state criteria it was not scored against, and the refusal fires before any row is
- * written.
+ * This is the refusal of the label path: a report citing a standard version this release does not
+ * publish would state criteria it was not scored against, and it fires before any row is written.
  *
  * @param db - The caller's database handle.
  * @param standardVersionId - The contract-facing version label the report cites, e.g. `SGI-SO-1.0.0`.
@@ -299,6 +310,43 @@ function resolveStandardVersionRowId(db: Database, standardVersionId: string): s
 }
 
 /**
+ * The `standard_versions` row identifier a report is stored against, from the two forms a caller may
+ * hold: a label this module resolves, or the record the caller already resolved.
+ *
+ * The record form performs no read — that is its whole point, because the caller resolved that row in
+ * this same request and `standard_versions` is append-only — but it is not taken on trust: its
+ * `version_label` must be the label the report cites before its identifier is used. The module's
+ * invariant is that a report is stored against the version it was scored against and never another,
+ * and a record resolved from one version while the report names a second would write a report whose
+ * stated criteria are not the criteria it was measured against.
+ *
+ * @param db - The caller's database handle, read only on the label path.
+ * @param report - The report about to be appended, whose `standardVersionId` is the label it cites.
+ * @param resolvedStandardVersion - The version the caller already resolved, when it holds one.
+ * @returns The `standard_versions.id` the report's foreign key stores.
+ * @throws {StandardDriftError} when the resolved record is labelled otherwise than the report cites.
+ * @throws {UnknownStandardError} when the label names no standard version this release publishes.
+ */
+function reportStandardVersionRowId(
+  db: Database,
+  report: ReportRecord,
+  resolvedStandardVersion: StandardVersionRecord | undefined,
+): string {
+  if (resolvedStandardVersion === undefined) {
+    return resolveStandardVersionRowId(db, report.standardVersionId);
+  }
+
+  if (resolvedStandardVersion.version_label !== report.standardVersionId) {
+    throw new StandardDriftError(
+      `the resolved standard version "${resolvedStandardVersion.id}" is labelled "${resolvedStandardVersion.version_label}", which is not the version this report cites as "${report.standardVersionId}": a report is stored against the version it was scored against and never another, so a measurement taken against one standard version is superseded by a new report rather than written under another`,
+      resolvedStandardVersion.id,
+    );
+  }
+
+  return resolvedStandardVersion.id;
+}
+
+/**
  * Appends one report and its per-case evidence, as one act.
  *
  * The report row and one case-result row per case are written inside a single transaction, so a
@@ -308,9 +356,14 @@ function resolveStandardVersionRowId(db: Database, standardVersionId: string): s
  * the record states it, including the two canonical JSON strings, which are stored verbatim because
  * the stored string is the artefact the comparison compared.
  *
- * The cited standard version is resolved from its label before the transaction opens, so an
- * unresolvable label refuses with nothing written. `standard_version_id` then holds the resolved
- * `standard_versions` row identifier, never the label: see the label note in the module header.
+ * The cited standard version is resolved before the transaction opens, so an unresolvable version
+ * refuses with nothing written. Two forms reach that resolution, and this function's result is the
+ * same either way: the label `report.standardVersionId` cites, resolved through the registry, or the
+ * record a caller hands in as `resolvedStandardVersion` because it resolved that same version earlier
+ * in this request — a record whose `version_label` must be the label the report cites, so handing one
+ * in can never store a report under a version it was not scored against. `standard_version_id` then
+ * holds the resolved `standard_versions` row identifier, never the label: see the label note in the
+ * module header.
  *
  * The method returns nothing because the caller already holds the record, identifiers included:
  * {@link ReportRecord} is built before this call, `reportId` and `createdAt` included, and the `201`
@@ -324,15 +377,24 @@ function resolveStandardVersionRowId(db: Database, standardVersionId: string): s
  *
  * @param db - The caller's database handle.
  * @param report - The complete report record to append, evidence included.
+ * @param resolvedStandardVersion - The version the report was scored against, when the caller has
+ *   already resolved it: its `id` is stored and its `version_label` must be the label
+ *   `report.standardVersionId` cites. Omitted, the label is resolved through the standard registry.
  * @returns Nothing; the appended rows are the caller's own record, stored.
  * @throws {UnknownStandardError} when `report.standardVersionId` is not a standard version this
  * release publishes. No row is written in that case.
+ * @throws {StandardDriftError} when `resolvedStandardVersion` is labelled otherwise than
+ * `report.standardVersionId` cites. No row is written in that case either.
  * @throws Whatever the database raises otherwise — the append-only triggers of migration `0010`, the
  * table's `CHECK` constraints and its foreign keys — unwrapped, because a report that cannot be
  * stored is a defect in what was handed in rather than an outcome to be re-shaped here.
  */
-export function insertReport(db: Database, report: ReportRecord): void {
-  const standardVersionRowId = resolveStandardVersionRowId(db, report.standardVersionId);
+export function insertReport(
+  db: Database,
+  report: ReportRecord,
+  resolvedStandardVersion?: StandardVersionRecord,
+): void {
+  const standardVersionRowId = reportStandardVersionRowId(db, report, resolvedStandardVersion);
 
   const appendReport = db.transaction((): void => {
     // A plain INSERT, deliberately: a replace-style conflict resolution would delete the stored row
@@ -438,19 +500,30 @@ export function getReport(db: Database, id: string): StoredReport | null {
  * {@link resolveStandardVersionRowId} rather than answering `null`: `null` states that this version
  * has no earlier report, which is a different thing from a standard version that does not exist.
  *
- * @param db - The caller's database handle.
+ * **Two forms of the standard version, one answer.** `standardVersion` is either the
+ * contract-facing label, resolved through the registry as above, or the {@link StandardVersionRecord}
+ * a caller already resolved in this request — in which case that record's own `id` is the identifier
+ * the comparison binds, no registry read happens, and the same report is found either way. The label
+ * a report cites is the label the resolved record carries, so the two forms cannot answer
+ * differently.
+ *
+ * @param db - The caller's database handle, read only on the label form.
  * @param candidateVersionId - The evaluated listing version's identifier.
- * @param standardVersionId - The contract-facing standard version label, e.g. `SGI-SO-1.0.0`.
+ * @param standardVersion - The contract-facing standard version label, e.g. `SGI-SO-1.0.0`, or the
+ *   record the caller has already resolved for that version.
  * @returns The newest earlier report's identifier, or `null` when there is none.
- * @throws {UnknownStandardError} when `standardVersionId` is not a standard version this release
- * publishes.
+ * @throws {UnknownStandardError} when the label names no standard version this release publishes. The
+ * record form reads nothing and therefore refuses nothing.
  */
 export function findLatestReportId(
   db: Database,
   candidateVersionId: string,
-  standardVersionId: string,
+  standardVersion: string | StandardVersionRecord,
 ): string | null {
-  const standardVersionRowId = resolveStandardVersionRowId(db, standardVersionId);
+  const standardVersionRowId =
+    typeof standardVersion === "string"
+      ? resolveStandardVersionRowId(db, standardVersion)
+      : standardVersion.id;
 
   const row = db
     .prepare<[string, string], ReportIdRow>(SELECT_LATEST_REPORT_ID_SQL)

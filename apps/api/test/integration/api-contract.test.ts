@@ -30,10 +30,12 @@
  *    discovered inside the evaluator.
  * 3. *Reproducibility*: one candidate's recorded submission is sent twice, as the developer that
  *    owns the version, and the two reports must be equal on every field they can be equal on.
- * 4. *The statuses no other suite owns*: `400` for a query value the search contract rejects, `404`
- *    for a listing, a standard version and a standard that no row carries, `409` for a version
- *    string a listing has already published, and `200` with an empty page where a search matches
- *    nothing and where the catalogue is genuinely empty.
+ * 4. *The statuses no other suite owns*: `400` for a query value the search contract rejects, for a
+ *    listing body whose text fields exceed the schema's maximum and for a `page` whose offset the
+ *    store cannot address, `404` for a listing, a standard version and a standard that no row carries,
+ *    `409` for a version string a listing has already published, and `200` with an empty page where a
+ *    search matches nothing, where it is asked for a page past the end of its results, and where the
+ *    catalogue is genuinely empty.
  *
  * **The compared payload, and the three fields that lie outside it.** A report's `id` and
  * `created_at` are generated at write time and its `prior_report_id` is derived from the reports
@@ -44,17 +46,19 @@
  * never decide whether two payloads are equal. The same submission is submitted twice for all three
  * candidates, and for each the first submission's `prior_report_id` must be that candidate's seeded
  * report and the second's must be the first's, which is the observable proof that the link is derived
- * server-side: the request body carries no retest field, and `additionalProperties: false` removes
- * one a client sent.
+ * server-side: the request body carries no retest field, and `additionalProperties: false` is what
+ * the request-body policy holds a client to, refusing one it did send with `400 validation_error`.
  *
- * **Why this file may import `@adem/sgi-fixtures` without the API depending on it.** The fixture pack
- * is a workspace of its own and `apps/api/package.json` deliberately does not declare it: a route
- * reaches a case set through `@adem/sgi-core`'s `getStandardCaseSet` and never through the loader. A
- * suite is not a route. The workspace install links the package into the root `node_modules`, and the
- * import resolves and typechecks from this directory — the whole-solution build proves that rather
- * than assuming it — so this test-only import needs no manifest entry. A later reader who finds it
- * surprising should not "fix" it by adding the dependency to the workspace's manifest: that would put
- * the fixture pack on a route's import path, which is the one thing the architecture forbids.
+ * **Why this file reads the fixture pack from disk rather than importing it.** The API workspace may
+ * import `@adem/shared`, `@adem/sgi-core` and `@adem/commerce-sim` and no fixture package: a route
+ * reaches a case set through `@adem/sgi-core`'s `getStandardCaseSet` and never through the loader, and
+ * a suite is not a route. So this file adds no such import and reads the pack's committed documents
+ * instead — `cases.json`, `expected-outcomes.json` and the three `candidates/{id}.json` recordings,
+ * under `packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/`, resolved from this module's own location — as
+ * the sibling `./seed-contract.test.ts` reads the same documents. `expected-outcomes.json` therefore
+ * stays the authority every expectation below is compared against, no expected count or failing case
+ * id is retyped here, and the workspace's import contract is left exactly as the architecture states
+ * it.
  *
  * **One deviation from this folder's own description, settled by the route that serves the row.** The
  * plan describes the unknown-standard submission as asserting the domain's `unknown_standard` code.
@@ -69,10 +73,11 @@
  * the real server on an ephemeral port over one migrated in-memory database with the seed loaded, and
  * whose request helpers take prefix-relative paths — the versioned prefix appears nowhere below. No
  * identifier of a seeded row is written literally: every one comes from a harness accessor or from the
- * fixture package, and the values that would probe a non-existent row are generated with
- * `randomUUID()`, whose only requirement is that it matches nothing. No snapshot is taken, no file is
- * written, nothing is executed from a submission, and nothing here reads a clock, a locale, an
- * environment variable or the working directory.
+ * fixture pack's committed documents, and the values that would probe a non-existent row are generated
+ * with `randomUUID()`, whose only requirement is that it matches nothing. No snapshot is taken, no file
+ * is written, nothing is executed from a submission, and nothing here reads a clock, a locale, an
+ * environment variable or the working directory: the only files read here are the fixture pack's own
+ * documents, resolved from this module's location rather than from where the run was started.
  *
  * **The folder's rules this file keeps.** It exports nothing and adds no module of its own: the two
  * helpers of `apps/api/test/integration/` are `./test-server` and `./boundary-check`, so every helper
@@ -86,12 +91,16 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   CASE_SEVERITIES,
   REPORT_LABEL_SAMPLE,
+  listingCreateBodySchema,
   listingVersionCreateBodySchema,
 } from "@adem/shared";
 import type {
@@ -102,9 +111,6 @@ import type {
 } from "@adem/shared";
 
 import { SGI_SO_1_0_0, canonicalize } from "@adem/sgi-core";
-
-import { loadCandidate, loadCaseSet, loadExpectedOutcomes } from "@adem/sgi-fixtures";
-import type { CandidateSubmission, CaseSet, ExpectedOutcome } from "@adem/sgi-fixtures";
 
 import { startTestServer } from "./test-server";
 import type { TestResponse, TestServer } from "./test-server";
@@ -158,6 +164,56 @@ const REJECTED_SORT = "alphabetical";
  */
 const REJECTED_PAGE = 0;
 
+/**
+ * A `page` whose offset the store cannot address, and the page on the other side of that edge.
+ *
+ * A page's offset is the fixed page size times one less than it — the arithmetic the route performs
+ * before it binds the value to the paging statement, and the reason both values below are stated as
+ * pages rather than as offsets. `UNADDRESSABLE_PAGE` is a billion billion: its offset is twenty times
+ * that, about two times ten to the nineteenth, which is past the largest offset SQLite binds (a
+ * signed 64-bit integer, below ten times ten to the eighteenth), so the driver refuses the value and
+ * the row has to answer its own `400` instead of the server fault that refusal would otherwise
+ * become. `PAGE_PAST_THE_END` is a hundred million million: its offset is twenty times that, inside
+ * what the driver binds, and far past the end of the seeded result set, so it is the documented empty
+ * page rather than an error.
+ *
+ * Each is written as a power of ten rather than as a run of digits, so the magnitude a reader has to
+ * check is visible in the constant itself, and each is named here because it is the whole point of
+ * the pair of probes below: one request the store cannot address, and one it can.
+ */
+const UNADDRESSABLE_PAGE = 10 ** 18;
+const PAGE_PAST_THE_END = 10 ** 17;
+
+/**
+ * The two spellings of a `page` the query schema admits and the store still cannot address, as the
+ * query strings a client sends.
+ *
+ * They are strings rather than numbers because the value only exists once the validator has coerced
+ * the query string, which is what the harness does with every query member. The query schema declares
+ * `page` an integer of `1` or more, and the validator's coercion admits a page written as a negative
+ * power: `-1e309` is past what a double holds, so it coerces to `-Infinity` and is not refused — and
+ * the word is taken the same way. The offset the route computes from either is not a value any
+ * `OFFSET` carries, which is why the route judges the offset it binds rather than trusting the
+ * schema's bound, and why these probes cannot be written as the two numbers above.
+ */
+const NEGATIVE_POWER_PAGES: readonly string[] = Object.freeze(["-1e309", "-Infinity"]);
+
+/**
+ * A `title` and a `summary` one character past the maximum the write contract states for each.
+ *
+ * Each is built from the schema's own bound rather than from a number written down here, the same way
+ * the version-string probe below uses the schema's own pattern: a bound that moved would move this
+ * probe with it instead of leaving a case that passes because its value stopped being over-long. The
+ * value itself is the plainest over-long one there is — the schema counts characters, so a run of `A`
+ * is what exceeds the bound, and the encoding of the value never enters into it.
+ */
+const OVER_LONG_TITLE = "A".repeat(
+  listingCreateBodySchema.body.properties.title.maxLength + 1,
+);
+const OVER_LONG_SUMMARY = "A".repeat(
+  listingCreateBodySchema.body.properties.summary.maxLength + 1,
+);
+
 /** One seeded report as this file reads it: the candidate it belongs to, its id and its payload. */
 interface SeededReportView {
   /** The fixture candidate the version and the report belong to. */
@@ -185,6 +241,96 @@ interface ErrorEnvelopeBody {
     /** The client-facing sentence. */
     readonly message: string;
   };
+}
+
+/** One case of the fixture set, as `cases.json` commits it. */
+interface FixtureCase {
+  /** The case identifier, unique within the set and the key a recorded output names. */
+  readonly id: string;
+  /** Whether a failure of this case fails the candidate outright or counts as one miss. */
+  readonly severity: CaseSeverity;
+  /** The output a conforming candidate records for this case, which no assertion below reads. */
+  readonly expected_output?: unknown;
+}
+
+/** The case set of one standard version, as `cases.json` commits it. */
+interface FixtureCaseSet {
+  /** The standard version identifier the set belongs to. */
+  readonly standard_version_id: string;
+  /** The number of cases the set holds, which its own `cases` array agrees with. */
+  readonly total_cases: number;
+  /** How many of those cases are `critical`. */
+  readonly critical_cases: number;
+  /** The cases themselves, in the order the document states them. */
+  readonly cases: readonly FixtureCase[];
+}
+
+/** What one candidate is expected to score, as `expected-outcomes.json` commits it. */
+interface FixtureCandidateOutcome {
+  /** The candidate this expectation belongs to. */
+  readonly candidate_id: string;
+  /** The versioned listing the expectation belongs to. */
+  readonly candidate_version_id: string;
+  /** The outcome the standard version's pass rule yields for the candidate. */
+  readonly outcome: ReportOutcome;
+  /** How many cases the candidate is expected to match. */
+  readonly matched_count: number;
+  /** How many cases the standard version defines. */
+  readonly total_count: number;
+  /** How many `critical` cases the candidate is expected to fail. */
+  readonly critical_failures: number;
+  /** The ids of the cases the candidate is expected not to match. */
+  readonly failing_case_ids: readonly string[];
+}
+
+/** The expected outcomes of every candidate recorded against one standard version. */
+interface FixtureExpectedOutcomes {
+  /** The standard version identifier the expectations were recorded for. */
+  readonly standard_version_id: string;
+  /** One expectation per recorded candidate, in the order the document states them. */
+  readonly candidates: readonly FixtureCandidateOutcome[];
+}
+
+/** One output a candidate recorded for one fixture case, as a candidate document commits it. */
+interface FixtureRecordedOutput {
+  /** The case the recording is for. */
+  readonly case_id: string;
+  /** The recorded JSON value, compared as canonical JSON by the route and never executed. */
+  readonly output: unknown;
+}
+
+/** One candidate's recording, as `candidates/{id}.json` commits it: declarative data, never executed. */
+interface FixtureCandidateRecording {
+  /** The candidate's short identifier, naming its document in the pack. */
+  readonly candidate_id: string;
+  /** The versioned listing the recording belongs to. */
+  readonly candidate_version_id: string;
+  /** The standard version the recording answers, which the case set also states. */
+  readonly standard_version_id: string;
+  /** One recorded output per case the candidate answered. */
+  readonly recorded_outputs: FixtureRecordedOutput[];
+}
+
+/**
+ * The fixture pack's committed fixture directory, resolved from this module's own location rather than
+ * from the working directory: `apps/api/test/integration/` → `apps/api/` → `apps/` → the repository
+ * root, then the standard version's own directory. The same files are therefore read wherever the run
+ * was started from, which is what the pack's loader does with its own path.
+ */
+const fixturesDir = fileURLToPath(
+  new URL("../../../../packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/", import.meta.url),
+);
+
+/**
+ * One committed fixture document, parsed.
+ *
+ * Read fresh on every call instead of being held in module state, the way the pack's own loader reads
+ * its files, so a document that changed under a long-running process cannot be served from stale
+ * state this file kept. The interfaces it is typed with are declared beside it, one per document the
+ * pack commits, because this workspace may not import the loader that ships the same shapes.
+ */
+function readFixtureDocument<T>(name: string): T {
+  return JSON.parse(readFileSync(join(fixturesDir, name), "utf8")) as T;
 }
 
 /** The started harness: the running server, its one in-memory database and the seeded rows. */
@@ -257,15 +403,24 @@ function seededReportOf(candidateId: FixtureCandidate): SeededReportView {
 }
 
 /**
- * The fixture package's own expectation for one candidate, named by candidate id and never by index.
+ * The recorded expectations document, read whole for the two assertions that are about the list
+ * itself: the standard version it was recorded for and the order of the candidates it lists.
+ */
+function fixtureExpectedOutcomes(): FixtureExpectedOutcomes {
+  return readFixtureDocument<FixtureExpectedOutcomes>("expected-outcomes.json");
+}
+
+/**
+ * The fixture pack's own expectation for one candidate, named by candidate id and never by index.
  *
  * Reading by id is the point: an expectation list that gained, lost or reordered an entry answers
  * here with the candidate named, where an index read would quietly assert one candidate's numbers
  * against another's.
  */
-function expectedOutcomeOf(candidateId: FixtureCandidate): ExpectedOutcome {
-  const expected = loadExpectedOutcomes();
-  const found = expected.candidates.find((entry) => entry.candidate_id === candidateId);
+function expectedOutcomeOf(candidateId: FixtureCandidate): FixtureCandidateOutcome {
+  const found = fixtureExpectedOutcomes().candidates.find(
+    (entry) => entry.candidate_id === candidateId,
+  );
 
   if (found === undefined) {
     throw new Error(
@@ -276,9 +431,24 @@ function expectedOutcomeOf(candidateId: FixtureCandidate): ExpectedOutcome {
   return found;
 }
 
-/** The case set of the one published standard version, loaded from the read-only fixture pack. */
-function fixtureCaseSet(): CaseSet {
-  return loadCaseSet(SGI_SO_1_0_0.versionLabel);
+/**
+ * The case set of the one published standard version, read from its own directory in the fixture pack.
+ *
+ * The document identifies itself, and the assertions below bind that identity to the standard version
+ * this file scores against, so the set read here cannot be another standard's set unnoticed.
+ */
+function fixtureCaseSet(): FixtureCaseSet {
+  return readFixtureDocument<FixtureCaseSet>("cases.json");
+}
+
+/**
+ * One candidate's recording, read from the pack's own document for it.
+ *
+ * The document is named by the candidate's identifier, so a recording that was renamed or removed is
+ * a read that fails here rather than a submission built from another candidate's data.
+ */
+function fixtureCandidate(candidateId: FixtureCandidate): FixtureCandidateRecording {
+  return readFixtureDocument<FixtureCandidateRecording>(`candidates/${candidateId}.json`);
 }
 
 /**
@@ -359,12 +529,12 @@ function canonicalComparedPayload(report: EvaluationReportDetail): string {
  * document states them. There is no retest field to set: the body carries none, and the server derives
  * the link from the reports already stored for this candidate version and standard version.
  *
- * @param candidate The candidate's recording, loaded from the fixture pack.
+ * @param candidate The candidate's recording, read from the fixture pack's document for it.
  * @param standardVersionId The standard version to score against, which the fixture file also states
  *   and which a caller overrides only to probe a reference that resolves to nothing.
  */
 function submissionFor(
-  candidate: CandidateSubmission,
+  candidate: FixtureCandidateRecording,
   standardVersionId: string,
 ): EvaluationSubmission {
   return {
@@ -401,6 +571,34 @@ function countRows(harness: TestServer, sql: string, ...params: readonly unknown
   }
 
   return row.total;
+}
+
+/**
+ * A category and a licence code a listing body has to name, read from the seed through the harness's
+ * own connection.
+ *
+ * `POST /listings` is the write whose body carries references no route publishes: `category_id` names a
+ * catalogue row and `license_code` a licence the seed chose, so both come from the seed's own first
+ * listing rather than from anything invented here. Reading them is what keeps the refusal below about
+ * one thing only — with a resolvable category and a real licence code, a body the schema had bounded
+ * nothing in would be created and would change the count that case asserts is unchanged, where an
+ * invented category would refuse for a reason the contract names nowhere.
+ *
+ * @returns The two values, keyed by the body field each belongs in.
+ */
+function seededListingReference(): { readonly categoryId: string; readonly licenseCode: string } {
+  const row = server.query<{
+    readonly category_id: string;
+    readonly license_code: string;
+  }>("SELECT category_id, license_code FROM listings ORDER BY rowid ASC LIMIT 1")[0];
+
+  if (row === undefined) {
+    throw new Error(
+      "this suite reads a category and a licence code from the seeded catalogue, and the seed wrote no listing to read them from",
+    );
+  }
+
+  return { categoryId: row.category_id, licenseCode: row.license_code };
 }
 
 /**
@@ -544,7 +742,7 @@ describe("evaluations contract", () => {
     it.each(FIXTURE_CANDIDATES)(
       "binds the %s candidate file to its seeded version row and to its recorded expectation",
       (candidateId) => {
-        const candidate = loadCandidate(candidateId);
+        const candidate = fixtureCandidate(candidateId);
         const seededVersion = server.candidateVersion(candidateId);
         const expected = expectedOutcomeOf(candidateId);
         const caseSet = fixtureCaseSet();
@@ -575,7 +773,7 @@ describe("evaluations contract", () => {
     );
 
     it("records one expectation per candidate, in the fixed order, for the loaded case set", () => {
-      const expected = loadExpectedOutcomes();
+      const expected = fixtureExpectedOutcomes();
 
       expect(expected.standard_version_id).toBe(fixtureCaseSet().standard_version_id);
       expect(expected.candidates.map((entry) => entry.candidate_id)).toEqual([
@@ -588,7 +786,7 @@ describe("evaluations contract", () => {
     it.each(FIXTURE_CANDIDATES)(
       "reproduces the %s report byte for byte and links the retest to its predecessor",
       async (candidateId) => {
-        const candidate = loadCandidate(candidateId);
+        const candidate = fixtureCandidate(candidateId);
         const seeded = seededReportOf(candidateId);
 
         // The developer that owns the version is the only account that may have it measured: the
@@ -661,6 +859,101 @@ describe("evaluations contract", () => {
       );
     });
 
+    it("answers 400 for a page the store cannot address, and an empty page for one past the end", async () => {
+      // Both values below are inside the range the query schema admits — any integer of `1` or more —
+      // so the difference between them is the offset the route binds, and the refusal is the handler's
+      // own rather than the edge's. It is this row's `400` for an invalid parameter, and the sentence
+      // names the parameter the client sent, which is the whole reason the judgement sits in the route:
+      // the driver's own refusal of that offset is a server fault, and a schema rejection answers the
+      // product's one generic sentence rather than telling a client which value to correct.
+      const refused = await server.get("/listings", { query: { page: UNADDRESSABLE_PAGE } });
+
+      expectErrorEnvelope(refused, 400, "validation_error");
+      expect(refused.json<ErrorEnvelopeBody>().error.message).toContain("page");
+
+      // The page on the other side of that edge: addressable, past the end of the seeded result set,
+      // and the documented empty result. The requested page number is echoed and `total` states the
+      // whole match set, so a reader learns there is nothing on this page rather than nothing to
+      // search for — which is what makes this an ordinary answer and never an error.
+      const response = await server.get("/listings", { query: { page: PAGE_PAST_THE_END } });
+
+      expect(response.status).toBe(200);
+
+      const body = response.json<{
+        readonly items: readonly unknown[];
+        readonly total: number;
+        readonly page: number;
+      }>();
+
+      expect(Object.keys(body).sort()).toEqual(["items", "page", "total"]);
+      expect(body.items).toEqual([]);
+      expect(body.total).toBeGreaterThan(0);
+      expect(body.page).toBe(PAGE_PAST_THE_END);
+    });
+
+    it.each(NEGATIVE_POWER_PAGES)(
+      "answers 400 for the %s page the query schema coerces out of what the store can address",
+      async (page) => {
+        // Each value in the list above is a spelling of the same unaddressable page, and each passes
+        // the query schema: it is a string, and the validator coerces it past what a double holds, so
+        // it reaches the handler as `-Infinity` rather than as a refusal. The offset computed from it
+        // is that same value, which no `OFFSET` carries, so the refusal has to be the handler's own —
+        // the driver's answer to that offset is a server fault — and the sentence names the parameter,
+        // which is the whole reason this judgement sits in the route rather than in the schema. A
+        // value the schema had refused would answer the product's one generic sentence here instead.
+        const refused = await server.get("/listings", { query: { page } });
+
+        expectErrorEnvelope(refused, 400, "validation_error");
+        expect(refused.json<ErrorEnvelopeBody>().error.message).toContain("page");
+      },
+    );
+
+    it("answers 400 for a listing body over the schema's stated maximum, and writes nothing", async () => {
+      // A listing's `title` and `summary` each carry a stated `maxLength`, and both probes below are one
+      // character past the bound their own schema declares. The refusal happens at the edge, in the
+      // request schema, before the handler that resolves a category, reads the demo header or writes a
+      // row runs at all — which is why the client is told its request was too large and never that the
+      // listing it described was unacceptable.
+      const { categoryId, licenseCode } = seededListingReference();
+      const developer = server.accountForRole("developer");
+      const listingsBefore = countRows(server, "SELECT COUNT(*) AS total FROM listings");
+
+      // Every field but the over-long one is a value the route would accept, so nothing except the
+      // length can be what the schema refused: the category and the licence code are the seed's own.
+      const overLongTitleBody = {
+        title: OVER_LONG_TITLE,
+        summary: "A summary the listing write contract bounds.",
+        category_id: categoryId,
+        license_code: licenseCode,
+        pricing_model: "purchase",
+      };
+
+      const overLongSummaryBody = {
+        ...overLongTitleBody,
+        title: "A listing the write contract bounds",
+        summary: OVER_LONG_SUMMARY,
+      };
+
+      expectErrorEnvelope(
+        await server.post("/listings", overLongTitleBody, { account: developer }),
+        400,
+        "validation_error",
+      );
+
+      // The same body with the other field over-long: the second text field is bounded too, and a
+      // refusal that depended on which field was large would be one bound rather than two.
+      expectErrorEnvelope(
+        await server.post("/listings", overLongSummaryBody, { account: developer }),
+        400,
+        "validation_error",
+      );
+
+      // Neither refusal reached a handler, so neither wrote a listing. The contract publishes no count
+      // for listings, so the count is read from the harness's own connection, as every other refusal of
+      // this file reads the rows it did not leave behind.
+      expect(countRows(server, "SELECT COUNT(*) AS total FROM listings")).toBe(listingsBefore);
+    });
+
     it("answers 404 for a listing and a standard version that no row carries", async () => {
       // A public read of a listing that does not exist. The identifier is generated, so its only
       // property is that it matches nothing: the refusal is the row's absence and not a shape the
@@ -678,7 +971,7 @@ describe("evaluations contract", () => {
 
     it("answers 404 for a submission naming a standard version no row carries, and writes no report", async () => {
       const candidateId: FixtureCandidate = "seed-alpha";
-      const candidate = loadCandidate(candidateId);
+      const candidate = fixtureCandidate(candidateId);
       const owner = server.owningDeveloper(server.candidateVersion(candidateId).listingId);
       const reportsBefore = countRows(
         server,

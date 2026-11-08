@@ -93,7 +93,8 @@ The request body is fixed by `packages/shared/src/schemas/evaluations-schema.ts`
 
 `output` is any JSON value and is pure data from the moment it arrives until it is compared. The
 body carries **no retest field**, structurally: the schema sets `additionalProperties: false`, so a
-field a client adds is removed before the handler runs, and the retest link is derived server-side
+field a client adds is refused with `400 validation_error` before the handler runs — never silently
+dropped — and the retest link is derived server-side
 (`Retest semantics`).
 
 **A submission that lacks a recorded output for a fixture case is rejected with `422` before any

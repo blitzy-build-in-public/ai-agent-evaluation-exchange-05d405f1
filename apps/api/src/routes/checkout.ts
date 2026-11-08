@@ -186,10 +186,10 @@ const SELECT_VERSION_CLAIMS_SQL = `SELECT pricing_model FROM listing_claims WHER
 /**
  * The request path this group owns, prefix-relative.
  *
- * The versioned prefix — `API_PREFIX`, from `apps/api/src/server.ts` — is applied exactly once, by
- * `./register-routes`, which calls the function below with its encapsulated scope. That literal
- * appears nowhere in this file and must not: a group that spelled it would be the second place the
- * prefix is decided.
+ * The versioned prefix — `API_PREFIX`, declared once in the sibling `./register-routes` — is applied
+ * exactly once, by `./register-routes`, which calls the function below with its encapsulated scope. That
+ * literal appears nowhere in this file and must not: a group that spelled it would be the second place
+ * the prefix is decided.
  */
 const CHECKOUT_SIMULATION_PATH = "/checkout-simulations";
 

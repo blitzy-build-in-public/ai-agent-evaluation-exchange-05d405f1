@@ -23,14 +23,17 @@
  * code.
  *
  * **Determinism.** Nothing here reads a clock, a locale, a timezone, a random
- * source, a network, an environment variable or the working directory; nothing is
- * cached or held in module-level state, and each call reads its files fresh so a
- * long-lived process cannot serve stale fixture data. Paths resolve from this
+ * source, a network, an environment variable or the working directory; the pack is
+ * read-only, so the validated case set of each identifier is cached for the
+ * process's lifetime and served from memory on later calls, which means a fixture
+ * file changed on disk is observed at the next process start — how a pack ships —
+ * and never within the process that has already read it. Paths resolve from this
  * module's own location, so the same files are read wherever the process was
- * started, and array order is exactly the order the files state. Repeated calls
- * against unchanged files therefore return deeply equal data — the reproducibility
- * the evaluation promises, where two runs of one submission over these fixtures
- * compare byte for byte.
+ * started; array order is exactly the order the files state, and nothing is
+ * reordered, coerced or defaulted. Repeated calls against unchanged files
+ * therefore return deeply equal data — the reproducibility the evaluation
+ * promises, where two runs of one submission over these fixtures compare byte for
+ * byte.
  */
 
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
@@ -178,6 +181,20 @@ export type { CaseSeverity, ReportOutcome };
 
 /** The fixtures directory, resolved from this module's own location and never from the working directory. */
 const fixturesRoot = fileURLToPath(new URL("../fixtures/", import.meta.url));
+
+/**
+ * The validated case sets this process has read, keyed by case-set directory name,
+ * which is the standard version identifier the set belongs to.
+ *
+ * A pack is read-only data shipped as files, so a set that validated in this
+ * process cannot become wrong within it: rereading and revalidating the same
+ * document on every call would repeat work whose answer is already known. A set
+ * enters this map only after it has validated in full, immediately before it is
+ * returned, so a refusal is never cached and every call for that name repeats it.
+ * An entry lives for the process's lifetime; a fixture file changed on disk is
+ * observed at the next process start.
+ */
+const caseSets = new Map<string, CaseSet>();
 
 /** A parsed JSON object: the shape every guard below narrows an unknown value to before a field is read. */
 type JsonObject = { [key: string]: unknown };
@@ -409,14 +426,23 @@ function locateCaseSetDocument(relativePath: string, subject: string): LocatedDo
 }
 
 /**
- * Reads and validates the case set of the directory named `directoryName`.
+ * Reads and validates the case set of the directory named `directoryName`,
+ * returning the set {@link caseSets} already holds for that name on every later
+ * call.
  *
  * Shared by the public case-set loader and by the candidate validator, so a
  * candidate's `case_id`s are checked against the same parsed case set its own
- * standard publishes rather than against a second reading of the same file.
+ * standard publishes rather than against a second reading of the same file. Only a
+ * validation that completed is cached, so a refusal made here caches nothing and
+ * the next call for the same name repeats it; the object returned is the cached
+ * one, not a copy, and nothing here mutates it.
  */
 function readCaseSet(directoryName: string): CaseSet {
   assertIdentifierSegment(directoryName, "the case-set directory name");
+  const cached = caseSets.get(directoryName);
+  if (cached !== undefined) {
+    return cached;
+  }
   const label = "cases.json";
   const filePath = join(fixturesRoot, directoryName, label);
   const document = readJsonObject(filePath, label);
@@ -504,12 +530,14 @@ function readCaseSet(directoryName: string): CaseSet {
     );
   }
 
-  return {
+  const caseSet: CaseSet = {
     standard_version_id: standardVersionId,
     total_cases: totalCases,
     critical_cases: criticalCases,
     cases: fixtureCases,
   };
+  caseSets.set(directoryName, caseSet);
+  return caseSet;
 }
 
 /** Reads and validates one candidate document found at `filePath` in the case-set directory `directoryName`. */
@@ -680,18 +708,24 @@ function readExpectedOutcomes(filePath: string): ExpectedOutcomes {
  * Reads the case set of one standard version, from the case-set directory its
  * identifier names.
  *
- * Returns the case set as its document states it. It refuses — throwing a plain
- * `Error` whose message begins `sgi-fixtures:` and names the path it concerns —
- * when the requested identifier is not a single path segment, so it can name no
- * directory outside `fixtures/`; when the file cannot be read or is not a JSON
- * object; when an undeclared key appears at the document's top level or in a case;
- * when `standard_version_id` is not the requested identifier; when `cases` is not
- * a non-empty array; when `total_cases` or `critical_cases` is not a non-negative
- * integer or disagrees with that array; when a case `id` is empty, not a string or
- * repeated; when a `severity` is outside `critical` and `standard`; when a case's
- * `input` lacks its two non-empty strings; or when a case carries no JSON
- * `expected_output`. It never returns partial data and never falls back to a
- * default case set.
+ * Returns the case set as its document states it, and from a per-process cache
+ * after its first read: an identifier's document is read and validated once in the
+ * life of the process, and every later call returns that same validated set rather
+ * than reading the file again. The pack is read-only, so a case set cached this way
+ * cannot go stale within the process — a fixture file changed on disk is observed
+ * at the next process start, which is how a pack ships. It refuses — throwing a
+ * plain `Error` whose message begins `sgi-fixtures:` and names the path it
+ * concerns — when the requested identifier is not a single path segment, so it can
+ * name no directory outside `fixtures/`; when the file cannot be read or is not a
+ * JSON object; when an undeclared key appears at the document's top level or in a
+ * case; when `standard_version_id` is not the requested identifier; when `cases`
+ * is not a non-empty array; when `total_cases` or `critical_cases` is not a
+ * non-negative integer or disagrees with that array; when a case `id` is empty,
+ * not a string or repeated; when a `severity` is outside `critical` and
+ * `standard`; when a case's `input` lacks its two non-empty strings; or when a
+ * case carries no JSON `expected_output`. A refusal is never cached, so an
+ * identifier it refuses is refused with the same message on every call. It never
+ * returns partial data and never falls back to a default case set.
  */
 export function loadCaseSet(standardVersionId: string): CaseSet {
   return readCaseSet(standardVersionId);

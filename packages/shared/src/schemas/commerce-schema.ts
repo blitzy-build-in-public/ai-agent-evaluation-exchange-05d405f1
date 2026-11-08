@@ -47,13 +47,14 @@ import { OFFER_MODELS } from '../types/commerce';
  *
  * The buyer's identity is resolved server-side from the `X-Demo-Account` demo
  * session and is deliberately not a field here, so a caller cannot write an
- * inquiry as another account. Fastify 4 validates a body with
- * `removeAdditional: true` among its validator's defaults, so with
- * `additionalProperties: false` a client that sends its own `buyer_account_id`,
- * `id`, `created_at` or `status` alongside an otherwise valid body has the field
- * **removed before the handler runs** rather than answered with a `400`. That is
- * the intended behaviour: the buyer is the resolved demo account, and the row's
- * other columns belong to the server.
+ * inquiry as another account. The API holds a request body to this closed object
+ * before its validator runs — the check in
+ * `apps/api/src/routes/request-body-policy.ts` — so a client that sends its own
+ * `buyer_account_id`, `id`, `created_at` or `status` alongside an otherwise valid
+ * body is answered **`400 validation_error`** rather than having the field removed
+ * before the handler runs. The buyer is the resolved demo account and the row's
+ * other columns belong to the server, and a client that tried to set one is told
+ * so rather than answered as if it had succeeded.
  *
  * The body holds nothing else, and the row it produces holds nothing else: an
  * inquiry is not a channel, so no contact detail, no payment detail and no
@@ -62,11 +63,18 @@ import { OFFER_MODELS } from '../types/commerce';
  * `packages/shared/migrations/0003_inquiries.sql`, written once by this route and
  * read back unchanged.
  *
+ * `message` carries a stated `maxLength` of 2000. The message is stored and read
+ * back verbatim by the listing's own inquiry surface, so a field with no ceiling
+ * lets one client inflate every payload that carries the inquiry. The number is
+ * this module's own choice, large enough to state a buyer's question in full and
+ * no larger.
+ *
  * Statuses this row produces or hands on: `400` for a missing or empty
- * `listing_id` or `message`; `404` from the route for a `listing_id` that names
- * no listing; `401` for a missing or unresolvable demo header; `403` for a
- * resolvable account whose role is not `buyer`; and success is `201`, the write
- * appending an `audit_events` row of resource type `inquiry`.
+ * `listing_id` or `message`, or a `message` over its stated maximum; `404` from
+ * the route for a `listing_id` that names no listing; `401` for a missing or
+ * unresolvable demo header; `403` for a resolvable account whose role is not
+ * `buyer`; and success is `201`, the write appending an `audit_events` row of
+ * resource type `inquiry`.
  */
 export const inquiryCreateBodySchema = {
   body: {
@@ -74,7 +82,7 @@ export const inquiryCreateBodySchema = {
     required: ['listing_id', 'message'],
     properties: {
       listing_id: { type: 'string', minLength: 1 },
-      message: { type: 'string', minLength: 1 },
+      message: { type: 'string', minLength: 1, maxLength: 2000 },
     },
     additionalProperties: false,
   },
@@ -113,12 +121,11 @@ export const inquiryCreateBodySchema = {
  * payment never arises because no real payment exists — the checkout is a
  * labelled, nonfunctional simulation.
  *
- * Fastify 4 validates a body with `removeAdditional: true` among its validator's
- * defaults, so with `additionalProperties: false` a client that sends its own
- * `amount`, `currency` or `buyer_account_id` alongside an otherwise valid body
- * has the field **removed before the handler runs** rather than answered with a
- * `400`. That is the intended behaviour: the amount is the server's, and the
- * buyer's identity is resolved from the demo header, never read from the body.
+ * The request-body policy refuses an undeclared field with `400 validation_error`
+ * before the handler runs, so a client that sends its own `amount`, `currency` or
+ * `buyer_account_id` alongside an otherwise valid body is answered `400` rather
+ * than having the field removed. The amount is the server's and the buyer's
+ * identity is resolved from the demo header, never read from the body.
  */
 export const checkoutSimulationBodySchema = {
   body: {
@@ -143,11 +150,12 @@ export const checkoutSimulationBodySchema = {
  * decision rather than a validation failure, and raising this bound to `1` would
  * silently turn a permitted input into a `400`.
  *
- * `type: 'integer'` is a money-safety guard rather than a formality: Fastify
- * validates with `coerceTypes`, so the JSON number is accepted as it stands while
- * a decimal such as `12.5` is rejected before a handler runs. This schema is
- * therefore the first line of the "no floating-point money" rule whose arithmetic
- * half lives at the product's single rounding point,
+ * `type: 'integer'` is a money-safety guard rather than a formality: the request
+ * body policy accepts a whole JSON number as it stands and refuses both a decimal
+ * such as `12.5` and a numeric string such as `"4000"` before a handler runs —
+ * neither a fraction nor a string is the integer this field declares. This schema
+ * is therefore the first line of the "no floating-point money" rule whose
+ * arithmetic half lives at the product's single rounding point,
  * `packages/commerce-sim/src/ledgers/allocate.ts`, and amounts stay whole minor
  * units from the request to the ledger entry.
  *
@@ -161,8 +169,8 @@ export const checkoutSimulationBodySchema = {
  * nothing is edited and nothing is deleted, and the net allocation is derived by
  * reading the entries. The transaction being refunded comes from the path,
  * through {@link transactionIdParamsSchema}, and never from the body — a
- * client-supplied `transaction_id` is removed by `additionalProperties: false`
- * with `removeAdditional: true`, as is any other unlisted field.
+ * client-supplied `transaction_id` is refused by this closed object with `400
+ * validation_error` before the handler runs, as is any other undeclared field.
  *
  * Statuses this row produces or hands on: `400` for a missing, negative or
  * fractional `amount_minor_units`; `404` for a transaction id no transaction

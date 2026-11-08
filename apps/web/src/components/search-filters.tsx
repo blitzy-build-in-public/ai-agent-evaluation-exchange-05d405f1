@@ -7,7 +7,7 @@
  * with the filters that produced it. A `q`, `category`, `license`, `model`, `standard` or `sort` kept
  * anywhere else would not survive a copy of the address.
  *
- * Two rules the controls keep.
+ * Three rules the controls keep.
  *
  * - **A changed filter drops `page`.** A stale page number against a narrower result set shows an
  *   empty list that reads as "no such listing" when the truth is "not on this page". Page 1 is the
@@ -15,6 +15,11 @@
  *   then carries only the filters that produced it.
  * - **Clearing a filter removes its parameter** rather than writing an empty value, so the page can
  *   tell an absent filter from a cleared one.
+ * - **A submitted value is the one the control holds.** A change event is not the only way a field's
+ *   text changes: the browser's own clear affordance on a search box, and a value assigned to the
+ *   element, both change what the reader sees without this component being told. The submit handler
+ *   therefore reads the value from the form element itself and brings the mirror into step with it,
+ *   which is what lets an empty field submitted clear the search it narrowed.
  *
  * **Paging belongs to the results region, and carries one control.** That region states the range and
  * the last page and holds the pager, so this form offers one action per control: a second
@@ -33,6 +38,8 @@ import { useSearchParams } from "react-router-dom";
 import { DEFAULT_LISTING_SORT, LISTING_SORTS, PRICING_MODELS } from "@adem/shared";
 import type { ListingSort, PricingModel } from "@adem/shared";
 
+import { describePricingModel } from "../labels";
+
 /**
  * The query parameter names, spelled exactly as the `GET /listings` contract and the shared search
  * schema spell them, so the page can pass this component's query string straight to the API.
@@ -50,14 +57,7 @@ const PAGE_PARAM = "page";
 /** How long the query box waits after the last keystroke before it writes the URL. */
 const QUERY_DEBOUNCE_MS = 300;
 
-/** Human-readable labels for the closed vocabularies, keyed by the value the contract carries. */
-const PRICING_MODEL_LABELS: Readonly<Record<PricingModel, string>> = {
-  rent: "Rent",
-  purchase: "Purchase",
-  license: "License",
-  subscription: "Subscription",
-};
-
+/** Human-readable label of each ordering the contract accepts, keyed by the value it carries. */
 const SORT_LABELS: Readonly<Record<ListingSort, string>> = {
   relevance: "Relevance",
   newest: "Newest",
@@ -80,7 +80,7 @@ export interface SearchFiltersProps {
   readonly categories: readonly FilterOption[];
   /** Distinct license codes the page derived from its own listings result. */
   readonly licenses: readonly FilterOption[];
-  /** Standard version identifiers the page derived from its own listings result and listStandards. */
+  /** Standard version labels the page derived from its own listings result and listStandards. */
   readonly standards: readonly FilterOption[];
 }
 
@@ -111,7 +111,7 @@ function optionsWithActive(
 
 /** The pricing-model options, in the order the contract lists them. */
 const PRICING_MODEL_OPTIONS: readonly FilterOption[] = PRICING_MODELS.map(
-  (model: PricingModel): FilterOption => ({ value: model, label: PRICING_MODEL_LABELS[model] }),
+  (model: PricingModel): FilterOption => ({ value: model, label: describePricingModel(model) }),
 );
 
 /** The sort options, in the order the contract lists them. */
@@ -194,14 +194,24 @@ export function SearchFilters(props: SearchFiltersProps): JSX.Element {
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    commit(QUERY_PARAM, queryInput);
+    // The submitted value is read from the control itself rather than from the mirror above. A change
+    // event is not the only way a field's text changes — the browser's own clear affordance on a
+    // search box, and a value assigned to the element, both leave the reader looking at text this
+    // component never received — so committing the mirror would write back the text that was just
+    // cleared, rebuilding the address the reader is already on and sending no request at all.
+    const control = event.currentTarget.elements.namedItem(QUERY_PARAM);
+    const submitted = control instanceof HTMLInputElement ? control.value : queryInput;
+    // The mirror follows what was submitted, so a pending debounce cannot re-commit the stale text.
+    setQueryInput(submitted);
+    commit(QUERY_PARAM, submitted);
   };
 
   const handleQueryChange = (event: ChangeEvent<HTMLInputElement>): void => {
     setQueryInput(event.target.value);
   };
 
-  // Each select carries the query parameter it writes as its name, so one handler serves all five.
+  // Every control carries the query parameter it writes as its name, so one handler serves the four
+  // selects, and the query box's own name is how a submit reads the value the reader can see.
   const handleFilterChange = (event: ChangeEvent<HTMLSelectElement>): void => {
     commit(event.target.name, event.target.value);
   };
@@ -229,6 +239,7 @@ export function SearchFilters(props: SearchFiltersProps): JSX.Element {
             purpose it does not have. */}
         <input
           id={queryFieldId}
+          name={QUERY_PARAM}
           type="search"
           value={queryInput}
           onChange={handleQueryChange}

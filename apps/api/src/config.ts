@@ -25,6 +25,7 @@
  * copy of a fee, a rate or a label sentence.
  */
 
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveCommerceConfig } from "@adem/commerce-sim";
@@ -69,6 +70,14 @@ const MIN_PORT = 1;
 const MAX_PORT = 65_535;
 
 /**
+ * The in-memory database name SQLite defines, which `./db/connection` opens as one connection's
+ * private, empty database. Recognized here so that a configured value naming it is passed through
+ * rather than resolved against {@link repositoryRoot}: it names no file, and a path under the
+ * repository would be a file nobody asked for.
+ */
+const IN_MEMORY_DATABASE_PATH = ":memory:";
+
+/**
  * A configuration error: the process was handed a value it cannot start with.
  *
  * Raised by {@link resolveConfig} for a present-but-unusable environment value, and for an override
@@ -76,6 +85,12 @@ const MAX_PORT = 65_535;
  * status code, because a start-up refusal has no HTTP response behind it, and its message states
  * the variable or the member and the form expected of it while disclosing nothing else: no value
  * read from the environment other than the refused one, and no secret.
+ *
+ * The refused value is echoed by design, because a refusal an operator cannot act on is not a
+ * refusal: seeing the value the process rejected is what tells them which variable, or which member,
+ * to correct. For the database path the echoed value is the file the operator named — a path on their
+ * own machine, in the line that reports the refusal — and it is deliberately not a secret. The
+ * refusal is the one place a configured value is repeated back, and it repeats that value alone.
  */
 export class ConfigurationError extends Error {
   constructor(message: string) {
@@ -139,6 +154,12 @@ export interface ApiConfig {
    * The SQLite file the API opens. Defaults to `<repository root>/.adem/adem.sqlite`, and it is the
    * member the container's named volume and the browser-run configuration each resolve to a value
    * of their own.
+   *
+   * An `ADEM_DB_PATH` value that is relative arrives here already made absolute against the
+   * repository root — the same base the default is derived from — so one relative value names one
+   * file whether the documented `npm start` reads it from the repository root or the documented
+   * `npm run seed` reads it from `apps/api`. A caller's own override is used as the caller wrote it,
+   * because an override replaces this member rather than being read from the environment.
    */
   readonly databasePath: string;
 
@@ -151,8 +172,8 @@ export interface ApiConfig {
 
   /**
    * How many listing results one page of search holds, fixed by the API contract at `@adem/shared`'s
-   * `LISTING_PAGE_SIZE`. A page beyond the last is a valid request that answers with an empty page,
-   * never with a page of another size.
+   * `LISTING_PAGE_SIZE`. A page beyond the last addressable page is a valid request that answers with
+   * an empty page, never with a page of another size.
    */
   readonly pageSize: number;
 
@@ -166,8 +187,15 @@ export interface ApiConfig {
 
   /**
    * The label the UI renders wherever a demo account is used to write, stating that a demo session
-   * is not an authentication of any identity; the value of `@adem/shared`'s
-   * `DEMO_AUTHENTICATION_LABEL`, re-exported from this module for the same one-definition reason.
+   * is not an authentication of any identity. The value is `@adem/shared`'s
+   * `DEMO_AUTHENTICATION_LABEL`, which this module re-exports for the same one-definition reason.
+   *
+   * No runtime path of this workspace reads this member, and none is missing. Every surface that
+   * renders the sentence — the demo banner, the account switcher and each form that names a demo
+   * account — imports `DEMO_AUTHENTICATION_LABEL` from `@adem/shared`, where the sentence has its
+   * one definition, so no consumer needs the label through this module. The member carries it for
+   * the resolved configuration surface itself, and a search for a use of it ends at this
+   * declaration rather than at a call site.
    */
   readonly demoAuthLabel: string;
 
@@ -309,13 +337,61 @@ function environmentPort(): number {
 
 /**
  * Reads the database path from the environment: the value of {@link DATABASE_PATH_ENV_VAR} when it
- * is set, and {@link defaultDatabasePath} when it is not. A relative value is passed through
- * unchanged, because it is resolved against the working directory of the process that opens it.
+ * is set, and {@link defaultDatabasePath} when it is not.
+ *
+ * A relative value is made absolute against {@link repositoryRoot} before it is returned, so one
+ * value names one file whichever documented command reads it: `npm run seed` reaches this module
+ * from `apps/api` and `npm start` from the repository root, and a relative value left for the driver
+ * to resolve would be two databases, one of them empty.
+ *
+ * Three forms are used exactly as given, because none of them is a path under a directory this
+ * module could pick: an absolute path, the in-memory name `:memory:`, and a `file:` URI, which is
+ * handed to the driver as the name it is rather than resolved against a base. A caller's own
+ * `databasePath` override never comes through here at all, so it is used as given too.
  */
 function environmentDatabasePath(): string {
   const configured = process.env.ADEM_DB_PATH;
 
-  return configured === undefined ? defaultDatabasePath() : requirePath(DATABASE_PATH_ENV_VAR, configured);
+  return configured === undefined
+    ? defaultDatabasePath()
+    : resolveDatabasePath(requirePath(DATABASE_PATH_ENV_VAR, configured));
+}
+
+/**
+ * The repository root: the base a relative {@link DATABASE_PATH_ENV_VAR} value is resolved against.
+ *
+ * It is derived from this module's own location and never from the process's working directory, and
+ * it is the same anchor {@link defaultDatabasePath} and {@link defaultWebDir} derive their absolute
+ * defaults from — so the documented default and a relative value are two spellings of paths under
+ * one base.
+ *
+ * @returns An absolute path to the repository root, ending in a separator.
+ */
+function repositoryRoot(): string {
+  return fileURLToPath(new URL("../../../", import.meta.url));
+}
+
+/**
+ * The absolute path a configured database path names: a relative value resolved against
+ * {@link repositoryRoot}, and every other form returned unchanged.
+ *
+ * The forms left alone are the ones that name something other than a path under a directory: an
+ * absolute path, the in-memory name `:memory:` — compared on its trimmed text exactly as
+ * `./db/connection` compares it before opening it, so padding in whitespace cannot turn one into a
+ * file — and a `file:` URI, whose scheme is case-insensitive. Whitespace around an accepted value is
+ * left where it is; normalizing the driver's own two special names is the driver's business.
+ *
+ * @param value The value {@link requirePath} accepted for {@link DATABASE_PATH_ENV_VAR}.
+ * @returns The absolute form of a relative path, or the value as it was given.
+ */
+function resolveDatabasePath(value: string): string {
+  const trimmed = value.trim();
+
+  if (isAbsolute(value) || trimmed.toLowerCase().startsWith("file:") || trimmed === IN_MEMORY_DATABASE_PATH) {
+    return value;
+  }
+
+  return resolve(repositoryRoot(), value);
 }
 
 /**
@@ -355,8 +431,13 @@ function requirePortText(origin: string, value: string): number {
 /**
  * Refuses a value that cannot name a file or a directory, and returns it unchanged when it can.
  *
- * An accepted value is used exactly as given: a relative path is resolved by the caller that opens
- * it, while the default is absolute because it is derived from this module's own location.
+ * An accepted value is returned exactly as given. Whether a relative one reaches a consumer relative
+ * depends on the route it arrived by: an `ADEM_DB_PATH` value is refused or accepted here and then
+ * made absolute by {@link environmentDatabasePath}, which resolves it against {@link repositoryRoot}
+ * — the same base the documented default has — while a caller's own `databasePath` or `webDir`
+ * override is returned unchanged and resolved by whatever opens the database or serves the
+ * directory. The two defaults are already absolute, both being derived from this module's own
+ * location.
  *
  * A value that names no file is refused: one ending in a separator, one whose last segment is the
  * containing directory itself, and one carrying a NUL character, which no path may contain. Each

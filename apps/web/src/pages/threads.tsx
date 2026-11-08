@@ -14,8 +14,8 @@
  * **The address is the selection.** Which thread is open lives in the `id` query parameter and
  * nowhere else: no context provider, no shared state module, no storage. A thread is therefore a
  * link a contributor can paste, the back button steps through the threads that were opened, and a
- * selection the board cannot resolve renders an explanation with a way back to the whole board
- * rather than an empty panel.
+ * selection the page of the board cannot resolve renders an explanation with a way back to the
+ * board rather than an empty panel.
  *
  * **One read, and re-read rather than patched.** `../api-client` is the only module that calls the
  * API, and this page makes exactly one kind of call through it: `listThreads`. After a thread is
@@ -36,19 +36,24 @@
  * renders an explanation and an invitation rather than an empty list.
  *
  * Presentation only. No request is built here, no header is set, no storage is touched and no
- * business rule lives in this file: every payload, count and timestamp is rendered as the service
- * returned it. Appearance comes from the workspace stylesheet, whose `.item-list` pair is the
+ * business rule lives in this file: every payload and count is rendered as the service returned it,
+ * a timestamp through the workspace's one reading of a stored instant, a row's author named by the
+ * handle the switcher lists that account under and a reply rendered with the paragraph breaks its
+ * author wrote. Appearance comes from the workspace stylesheet, whose `.item-list` pair is the
  * thread board's own class, and no stylesheet is imported from this module.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { COLLECTION_PAGE_SIZE } from "@adem/shared";
 import type { Thread, ThreadPost } from "@adem/shared";
 import { listThreads } from "../api-client";
 import type { ThreadListItem } from "../api-client";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
 import { ThreadCreateForm, ThreadReplyForm } from "../components/thread-reply-form";
+import { findDemoAccount } from "../data/demo-accounts";
+import { Timestamp, readString } from "../payload-reading";
 
 /**
  * The query parameter that names the open thread. It is this page's only selection state, and it is
@@ -76,7 +81,7 @@ const CREATE_HEADING = "Start a thread";
 const BOARD_HEADING = "The board";
 const REPLIES_LABEL = "Replies";
 const REPLY_HEADING = "Post a reply";
-const BACK_TO_BOARD_LABEL = "Back to the whole board";
+const BACK_TO_BOARD_LABEL = "Back to the board";
 
 /** The empty board: a state of the product, stated with the action that leaves it. */
 const EMPTY_BOARD_HEADING = "No discussion has started yet";
@@ -90,13 +95,22 @@ const EMPTY_POSTS_EXPLANATION =
   "This thread has no replies. The reply field below posts the first one; a reply is appended and neither it nor an earlier one is ever edited or removed.";
 
 /**
- * The selection the board could not resolve. It names what the address says and the two ways such
- * an address is reached, because a reader who followed a link deserves to know which of them
- * happened rather than being shown an empty thread.
+ * The selection the page of the board could not resolve. It names what the address says and the
+ * ways such an address is reached — the thread is on an earlier page of the board, or the link was
+ * made against another copy of the demonstration, or against a board that has since been reset —
+ * because a reader who followed a link deserves to know which of them happened rather than being
+ * shown an empty thread.
  */
-const UNKNOWN_THREAD_HEADING = "That thread is not on the board";
+const UNKNOWN_THREAD_HEADING = "That thread is not on this page of the board";
 const UNKNOWN_THREAD_EXPLANATION =
-  "This address names a thread the board does not hold. A link made against another copy of the demonstration, or against a board that has since been reset, reaches this state rather than an empty thread.";
+  "This address names a thread the page of the board read here does not carry. The board is read one page at a time, most recent first, so the thread may be on an earlier page of the board; a link made against another copy of the demonstration, or against a board that has since been reset, reaches this state too.";
+
+/**
+ * What a row says about its author when the board names an account the switcher does not list. The
+ * identifier itself is deliberately not rendered: it names nothing a reader can recognise, and the
+ * handle is the whole of the attribution this board shows.
+ */
+const AUTHOR_UNLISTED_LABEL = "an account the demo-account switcher does not list";
 
 /**
  * The thread a `?id=` value names, or `null` when the parameter is absent or blank.
@@ -130,18 +144,62 @@ function describePostCount(count: number): string {
 }
 
 /**
+ * The account that wrote a thread or a reply, named by the handle the demo-account switcher lists
+ * its identifier under.
+ *
+ * The handle is the whole of the attribution: it is one of the six synthetic demo accounts, so a
+ * row names which demonstration account wrote it and says nothing further about who that was.
+ * Both thread writes accept any resolvable demo account, so every author this board can hold is one
+ * of those six; an identifier the lookup does not know — an account the switcher no longer lists, or
+ * a payload written by hand — states that much instead of putting an opaque identifier in front of
+ * a reader.
+ */
+function describeAuthor(accountId: string): string {
+  const account = findDemoAccount(accountId);
+  return account === null ? AUTHOR_UNLISTED_LABEL : account.handle;
+}
+
+/**
+ * A reply's body as the paragraphs its author wrote.
+ *
+ * A stored body keeps the blank lines the reply field submitted, and wrapping the whole of it in one
+ * paragraph would keep those newlines in the markup while a reader sees a single block of text,
+ * because no stylesheet rule here preserves them. Splitting on a blank line — a line break, then any
+ * run of spaces, tabs or further line breaks, then another line break — and rendering one paragraph
+ * per non-empty piece is what makes the structure the author typed reach the reader, and it is the
+ * whole of the formatting this page adds: each piece is still text, escaped by the renderer, and
+ * never markup.
+ *
+ * A body with no blank line in it is a single piece and renders exactly as it did before, and a body
+ * whose pieces are all blank still renders one paragraph rather than disappearing, so a reply is
+ * never invisible.
+ */
+function readPostParagraphs(body: unknown): readonly string[] {
+  const paragraphs = readString(body)
+    .split(/\n\s*\n/)
+    .map((paragraph: string): string => paragraph.trim())
+    .filter((paragraph: string): boolean => paragraph !== "");
+  return paragraphs.length === 0 ? [""] : paragraphs;
+}
+
+/**
  * What the board's live region says once a read has settled. The count is the one fact a reader
  * cannot see from the list itself when it is long, and it is what tells a reader who just started a
  * thread that the board has taken it.
+ *
+ * The read answers one page of the board, so the count is the board's own only while the page came
+ * back shorter than {@link COLLECTION_PAGE_SIZE}: a page that came back full may hold the newest
+ * threads of a longer board, and the sentence says which of the two it is rather than stating a
+ * size the read did not confirm.
  */
 function describeLoadedBoard(count: number): string {
   if (count === 0) {
     return "The board is loaded and holds no thread yet.";
   }
-  if (count === 1) {
-    return "The board is loaded with one thread on it.";
-  }
-  return `The board is loaded with ${count} threads on it.`;
+  const loaded = count === 1 ? "one thread" : `${count} threads`;
+  return count < COLLECTION_PAGE_SIZE
+    ? `The board is loaded with ${loaded} on it.`
+    : `The board's most recent page is loaded, holding ${loaded}.`;
 }
 
 /**
@@ -336,7 +394,9 @@ export function Threads(): JSX.Element {
                     <Link to={threadPath(thread.id)}>{thread.title}</Link>
                   </p>
                   <p>
-                    <time dateTime={thread.created_at}>{thread.created_at}</time>
+                    Started by <strong>{describeAuthor(thread.author_account_id)}</strong>
+                    {", "}
+                    <Timestamp value={thread.created_at} />
                     {", "}
                     {describePostCount(thread.posts.length)}
                   </p>
@@ -371,8 +431,10 @@ export function Threads(): JSX.Element {
         <section aria-labelledby="threads-open-heading">
           <h2 id="threads-open-heading">{selectedThread.title}</h2>
           <p>
-            {"Started "}
-            <time dateTime={selectedThread.created_at}>{selectedThread.created_at}</time>
+            {"Started by "}
+            <strong>{describeAuthor(selectedThread.author_account_id)}</strong>
+            {", "}
+            <Timestamp value={selectedThread.created_at} />
             {", "}
             {describePostCount(selectedThread.posts.length)}
           </p>
@@ -392,11 +454,18 @@ export function Threads(): JSX.Element {
               {selectedThread.posts.map(
                 (post: ThreadPost): JSX.Element => (
                   <li key={post.id} className="item-list__item">
-                    {/* A reply is rendered as text and never as markup: it is what its author typed,
-                        escaped by the renderer, and this page adds no formatting of its own to it. */}
-                    <p>{post.body}</p>
+                    {/* A reply is rendered as text and never as markup: every paragraph is what its
+                        author typed, escaped by the renderer, and the only structure this page adds
+                        is the paragraph break the author wrote. */}
+                    {readPostParagraphs(post.body).map(
+                      (paragraph: string, paragraphIndex: number): JSX.Element => (
+                        <p key={`${post.id}-paragraph-${paragraphIndex}`}>{paragraph}</p>
+                      ),
+                    )}
                     <p>
-                      <time dateTime={post.created_at}>{post.created_at}</time>
+                      Posted by <strong>{describeAuthor(post.author_account_id)}</strong>
+                      {", "}
+                      <Timestamp value={post.created_at} />
                     </p>
                   </li>
                 ),

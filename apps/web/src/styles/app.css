@@ -235,13 +235,16 @@ canvas {
    shell's markup is not fixed, and WCAG 2.4.1 "Bypass Blocks" is a Level A criterion of the
    target, so the link is styled here. It sits above the viewport until focus reaches it and is
    then fully visible with tokens.css's ring — it is never permanently hidden, and it is never
-   an unstyled block in the middle of the header. */
+   an unstyled block in the middle of the header. It is a control rather than a link inside a
+   sentence — accent fill, border and radius — so it holds --touch-target-min like every
+   other control, which its padding and its line box alone do not reach. */
 .app-skip-link {
   position: absolute;
   inset-block-start: 0;
   inset-inline-start: var(--space-4);
   z-index: 1;
   transform: translateY(-200%);
+  min-height: var(--touch-target-min);
   padding-block: var(--space-2);
   padding-inline: var(--space-4);
   border: var(--border-width-thin) solid var(--color-accent-strong);
@@ -653,8 +656,15 @@ canvas {
   margin-block: 0;
 }
 
+/* The explanation names the filters that produced it, so it echoes the search text verbatim and a
+   long query is one unbreakable token. The paragraph is a flex item of the column-flex box above
+   and is not stretched, so its width is its fit-content width, whose floor is its min-content
+   width; `anywhere` is the value whose soft-wrap opportunities count toward that minimum, which is
+   what the machine-data rules below and above use, and it is why the body's `break-word` is not
+   enough here. Without it the echoed query measures its own 3777px and the page scrolls sideways. */
 .empty-state p {
   margin-block: 0;
+  overflow-wrap: anywhere;
 }
 
 .empty-state > div {
@@ -778,12 +788,20 @@ canvas {
   font-size: var(--font-size-xl);
 }
 
-/* The chip carrying the outcome of the latest report. Both directions are styled from their own
-   pair of custom properties, and the word itself carries the meaning, so the chip reads without
-   its tint. */
-.listing-card__outcome {
+/* The chip a report's own values render in, and one chip serves every consumer of them: the
+   listing card, the listing detail page, the report page and a comparison column, which render the
+   same datum and so carry the same chip rather than a second treatment of it. Only the tint changes
+   with the meaning. The outcome's two directions come from the outcome tokens, which alias the
+   notice triples rather than restating them, so an outcome and its notice can never drift apart.
+   The label's neutral tint comes from the badge triples — the tokens for a disclosure that says
+   what an artefact is — so a label never reads as a pass or a failure. The word itself carries the
+   meaning in every case, so every chip reads without its tint. */
+.chip {
   display: inline-block;
   align-self: flex-start;
+  /* In a card the chip is a flex item, where this has no effect; in a comparison it is a grid item,
+     where it keeps the pill the width of its word rather than the width of the row. */
+  justify-self: start;
   padding-block: var(--space-1);
   padding-inline: var(--space-2);
   border: var(--border-width-thin) solid var(--color-divider);
@@ -794,16 +812,22 @@ canvas {
   font-weight: var(--font-weight-bold);
 }
 
-.listing-card__outcome--pass {
+.chip--pass {
   background-color: var(--color-outcome-pass-surface);
   border-color: var(--color-outcome-pass-border);
   color: var(--color-outcome-pass-text);
 }
 
-.listing-card__outcome--fail {
+.chip--fail {
   background-color: var(--color-outcome-fail-surface);
   border-color: var(--color-outcome-fail-border);
   color: var(--color-outcome-fail-text);
+}
+
+.chip--label {
+  background-color: var(--color-badge-surface);
+  border-color: var(--color-badge-border);
+  color: var(--color-badge-text);
 }
 
 /* The version that was measured and the standard version it was measured against: machine
@@ -876,6 +900,18 @@ canvas {
   min-height: var(--touch-target-min);
   padding-inline: var(--space-1);
   font-size: var(--font-size-sm);
+}
+
+/* The pressed state of the compare toggle, in the treatment the navigation's disclosure already
+   uses for its expanded state (`.nav__toggle[aria-expanded="true"]`): the fill sinks, the boundary
+   thickens and takes the accent, and the text darkens, so a control that is on reads the same way
+   wherever it appears. The control's own label changes with its state as well, so the pressed
+   state never rests on colour alone. */
+.listing-card__compare[aria-pressed="true"] {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-accent);
+  border-width: var(--border-width-thick);
+  color: var(--color-accent-strong);
 }
 
 /* The boards and catalogues the pages render directly: the challenges board, the thread board
@@ -991,6 +1027,111 @@ canvas {
   overflow-wrap: anywhere;
 }
 
+/* The dense reads — the report's per-case evidence and the operator's audit feed — stack as
+   label/value blocks below the breakpoint instead of holding equal columns. An equal share of a
+   360px viewport is about 65px for the evidence read's five columns and about 47px for the audit
+   feed's seven, and that is narrower than the machine data those columns carry: a 36-character case
+   id or uuid breaks across a dozen lines and a canonical JSON output at almost every character,
+   with the column labels breaking mid-word themselves. A sideways scroll is not the alternative —
+   this file's invariant forbids one — so every row becomes a block and every cell prints the label
+   of the column it is in, from the cell's own data-label, above its value. The ledger reads and the
+   comparison table are already stacked this way, for the same reason. */
+.table--dense,
+.table--dense thead,
+.table--dense tbody,
+.table--dense tr,
+.table--dense th,
+.table--dense td {
+  display: block;
+}
+
+/* Each cell prints its own column label below, so the header row is not repeated above every block
+   in the stacked form; the breakpoint below is where it comes back, and there it is stated once for
+   the whole table rather than at every cell. */
+.table--dense thead {
+  display: none;
+}
+
+/* Left as a table's own caption inside a block-level table, the caption is sized to its own content
+   and becomes a narrow column of its own — measured at 360px, a 68px column holding a sentence over
+   ten lines. As a block it takes the read's whole width, so the sentence naming the report and the
+   order its cases are in is read the same way the blocks under it are. */
+.table--dense caption {
+  display: block;
+}
+
+/* One row is one block, divided from the next, and the cells inside it carry neither the table's
+   cell borders nor its inline padding. */
+.table--dense tr {
+  padding-block: var(--space-2);
+  border-block-end: var(--border-width-thin) solid var(--color-divider);
+}
+
+.table--dense tbody tr:last-child {
+  border-block-end: 0;
+}
+
+.table--dense th,
+.table--dense td {
+  padding-block: var(--space-1);
+  padding-inline: 0;
+  border-block-end: 0;
+}
+
+/* The label is muted so the value under it reads as the answer, and a row header keeps the heading
+   colour and the bold weight the shared table rules above give every `th`, so the line opening a
+   block is the line a reader finds first. */
+.table--dense td::before,
+.table--dense th[scope="row"]::before {
+  content: attr(data-label);
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Above the breakpoint the table is the table it was, because at that width its columns hold the
+   machine data comfortably: every one of those elements returns to its user-agent display — the
+   table, its header group, its row group, a row and a cell — and takes the shared table's geometry
+   back, while the per-cell labels go because the header row carries the same labels once. */
+@media (min-width: 48rem) {
+  .table--dense,
+  .table--dense thead,
+  .table--dense tbody,
+  .table--dense tr,
+  .table--dense th,
+  .table--dense td {
+    display: revert;
+  }
+
+  .table--dense tr {
+    padding-block: 0;
+    border-block-end: 0;
+  }
+
+  /* The caption is the table's own caption again at the width where the table is the table again. */
+  .table--dense caption {
+    display: revert;
+  }
+
+  .table--dense th,
+  .table--dense td {
+    padding-block: var(--space-2);
+    padding-inline: var(--space-3);
+    border-block-end: var(--border-width-thin) solid var(--color-divider);
+  }
+
+  .table--dense tbody tr:last-child th,
+  .table--dense tbody tr:last-child td {
+    border-block-end: 0;
+  }
+
+  .table--dense td::before,
+  .table--dense th[scope="row"]::before {
+    content: none;
+  }
+}
+
 /* The ledger panels read an append-only store; nothing here is a control over it. The note on
    the founder-allocation view about the contract structure being undecided is legible and is
    never truncated. */
@@ -1015,6 +1156,10 @@ canvas {
 .ledger-table summary {
   display: inline-flex;
   align-items: center;
+  /* The label and the identifier are two flex items of this container, and the whitespace between
+     them in the markup is not rendered as an anonymous flex item, so this gap is what separates
+     them. The inline-flex box is what holds the disclosure's --touch-target-min height. */
+  gap: var(--space-2);
   min-height: var(--touch-target-min);
   cursor: pointer;
   transition:
@@ -1044,9 +1189,21 @@ canvas {
 
 /* Two to four listings compared side by side. Below the breakpoint the listings stack, one
    readable block each, so no column has to be reached by scrolling sideways; at the breakpoint
-   the same blocks sit in a row and wrap when a fourth does not fit. Inside a block, a label is
-   paired with its value as a two-column row that keeps the value the larger share at every
-   width.
+   the same blocks sit in a row and wrap when a fourth does not fit. Inside a block, a muted label
+   reads as the caption above its value in a single stack, because no two-track pairing can hold a
+   value's own floor width inside a four-column comparison: the value's track measured 92px there,
+   a 36-character identifier wrapped over three lines and a claim wrapped a word or two per line,
+   while a stack gives the value the block's whole width at every width. It is also the shape the
+   ledger views read a label and its value in, for the same reason.
+
+   At the breakpoint the groups of every column lie on one set of row tracks, because a comparison
+   is worth reading only where the same fact can be read across: while each column was an
+   independent flow, "Measured evidence" sat at y=954.5 in one column and y=930.5 in the other, and
+   at four columns the four positions differed by up to 209px. Every column therefore renders the
+   same six children — its title and five group wrappers, the fifth of which a caller may omit only
+   for every column at once — on the section's six tracks, and `grid-row: span 6` with an automatic
+   row position keeps a fourth column that does not fit in a new band of its own rather than
+   creating an implicit column that would widen the document.
 
    A component that renders a real <table class="compare-table"> instead is supported by the
    element-qualified rules below, which keep that table inside the viewport: fixed layout,
@@ -1080,15 +1237,30 @@ canvas {
   min-width: 0;
 }
 
-.compare-table__listing > h3,
-.compare-table__listing > h4 {
+.compare-table__listing > h3 {
+  margin-block: 0;
+}
+
+/* One group of a column: the heading that names a fact, and the facts under it. It is a flex
+   column so the heading sits directly above what it heads whatever the track heights are, and
+   `min-width: 0` keeps a long value from widening the column it lies in. */
+.compare-table__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* A group heading labels what follows rather than being a block of its own, so it adds no margin
+   of its own to the group's own gap. */
+.compare-table__group > h4 {
   margin-block: 0;
 }
 
 .compare-table__row {
   display: grid;
-  grid-template-columns: minmax(7rem, 40%) minmax(0, 1fr);
-  gap: var(--space-1) var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -1141,8 +1313,21 @@ table.compare-table th {
 }
 
 @media (min-width: 48rem) {
+  /* Six shared row tracks: one for the title of a column and one per group, so the groups of every
+     column begin on the same line and a fact can be read across the comparison as a row. */
   .compare-table {
     grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    grid-template-rows: repeat(6, auto);
+    row-gap: var(--space-3);
+  }
+
+  /* Each column lays its six children on those tracks instead of flowing to its own heights. The
+     padding is the same in every column, so the contents of one track still line up across them. */
+  .compare-table__listing {
+    display: grid;
+    grid-row: span 6;
+    grid-template-rows: subgrid;
+    align-content: start;
   }
 }
 

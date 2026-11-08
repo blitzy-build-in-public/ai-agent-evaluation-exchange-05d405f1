@@ -9,23 +9,30 @@
  * account `X-Demo-Account` names (the header pair answers `401` when it names none) and checks the
  * role the row requires (`403` when the resolved account's role is not one the row accepts).
  *
- * **The board carries each challenge with its own responses.** The contract table names no
+ * **The board answers one page of itself, and carries each challenge with its own responses.** The
+ * read is bounded: it answers at most `COLLECTION_PAGE_SIZE` challenges and states the page it answered
+ * and the number the whole board holds, so its payload cannot grow with a table every visitor can add
+ * to. Page 1 carries the most recent page of the board, and a `page` query parameter — declared in
+ * `@adem/shared` and shared by every bounded collection read in the product — is its only paging input,
+ * so the page size is fixed rather than something a request can raise. The contract table names no
  * per-challenge read route, so this read is the only public read of these two tables and every row it
  * answers with carries the responses written on it — an unanswered challenge carrying the empty list,
- * which is the state the challenges page renders rather than an absent key. The responses of the whole
- * page are read in one statement over the ids the board returned, not in a query per challenge:
+ * which is the state the challenges page renders rather than an absent key. The responses of the page
+ * are read in one statement whose scope is the page's own rows, not in a query per challenge:
  * better-sqlite3 is synchronous and runs on the calling thread, so a per-row query would put the page's
- * row count on the event loop. An empty board is `200` with `items: []`, never an error and never a
- * `404`.
+ * row count on the event loop. An empty board, and a page past the last one, are `200` with `items: []`,
+ * never an error and never a `404`.
  *
  * **The board's order is total, and it is the answer's own.** The rows are ordered by the instant the
  * challenge was written and then by its id, both ascending, so two calls answer byte-identical bodies
- * and no sponsorship, fee, locale or clock reading can reorder the board. The responses of one
- * challenge are ordered by the table's own `rowid`, which is the order they entered the table: the
- * written instant is application-supplied and may tie or regress, while the rowid is the insertion
- * order the challenge response type states its rows are held in. No collation is named, so SQLite's
- * default `BINARY` comparison decides, and `id` and `rowid` are the primary key and the row's own
- * position, which is what makes both orders total.
+ * and no sponsorship, fee, locale or clock reading can reorder the board. The window is taken over the
+ * newest end of that order — `created_at DESC, id DESC` — so page 1 is the most recent page and a later
+ * page reaches further back, while the rows of the page read are put back into the ascending order this
+ * paragraph fixes before the page is answered. The responses of one challenge are ordered by the table's
+ * own `rowid`, which is the order they entered the table: the written instant is application-supplied
+ * and may tie or regress, while the rowid is the insertion order the challenge response type states its
+ * rows are held in. No collation is named, so SQLite's default `BINARY` comparison decides, and `id` and
+ * `rowid` are the primary key and the row's own position, which is what makes both orders total.
  *
  * **This group reads and writes its own two tables and joins nothing.** `challenges` and
  * `challenge_responses` are owned by `apps/api`, so no domain package takes part here: this file
@@ -81,13 +88,16 @@ import type {
   ChallengeResponse,
   ChallengeResponseBody,
   ChallengeStatus,
+  CollectionPageQuery,
 } from "@adem/shared";
 import {
   CHALLENGE_STATUSES,
+  COLLECTION_PAGE_SIZE,
   DEMO_ACCOUNT_HEADER,
   challengeCreateBodySchema,
   challengeIdParamsSchema,
   challengeResponseBodySchema,
+  collectionPageQuerySchema,
   demoAccountHeaderSchema,
 } from "@adem/shared";
 
@@ -153,6 +163,14 @@ interface ListingStatusRow {
 }
 
 /**
+ * The one row the board's count answers: the number of challenges the whole board holds, as
+ * `SELECT COUNT(*) AS total FROM challenges` names it.
+ */
+interface ChallengeTotalRow {
+  readonly total: number;
+}
+
+/**
  * One row of the board as this read answers it: the stored challenge, plus the responses it has
  * collected.
  *
@@ -166,12 +184,21 @@ interface ChallengeBoardItem extends Challenge {
 }
 
 /**
- * The board's `200` body: `items` and nothing else, which is the one envelope key
- * `apps/web/src/api-client.ts` reads a list under, beside the bare-array form it also accepts. No
- * total, no page and no cursor: this read takes no parameter and pages nothing.
+ * The board's `200` body: one page of the board with its responses, the number of challenges the whole
+ * board holds, and the page number this body answers.
+ *
+ * `items` is the one envelope key `apps/web/src/api-client.ts` reads a list under, beside the bare-array
+ * form it also accepts, and it carries at most `COLLECTION_PAGE_SIZE` rows. `total` and `page` are what
+ * make that bound usable rather than merely smaller: a reader that wants the rest of the board asks for
+ * the next page, and a reader that wants to know how much board there is reads `total` without a second
+ * request. The keys the client does not read are ignored by it, as they are on every other list it reads.
  */
 interface ChallengeBoardResult {
   readonly items: readonly ChallengeBoardItem[];
+  /** How many challenges the whole board holds, counted over `challenges` itself. */
+  readonly total: number;
+  /** The 1-based page of the board this body answers, echoed from the request's `page`. */
+  readonly page: number;
 }
 
 /**
@@ -199,26 +226,51 @@ const CHALLENGE_COLUMNS = "id, listing_id, buyer_account_id, question, status, c
 const RESPONSE_COLUMNS = "id, challenge_id, account_id, body, created_at";
 
 /**
- * The board read: every challenge, in the total order described in this file's header comment.
+ * One page of the board, windowed over the newest end of the total order described in this file's
+ * header comment: the `COLLECTION_PAGE_SIZE` rows ending at the offset the requested page resolves to.
  *
- * It is unbounded on purpose. The contract row takes no query parameter — there is no status filter, no
- * listing filter and no paging — so a parameterised narrowing here would be a contract this file
- * invented, and the collection the demonstration holds is small. `0011_indexes.sql` declares no index
- * for it, on the stated ground that this read documents no filter to serve.
+ * It is bounded, because `challenges` grows with every question a visitor writes and a response that
+ * carried the whole table would grow with it. `created_at DESC, id DESC` is that total order read
+ * backwards, which is what makes page 1 the most recent page of the board and each later page reach
+ * further back; the caller reverses the rows a page read so one page is answered in the ascending order
+ * the read documents. Both bound values are bound parameters, so no number a client sent reaches this
+ * statement's text.
+ *
+ * The narrowing is the window and nothing else: no status filter, no listing filter and no ordering
+ * input is added, so the contract row's one parameter moves over the board's order rather than
+ * inventing a second read. `0011_indexes.sql` declares no index for it, on the stated ground that this
+ * read documents no filter to serve, which is still what this statement says.
  */
 const SELECT_BOARD =
-  `SELECT ${CHALLENGE_COLUMNS} FROM challenges ORDER BY created_at ASC, id ASC`;
+  `SELECT ${CHALLENGE_COLUMNS} FROM challenges ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`;
 
 /**
- * The board's response read, whose only variable part is the number of bound placeholders for the ids
- * the board just returned.
- *
- * The placeholder count follows the number of rows read from the database and never anything a client
- * sent; every id is bound as a parameter, so no request value is ever concatenated into this statement.
- * The ids are the board's own, so the count is bounded by the board's size, and SQLite's parameter
- * limit is far above it.
+ * How many challenges the whole board holds, so a page can state the size of the collection it was taken
+ * from instead of leaving a reader to page through until a short page arrives. It counts `challenges`
+ * itself — the same table {@link SELECT_BOARD} reads — so `total` cannot describe a different
+ * collection than the page it arrives beside.
  */
-const SELECT_RESPONSES_FOR = `SELECT ${RESPONSE_COLUMNS} FROM challenge_responses WHERE challenge_id IN `;
+const SELECT_CHALLENGE_TOTAL = "SELECT COUNT(*) AS total FROM challenges";
+
+/**
+ * The page's responses, in insertion order: one statement whose scope is the page of the board the board
+ * read just answered, taken through a subquery over `challenges` rather than through a list of ids bound
+ * here.
+ *
+ * The subquery is the same window `SELECT_BOARD` reads, so the responses answered for are exactly those
+ * of the page's own challenges. Its variable part is two bound numbers — the fixed page size and the
+ * page's offset — so the statement's text and its parameter count are constant however large the board
+ * grows, and nothing a client sent reaches either. The list form this replaced carried one placeholder
+ * per challenge the board returned, which put SQLite's limit on bound variables in the way of a growing
+ * table: a statement of 32,767 placeholders is refused outright (`too many SQL variables`), and the
+ * refusal is a failed read rather than a shorter one.
+ */
+const SELECT_RESPONSES_FOR_PAGE = `
+SELECT ${RESPONSE_COLUMNS} FROM challenge_responses
+WHERE challenge_id IN (
+  SELECT id FROM challenges ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
+)
+ORDER BY rowid ASC`;
 
 /**
  * The listing read that decides whether a challenge may be created against a listing: its moderation
@@ -307,39 +359,40 @@ function toChallengeResponse(row: ChallengeResponseRow): ChallengeResponse {
 }
 
 /**
- * Every challenge on the board, in the total order {@link SELECT_BOARD} fixes.
+ * One page of the board: the challenges of the page whose zero-based offset is given, in the total order
+ * this file's header comment fixes.
+ *
+ * The window is read from the board's newest end, so the rows are reversed into the ascending order the
+ * read documents before they are mapped: `created_at ASC, id ASC` is the order a reader of the board
+ * sees, and a page answered in the window's own order would state the newest question first, which is
+ * the order that comment rejects. Reversing the page does not touch the order of the pages themselves.
  *
  * The statement is prepared per call, because a prepared statement belongs to the connection that made
  * it and this module owns no connection: the handle is the caller's, as ports and adapters require.
  * SQLite caches the compiled statement itself, so the per-call `prepare` allocates no plan of its own.
  */
-function listChallenges(database: Database): Challenge[] {
-  return database.prepare<[], ChallengeRow>(SELECT_BOARD).all().map(toChallenge);
+function listChallenges(database: Database, offset: number): Challenge[] {
+  const rows = database
+    .prepare<[number, number], ChallengeRow>(SELECT_BOARD)
+    .all(COLLECTION_PAGE_SIZE, offset);
+
+  return rows.reverse().map(toChallenge);
 }
 
 /**
- * The responses written on the given challenges, in insertion order, read in one statement.
+ * The responses written on the given page of the board, in insertion order, read in one statement.
  *
- * The ids are the board's own, in the board's order, and the result is grouped by the challenge each
- * row carries; a response can belong to no other challenge, because the column references `challenges`.
- * The order inside one challenge is the table's `rowid`, so the answers read as they were written, and
- * the pages that render them keep that order. An empty id list runs no statement at all, which is what
- * keeps an empty board from producing `IN ()`.
+ * The statement's scope is the page and not a list of ids: its subquery takes the same window the board
+ * read took, so the rows it answers for are the page's own challenges' and the result is grouped by the
+ * challenge each row carries. A response can belong to no other challenge, because the column references
+ * `challenges`. The order inside one challenge is the table's `rowid`, so the answers read as they were
+ * written, and the pages that render them keep that order.
  */
-function listResponsesFor(
-  database: Database,
-  challengeIds: readonly string[],
-): Map<string, ChallengeResponse[]> {
+function listResponsesFor(database: Database, offset: number): Map<string, ChallengeResponse[]> {
   const grouped = new Map<string, ChallengeResponse[]>();
-
-  if (challengeIds.length === 0) {
-    return grouped;
-  }
-
-  const placeholders = challengeIds.map(() => "?").join(", ");
-  const ids: string[] = [...challengeIds];
-  const sql = `${SELECT_RESPONSES_FOR}(${placeholders}) ORDER BY rowid ASC`;
-  const rows = database.prepare<string[], ChallengeResponseRow>(sql).all(...ids);
+  const rows = database
+    .prepare<[number, number], ChallengeResponseRow>(SELECT_RESPONSES_FOR_PAGE)
+    .all(COLLECTION_PAGE_SIZE, offset);
 
   for (const row of rows) {
     const response = toChallengeResponse(row);
@@ -356,21 +409,38 @@ function listResponsesFor(
 }
 
 /**
- * The board's `200` body: every challenge with its own responses, the challenges in the read's total
- * order and each challenge's responses in insertion order.
+ * The board's `200` body: one page of the board with each challenge's own responses, the number of
+ * challenges the whole board holds, and the page that was answered.
+ *
+ * The page's offset is the only arithmetic in this read and it is paging rather than a domain value: the
+ * fixed page size times the zero-based page number. The count is read from `challenges` itself, so
+ * `total` cannot disagree with the page about what the board holds, and it answers one row on every
+ * call — including the empty board, which holds `0` rather than nothing.
  */
-function readBoard(database: Database): ChallengeBoardResult {
-  const challenges = listChallenges(database);
-  const responses = listResponsesFor(
-    database,
-    challenges.map((challenge) => challenge.id),
-  );
+function readBoard(database: Database, page: number): ChallengeBoardResult {
+  const offset = COLLECTION_PAGE_SIZE * (page - 1);
+  const challenges = listChallenges(database, offset);
+
+  // A page with no rows holds no responses to read, so the statement is skipped rather than run over an
+  // empty scope: the shortcut is about the page being empty — an empty board, or a page past the last one
+  // — and not about the shape of a statement, because the response read composes no list of ids and an
+  // empty page's scope would simply answer no rows.
+  const responses =
+    challenges.length === 0
+      ? new Map<string, ChallengeResponse[]>()
+      : listResponsesFor(database, offset);
+
+  const totalRow = database.prepare<[], ChallengeTotalRow>(SELECT_CHALLENGE_TOTAL).get();
 
   return {
     items: challenges.map((challenge): ChallengeBoardItem => ({
       ...challenge,
       responses: responses.get(challenge.id) ?? [],
     })),
+    // `COUNT(*)` over no grouping always answers exactly one row, so a missing one would be the empty
+    // board rather than a failure; its size is stated as `0` in that case instead of left undefined.
+    total: totalRow === undefined ? 0 : totalRow.total,
+    page,
   };
 }
 
@@ -518,9 +588,15 @@ function writeResponse(
  * header fails at the edge and is answered `401` by the server's single error handler. Each write then
  * resolves the account the header names — `401` when it names no seeded account — checks the role its
  * row requires and answers `403` when the resolved account's role is not one the row accepts, and only
- * then touches the database. The read attaches no schema and resolves no identity: its row's role is
- * public, so it answers `200` alike for an absent header, an unknown one and one naming any role, and an
- * empty board is `200` with an empty collection rather than an error.
+ * then touches the database.
+ *
+ * The read attaches the shared page query schema beside nothing else and resolves no identity: its row's
+ * role is public, so it answers `200` alike for an absent header, an unknown one and one naming any
+ * role, and an empty board is `200` with an empty collection rather than an error. That schema declares
+ * one parameter, `page`, and no page-size input at all: `0`, `-1` and a non-number fail its constraint
+ * and are answered the contract's `400` by the same single error handler, while an unexpected key such
+ * as `?limit=100` is removed by Fastify's validator before this handler runs, so it neither widens this
+ * read's bound nor earns a refusal the contract row does not list.
  *
  * Both writes carry the write rate limit, taken from the resolved configuration rather than restated as
  * a number here, so the contract's `60` per minute and its window have one definition. No failure is
@@ -530,11 +606,15 @@ function writeResponse(
 export function registerChallengeRoutes(app: FastifyInstance, context: ChallengeRouteContext): void {
   const { max, timeWindow } = context.config.writeRateLimit;
 
-  app.get(CHALLENGES_PATH, (_request, reply) => {
-    const result: ChallengeBoardResult = readBoard(context.database);
+  app.get<{ readonly Querystring: CollectionPageQuery }>(
+    CHALLENGES_PATH,
+    { schema: collectionPageQuerySchema },
+    (request, reply) => {
+      const result: ChallengeBoardResult = readBoard(context.database, request.query.page);
 
-    return reply.code(200).send(result);
-  });
+      return reply.code(200).send(result);
+    },
+  );
 
   app.post<{ Body: ChallengeCreateBody }>(
     CHALLENGES_PATH,

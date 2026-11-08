@@ -96,7 +96,7 @@ const ROOT_TSCONFIG_PATH = join(REPOSITORY_ROOT, "tsconfig.json");
 /** The strict option set every workspace, and so every suite, inherits. */
 const BASE_TSCONFIG_PATH = join(REPOSITORY_ROOT, "tsconfig.base.json");
 
-/** The fixture package's manifest: the entry this folder's test-only `@adem/sgi-fixtures` import resolves to. */
+/** The fixture package's manifest: the package this folder's suites read the committed documents of. */
 const FIXTURES_MANIFEST_PATH = join(REPOSITORY_ROOT, "packages", "sgi-fixtures", "package.json");
 
 /* -------------------------------------------------------------------------------------------------
@@ -746,7 +746,7 @@ describe("repository conventions", () => {
    * workspace, so this is the only place in the repository where a TypeScript-level structural check
    * runs as part of `npm test`. Each one guards something the suites here silently rely on: being in
    * the program at all, the strict options they are compiled under, and the resolution path of the
-   * fixture package a sibling suite imports.
+   * fixture package a sibling suite reads its committed documents from.
    */
   describe("the compile contract this folder depends on", () => {
     it("keeps this folder inside the API workspace's TypeScript program", () => {
@@ -761,15 +761,15 @@ describe("repository conventions", () => {
       ).toEqual([]);
     });
 
-    it("resolves the fixture package this folder's suites import", () => {
+    it("keeps the fixture package this folder's suites read at a stable path in the solution build", () => {
       /*
-       * `api-contract.test.ts` imports `@adem/sgi-fixtures` although `apps/api/package.json`
-       * deliberately does not declare it: a route reaches a case set through `@adem/sgi-core` and
-       * never through the loader, and a suite is not a route. Two things make that test-only import
-       * resolve, and both are asserted here — the fixture package publishes a source entry, so the
-       * workspace link in the root `node_modules` resolves the specifier, and the solution file
-       * references both projects, so the whole-solution build compiles the fixture package's
-       * declarations that this folder's program consumes.
+       * The suites in this folder read the fixture pack's committed documents — `cases.json`,
+       * `expected-outcomes.json` and the three candidate recordings — from disk by path, because the
+       * API workspace may import `@adem/shared`, `@adem/sgi-core` and `@adem/commerce-sim` and no
+       * fixture package. Two things keep that pack a member of the tree rather than a directory a
+       * suite happens to reach, and both are asserted here: the fixture package publishes its own
+       * source entry, and the solution file references both projects, so the whole-solution build
+       * compiles the package whose documents this folder reads.
        *
        * The pair is asserted rather than a `references` entry of this workspace's own, because the
        * delivered workspace carries no such entry and needs none: the API project reaches the fixture
@@ -781,7 +781,7 @@ describe("repository conventions", () => {
       const failures: string[] = [];
       if (!fixturesManifest.includes('"./src/index.ts"')) {
         failures.push(
-          `${displayPath(FIXTURES_MANIFEST_PATH)}: its exports map publishes no "./src/index.ts" entry, which is the specifier this folder imports`,
+          `${displayPath(FIXTURES_MANIFEST_PATH)}: its exports map publishes no "./src/index.ts" entry, which is the package's own public entry`,
         );
       }
       for (const reference of ["./packages/sgi-fixtures", "./apps/api"]) {
@@ -791,9 +791,10 @@ describe("repository conventions", () => {
           );
         }
       }
-      expect(failures, "the fixture import these suites make must have a resolution path").toEqual(
-        [],
-      );
+      expect(
+        failures,
+        "the fixture package whose documents these suites read must stay a member of the solution build",
+      ).toEqual([]);
     });
 
     it("compiles under the strict options the base configuration sets", () => {

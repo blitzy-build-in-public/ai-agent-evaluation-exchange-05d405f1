@@ -26,8 +26,8 @@
  *
  * **A listing the operator can still read keeps its history.** A hidden listing leaves browse and
  * search while staying readable to the operator, so the status is stated above the title block, the
- * version history renders in full and the moderation panel is offered — never the absent state for
- * a listing the service returned. The same holds after an action: this page re-reads the listing it
+ * version history renders and the moderation panel is offered — never the absent state for a
+ * listing the service returned. The same holds after an action: this page re-reads the listing it
  * moderated, and a read that answers `404` for that listing retains what is on screen with the
  * status the action returned, because losing the history at the moment it is hidden would hide the
  * very record the operator is looking at.
@@ -83,7 +83,7 @@ import type {
   ListingStatus,
   ListingVersion,
   OfferModel,
-  PricingModel,
+  ReportOutcome,
 } from "@adem/shared";
 
 import { getListing, getSelectedDemoAccountId } from "../api-client";
@@ -95,6 +95,8 @@ import { InquiryForm } from "../components/inquiry-form";
 import { ModerationActions } from "../components/moderation-actions";
 import { SampleBadge } from "../components/sample-badge";
 import { findDemoAccount } from "../data/demo-accounts";
+import type { DemoAccount } from "../data/demo-accounts";
+import { describePricingModel } from "../labels";
 import { Timestamp, isRecord } from "../payload-reading";
 import { NotFound } from "./not-found";
 
@@ -124,10 +126,16 @@ const CLAIMS_AND_EVIDENCE_HEADING = "Claims versus measured evidence";
 /** The heading of the version history section. */
 const VERSION_HISTORY_HEADING = "Version history";
 
-/** What the version history section states about itself: it is what was published, never edited. */
+/**
+ * What the version history section states about itself: the versions the read carried, newest first,
+ * and the rule that makes a history rather than a document — it is what was published, never edited.
+ *
+ * It names the versions the page carries rather than the listing's versions at large, because the
+ * read answers one page of the history and the history's own size is stated beside it.
+ */
 const VERSION_HISTORY_INTRO =
-  "Every version this listing has published, newest first, as it was published. A version is never " +
-  "edited: a developer publishes a new one.";
+  "The versions this listing has published that this page carries, newest first, as they were " +
+  "published. A version is never edited: a developer publishes a new one.";
 
 /** The heading of the section listing what the listing does not claim and how it is offered. */
 const OFFERING_HEADING = "Limitations, license and pricing";
@@ -141,6 +149,9 @@ const OFFERING_FACTS_HEADING = "License, pricing model and offer models";
 /** The heading over the buyer's inquiry surface. */
 const INQUIRY_HEADING = "Inquire about this listing";
 
+/** The state the inquiry section shows in place of the form for an account that cannot inquire. */
+const INQUIRY_ROLE_HEADING = "Inquiring about a listing needs a buyer account";
+
 /** What the inquiry surface states about where an inquiry goes. */
 const INQUIRY_INTRO =
   "An inquiry is written to the developer who owns this listing. It is sent as the demo account " +
@@ -153,6 +164,9 @@ const INQUIRY_INTRO =
  */
 const CHECKOUT_HEADING = "Select an offer";
 
+/** The state the checkout section shows in place of the panel for an account that cannot buy. */
+const CHECKOUT_ROLE_HEADING = "Recording a simulated transaction needs a buyer account";
+
 /** The heading over the public challenge surface. */
 const CHALLENGE_HEADING = "Challenge these claims";
 
@@ -160,6 +174,9 @@ const CHALLENGE_HEADING = "Challenge these claims";
 const CHALLENGE_INTRO =
   "A challenge is a public question about this listing's claims, answered on the public " +
   "challenges board.";
+
+/** The state the challenge section shows in place of the form for an account that cannot challenge. */
+const CHALLENGE_ROLE_HEADING = "Challenging a listing's claims needs a buyer account";
 
 /** The heading over the operator's moderation panel. */
 const MODERATION_HEADING = "Operator moderation";
@@ -235,13 +252,27 @@ const NO_REPORT_EXPLANATION =
   "label or badge is recorded for it. A listing with no evaluation is an ordinary state of the " +
   "exchange, and it is not a pass.";
 
+/**
+ * The sentence that follows a listing that has published no version at all, where the sentence
+ * above would name a latest version the listing does not have.
+ */
+const NO_VERSION_EVIDENCE_EXPLANATION =
+  "This listing has published no version, so there is no version an evaluation could be run for " +
+  "yet. A version is published before anything can be measured against it, and a listing with no " +
+  "measurement is an ordinary state of the exchange and not a pass.";
+
 /** The sentence a failing report is accompanied by, so the absent badge is explained rather than odd. */
 const FAIL_EXPLANATION =
   "This report did not pass. A badge is issued on a pass alone, so none is shown; the per-case " +
   "evidence behind the outcome is in the report.";
 
-/** The note rendered in place of a limitations list when the listing's claims state none. */
-const NO_LIMITATIONS_NOTE = "No limitations are stated for this listing's claims.";
+/**
+ * The note rendered in place of a limitations list when the claims the page carries state none.
+ *
+ * It names the claims the page lists rather than the listing's claims at large: the limitations are
+ * collected from the version history this read answered, which is one page of the history.
+ */
+const NO_LIMITATIONS_NOTE = "No limitations are stated for the claims listed above.";
 
 /** The note rendered in place of a claims list when the listing states no claim. */
 const NO_CLAIMS_NOTE = "This listing states no claims yet.";
@@ -269,8 +300,15 @@ const NO_VERSIONS_EXPLANATION =
  */
 const PRICING_MODEL_NOTE = `The pricing model names the kind of offer this listing makes. No amount is stated here: an amount is recorded only by the simulated checkout, in minor units of the synthetic currency ${SYNTHETIC_CURRENCY_LABEL}, with the disclosure label the response carries.`;
 
-/** What the checkout surface states about itself, interpolating the one synthetic currency label. */
-const CHECKOUT_INTRO = `Choose one of the offer models this listing makes and record a simulated transaction against it. The transaction is nonfunctional: no money moves, and the amount it records is an integer count of minor units of the synthetic currency ${SYNTHETIC_CURRENCY_LABEL}.`;
+/**
+ * What the checkout surface states about itself, interpolating the one synthetic currency label.
+ *
+ * It states what the surface is rather than instructing the reader to use it, because the surface is
+ * withheld from an account whose role the service refuses: the sentence above the state that explains
+ * that must not tell the reader to choose an offer model there is no control for. The panel itself
+ * names the models and carries the action.
+ */
+const CHECKOUT_INTRO = `A simulated transaction is recorded against one of the offer models this listing makes. The transaction is nonfunctional: no money moves, and the amount it records is an integer count of minor units of the synthetic currency ${SYNTHETIC_CURRENCY_LABEL}.`;
 
 /** The heading of the state a listing with no published version renders in place of a checkout. */
 const NOTHING_TO_BUY_HEADING = "No version to buy";
@@ -279,6 +317,22 @@ const NOTHING_TO_BUY_HEADING = "No version to buy";
 const NOTHING_TO_BUY_EXPLANATION =
   "This listing has published no version yet, so there is nothing for a simulated transaction to " +
   "be recorded against. A developer publishes a version, and an evaluation measures it.";
+
+/**
+ * Why one of this page's buyer writes is not offered the selected account: which account is selected,
+ * which role the surface needs and where to choose one. `surface` names the surface as the sentence's
+ * subject — "An inquiry", "The simulated checkout", "A challenge" — so each state says exactly what is
+ * missing. The surface is withheld rather than offered and then refused, which is how `/developer`
+ * treats a half its account holds no role for. A visitor who has selected no account keeps every
+ * surface as it was: the write's own explanation answers for the absent account.
+ */
+function buyerRoleExplanation(account: DemoAccount, surface: string): string {
+  return (
+    `The selected demo account is ${account.display_label}, whose role is ${account.role}. ${surface} ` +
+    "is the buyer's write, so it is not shown for this account. Choose a buyer account in the " +
+    "demo-account switcher in the page header to use it."
+  );
+}
 
 /** The announced message the page shows while its one read is in flight. */
 const LOADING_MESSAGE =
@@ -331,17 +385,6 @@ const LISTING_STATUS_LABELS: Readonly<Record<ListingStatus, string>> = Object.fr
   active: "Active",
   flagged: "Flagged",
   hidden: "Hidden",
-});
-
-/**
- * The readable name of each pricing model, as a total record over the closed vocabulary for the
- * same reason: a fifth model must fail the build rather than render as an identifier.
- */
-const PRICING_MODEL_LABELS: Readonly<Record<PricingModel, string>> = Object.freeze({
-  rent: "Rent",
-  purchase: "Purchase",
-  license: "License",
-  subscription: "Subscription",
 });
 
 /** The readable name of each offer model a listing may make. */
@@ -417,11 +460,6 @@ function describeStatus(status: ListingStatus): string {
   return LISTING_STATUS_LABELS[status];
 }
 
-/** The readable name of one pricing model. */
-function describePricingModel(model: PricingModel): string {
-  return PRICING_MODEL_LABELS[model];
-}
-
 /** The readable name of one offer model. */
 function describeOfferModel(model: OfferModel): string {
   return OFFER_MODEL_LABELS[model];
@@ -495,6 +533,11 @@ function ListingStatusNotice(props: {
   return null;
 }
 
+/** The chip class for one report outcome, mirroring the mapping the report page uses. */
+function outcomeChipClass(outcome: ReportOutcome): string {
+  return outcome === "PASS" ? "chip chip--pass" : "chip chip--fail";
+}
+
 /**
  * What the standard measured against the listing's current version: the report's own provenance and
  * the badge that report may carry, or the plain statement that no report exists.
@@ -508,8 +551,17 @@ function ListingStatusNotice(props: {
  * The report identifier is rendered as text beside the link to the report page, so the identifier a
  * reader sees is the one the report's own record carries, and the link is a route of this
  * application: the API's own address for the resource is `../api-client`'s to speak.
+ *
+ * The version being measured is passed in rather than assumed, because the state with no report has
+ * two readings: a listing that has published no version can have no evaluation for one, and telling
+ * its reader that none "has been run" for a latest version would name a version that does not
+ * exist. The absence of a version is therefore explained as the absence of the thing that would be
+ * measured, while the sentence for a version that carries no report is kept exactly as it stands.
  */
-function MeasuredEvidence(props: { readonly listing: ListingDetail }): JSX.Element {
+function MeasuredEvidence(props: {
+  readonly listing: ListingDetail;
+  readonly currentVersion: ListingVersion | null;
+}): JSX.Element {
   const listing = props.listing;
   const reportId = listing.report_id;
   const outcome = listing.outcome;
@@ -520,7 +572,9 @@ function MeasuredEvidence(props: { readonly listing: ListingDetail }): JSX.Eleme
     return (
       <>
         <p>{NO_REPORT_LABEL}</p>
-        <p>{NO_REPORT_EXPLANATION}</p>
+        <p>
+          {props.currentVersion === null ? NO_VERSION_EVIDENCE_EXPLANATION : NO_REPORT_EXPLANATION}
+        </p>
       </>
     );
   }
@@ -534,9 +588,13 @@ function MeasuredEvidence(props: { readonly listing: ListingDetail }): JSX.Eleme
         reportId={reportId}
       />
       <ul className="item-list">
-        <Fact label={OUTCOME_ROW_LABEL}>{outcome}</Fact>
+        <Fact label={OUTCOME_ROW_LABEL}>
+          <span className={outcomeChipClass(outcome)}>{outcome}</span>
+        </Fact>
         <Fact label={STANDARD_VERSION_ROW_LABEL}>{standardVersionId}</Fact>
-        <Fact label={REPORT_LABEL_ROW_LABEL}>{label}</Fact>
+        <Fact label={REPORT_LABEL_ROW_LABEL}>
+          <span className="chip chip--label">{label}</span>
+        </Fact>
         <Fact label={SCOPE_ROW_LABEL}>{BADGE_SCOPE}</Fact>
         <Fact label={REPORT_ROW_LABEL}>{reportId}</Fact>
       </ul>
@@ -653,14 +711,30 @@ function ClaimsAndEvidenceSection(props: {
       )}
 
       <h3>{MEASURED_HEADING}</h3>
-      <MeasuredEvidence listing={props.listing} />
+      <MeasuredEvidence listing={props.listing} currentVersion={currentVersion} />
     </section>
   );
 }
 
 /**
- * The listing's version history as published: every version, newest first, with the claims that
- * version makes and the report link that version carries.
+ * How many versions the listing has published, said beside the page of them the read carried.
+ *
+ * The count comes from the payload's own `version_total` rather than from the page, which answers
+ * one page of the history rather than the history itself: a page shorter than the history is the
+ * newest page of a longer one, and a page that holds every version is the history. Neither is
+ * inferred here from the size of the list.
+ */
+function describeVersionTotal(versionTotal: number, listed: number): string {
+  const published = `This listing has published ${versionTotal} ${versionTotal === 1 ? "version" : "versions"}`;
+  return listed < versionTotal
+    ? `${published}; its ${listed} most recent ${listed === 1 ? "is" : "are"} listed here.`
+    : `${published}.`;
+}
+
+/**
+ * The listing's version history as published: the page of versions the read carried, newest first,
+ * with the claims each version makes and the report link a version carries, and the size of the
+ * whole history stated above them.
  *
  * The current version is marked in words rather than by position or weight, because "the newest
  * one" is a fact a reader should be able to read. The link to a report is rendered only for the
@@ -680,6 +754,14 @@ function VersionHistorySection(props: {
     <section aria-labelledby={headingId}>
       <h2 id={headingId}>{VERSION_HISTORY_HEADING}</h2>
       <p>{VERSION_HISTORY_INTRO}</p>
+
+      {/* The size of the history, from the payload's own total: the read above answers one page of
+          it, so the section states what the listing has published in all beside the page it carries.
+          A listing that has published no version is stated by the empty state's own explanation
+          rather than twice. */}
+      {listing.versions.length === 0 ? null : (
+        <p>{describeVersionTotal(listing.version_total, listing.versions.length)}</p>
+      )}
 
       {listing.versions.length === 0 ? (
         <EmptyState
@@ -730,8 +812,8 @@ function VersionHistorySection(props: {
 }
 
 /**
- * What the listing does not claim, and how it is offered: every limitation its claims state, its
- * license, its pricing model and the offer models it makes.
+ * What the listing does not claim, and how it is offered: every limitation the claims the page
+ * carries state, its license, its pricing model and the offer models it makes.
  *
  * The limitations are collected from the claims rather than typed anywhere, and the repeats are
  * dropped, so a listing whose two versions state the same caveat states it once here. The pricing
@@ -804,6 +886,15 @@ function CheckoutSection(props: {
   const versionHintId = `${idPrefix}-version-hint`;
   const [chosenVersionId, setChosenVersionId] = useState<string | null>(null);
 
+  // The selected demo account, resolved on every render: the shell re-renders this route when the
+  // switcher's selection changes, so a render-time read follows it. The version selector and the panel
+  // below exist only to record a simulated transaction, and that write is the buyer's, so both are
+  // withheld from an account the service would refuse with `403` — the selector alone would offer a
+  // choice with nothing to record it. No account selected keeps the section exactly as it was: the
+  // panel's own explanation answers for the missing account.
+  const selectedAccount = findDemoAccount(getSelectedDemoAccountId());
+  const canWriteAsBuyer = selectedAccount === null || selectedAccount.role === "buyer";
+
   const versions = props.listing.versions;
   const chosenVersion =
     versions.find(
@@ -819,7 +910,13 @@ function CheckoutSection(props: {
       <h2 id={headingId}>{CHECKOUT_HEADING}</h2>
       <p>{CHECKOUT_INTRO}</p>
 
-      {chosenVersion === null ? (
+      {selectedAccount !== null && !canWriteAsBuyer ? (
+        <EmptyState
+          heading={CHECKOUT_ROLE_HEADING}
+          headingLevel={3}
+          explanation={buyerRoleExplanation(selectedAccount, "The simulated checkout")}
+        />
+      ) : chosenVersion === null ? (
         <EmptyState
           heading={NOTHING_TO_BUY_HEADING}
           explanation={NOTHING_TO_BUY_EXPLANATION}
@@ -887,6 +984,16 @@ function ListingContent(props: {
   const moderationHeadingId = `${idPrefix}-moderation-heading`;
   const currentVersion = props.listing.versions[0] ?? null;
 
+  // The selected demo account, resolved on every render: the shell re-renders this route when the
+  // switcher's selection changes, so a render-time read follows it. The inquiry and the challenge
+  // below are both the buyer's writes, and the service refuses every other role with `403`, so a
+  // surface an account cannot use is not offered it — the rule `/developer` already follows for a
+  // half its account holds no role for. No read here is gated: reading a listing is public, and the
+  // panel below is gated on the role already resolved by the page. A visitor who has selected no
+  // account keeps every surface as it was, and each write's own explanation answers for the account.
+  const selectedAccount = findDemoAccount(getSelectedDemoAccountId());
+  const canWriteAsBuyer = selectedAccount === null || selectedAccount.role === "buyer";
+
   return (
     <>
       {/* The status notice comes before the title block, so a reader opening this address from a
@@ -915,7 +1022,15 @@ function ListingContent(props: {
       <section aria-labelledby={inquiryHeadingId}>
         <h2 id={inquiryHeadingId}>{INQUIRY_HEADING}</h2>
         <p>{INQUIRY_INTRO}</p>
-        <InquiryForm listingId={props.listing.id} />
+        {selectedAccount !== null && !canWriteAsBuyer ? (
+          <EmptyState
+            heading={INQUIRY_ROLE_HEADING}
+            headingLevel={3}
+            explanation={buyerRoleExplanation(selectedAccount, "An inquiry")}
+          />
+        ) : (
+          <InquiryForm listingId={props.listing.id} />
+        )}
       </section>
 
       <CheckoutSection listing={props.listing} currentVersion={currentVersion} />
@@ -923,7 +1038,15 @@ function ListingContent(props: {
       <section aria-labelledby={challengeHeadingId}>
         <h2 id={challengeHeadingId}>{CHALLENGE_HEADING}</h2>
         <p>{CHALLENGE_INTRO}</p>
-        <ChallengeForm listingId={props.listing.id} />
+        {selectedAccount !== null && !canWriteAsBuyer ? (
+          <EmptyState
+            heading={CHALLENGE_ROLE_HEADING}
+            headingLevel={3}
+            explanation={buyerRoleExplanation(selectedAccount, "A challenge")}
+          />
+        ) : (
+          <ChallengeForm listingId={props.listing.id} />
+        )}
       </section>
 
       {/* The operator's panel is rendered for the operator role alone. Every other role sees no

@@ -32,6 +32,8 @@ import {
 } from "@adem/shared";
 import type { ListingSummary, ReportLabel, ReportOutcome } from "@adem/shared";
 
+import { describePricingModel } from "../labels";
+
 /**
  * Props for {@link ListingCard}. One card is one search result, so the component takes the
  * summary and nothing else: the page owns the list, the ordering and the paging.
@@ -49,22 +51,44 @@ export interface ListingCardProps {
  */
 const COMPARE_IDS_PARAMETER = "ids";
 
-/** The outcome and the provenance of the latest report, as text in one row. */
+/**
+ * The value the version row carries when the listing has published no version, in the compact form
+ * this card's meta list uses.
+ *
+ * The API states `version_string: ""` for that state — `toListingSummary` in the listings route
+ * returns an empty string where the row holds SQL `NULL` — so rendering the value as received would
+ * leave the row's own label sitting over nothing. The row is kept and its value stated in words,
+ * which is the treatment `../pages/developer` gives the same value in its summary row; only the
+ * spelling differs, because this row is one item of a compact list rather than a sentence of its
+ * own.
+ */
+const NO_VERSION_NOTE = "none published yet";
+
+/** Whether a published value carries text, so a whitespace-only one counts as absent too. */
+function hasText(value: string): boolean {
+  return value.trim().length > 0;
+}
+
+/**
+ * The outcome and the provenance of the latest report, as text in one row. Both values of the one
+ * report render in the same chip — its outcome in the tint of the direction it recorded, its label
+ * in the neutral tint a disclosure uses — so the two are read as values of one kind and the label
+ * never reads as an outcome.
+ */
 function renderReportEvidence(
   outcome: ReportOutcome,
   standardVersionId: string,
   label: ReportLabel,
 ): JSX.Element {
-  const outcomeModifier =
-    outcome === "PASS" ? "listing-card__outcome--pass" : "listing-card__outcome--fail";
+  const outcomeModifier = outcome === "PASS" ? "chip--pass" : "chip--fail";
 
   return (
     <p className="listing-card__meta">
-      <span className={`listing-card__outcome ${outcomeModifier}`}>{`Outcome: ${outcome}`}</span>
+      <span className={`chip ${outcomeModifier}`}>{`Outcome: ${outcome}`}</span>
       <span>
         Standard version: <span className="listing-card__standard">{standardVersionId}</span>
       </span>
-      <span>{`Label: ${label}`}</span>
+      <span className="chip chip--label">{`Label: ${label}`}</span>
     </p>
   );
 }
@@ -129,10 +153,13 @@ export function ListingCard(props: ListingCardProps): JSX.Element {
       <p className="listing-card__meta">
         <span>{`Category: ${listing.category.name}`}</span>
         <span>{`Developer: ${listing.developer_handle}`}</span>
-        <span>{`Pricing model: ${listing.pricing_model}`}</span>
+        <span>{`Pricing model: ${describePricingModel(listing.pricing_model)}`}</span>
         <span>{`License: ${listing.license_code}`}</span>
         <span>
-          Version: <span className="listing-card__version">{listing.version_string}</span>
+          Version:{" "}
+          <span className="listing-card__version">
+            {hasText(listing.version_string) ? listing.version_string : NO_VERSION_NOTE}
+          </span>
         </span>
       </p>
       {outcome === null || standardVersionId === null || reportLabel === null

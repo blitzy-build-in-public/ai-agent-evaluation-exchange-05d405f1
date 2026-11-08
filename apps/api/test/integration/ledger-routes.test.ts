@@ -66,7 +66,7 @@ import type {
   Refund,
   Transaction,
 } from "@adem/shared";
-import { SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
+import { COLLECTION_PAGE_SIZE, PAGE_NUMBER_MAX, SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
 
 import {
   DEFAULT_FOUNDER_ALLOCATION_RATE_BASIS_POINTS,
@@ -163,6 +163,21 @@ const LEDGER_ENTRY_SNAPSHOT_SQL = "SELECT * FROM ledger_entries ORDER BY rowid A
  */
 const STORED_LEDGER_ORDER_SQL =
   "SELECT id FROM ledger_entries WHERE ledger = ? ORDER BY created_at ASC, rowid ASC";
+
+/**
+ * The newest page of one ledger, taken the way the read takes it: the same filter, windowed over the
+ * largest `rowid` values — which is the append-only table's own insertion order, newest first — and
+ * then ordered by that same counter, so the rows arrive in the insertion order the read documents
+ * within the page.
+ *
+ * It is a second statement rather than a slice of {@link STORED_LEDGER_ORDER_SQL} because the two
+ * assert different things: one is the ledger's own sequence, the other is the window this read
+ * answers with, and a read that returned the wrong window would otherwise agree with a slice of the
+ * same rows it was supposed to be compared against.
+ */
+const NEWEST_LEDGER_PAGE_SQL = `SELECT id FROM (
+  SELECT id, rowid AS position FROM ledger_entries WHERE ledger = ? ORDER BY rowid DESC LIMIT ?
+) ORDER BY position ASC`;
 
 /** How many rows one ledger holds, read as a delta around a write. */
 const COUNT_BY_LEDGER_SQL = "SELECT COUNT(*) AS total FROM ledger_entries WHERE ledger = ?";
@@ -492,7 +507,7 @@ describe("the operator ledger reads and the simulated commerce arithmetic", () =
   });
 
   describe("the three operator reads", () => {
-    it("answers each ledger in insertion order", async () => {
+    it("answers the newest page of each ledger, in insertion order, with the ledger's own count", async () => {
       const operator = server.accountForRole("operator");
 
       for (const { path, ledger } of LEDGER_READS) {
@@ -503,11 +518,24 @@ describe("the operator ledger reads and the simulated commerce arithmetic", () =
         const body = response.json<LedgerReadResult>();
         expect(body.ledger).toBe(ledger);
 
-        // Insertion order, which `created_at` alone cannot state: the domain's read orders these rows
-        // by the table's own rowid, so the answer must equal the same rows ordered by the instant with
-        // that counter as the tie-break. Comparing the two identifier sequences is what makes the
-        // claim checkable rather than merely plausible.
-        const stored = server.query<{ readonly id: string }>(STORED_LEDGER_ORDER_SQL, ledger);
+        // The read is bounded: one page of the fixed page size, page 1 when the request states no page,
+        // and the number of entries the whole ledger holds stated beside it — which is what tells a
+        // reader looking at a page of at most twenty whether it is seeing the ledger or a part of it.
+        expect(body.page).toBe(1);
+        expect(body.entries.length).toBeLessThanOrEqual(COLLECTION_PAGE_SIZE);
+        expect(body.total).toBe(ledgerEntryCount(server, ledger));
+
+        // Page 1 is the most recent page of the ledger, and the page's own rows are in insertion order,
+        // which `created_at` alone cannot state: the read windows the ledger over the largest `rowid`
+        // values and then orders the page by that same counter. Comparing the two identifier sequences
+        // makes both claims checkable rather than merely plausible; a ledger holding no row yet — the
+        // marketplace ledger until the first checkout below — compares two empty sequences, which is the
+        // state an unused ledger answers with rather than an error.
+        const stored = server.query<{ readonly id: string }>(
+          NEWEST_LEDGER_PAGE_SQL,
+          ledger,
+          COLLECTION_PAGE_SIZE,
+        );
         expect(body.entries.map((entry) => entry.id)).toStrictEqual(stored.map((row) => row.id));
 
         for (const [index, entry] of body.entries.entries()) {
@@ -518,6 +546,86 @@ describe("the operator ledger reads and the simulated commerce arithmetic", () =
             expect(previous.created_at <= entry.created_at).toBe(true);
           }
         }
+      }
+    });
+
+    it("answers the page before the first one for ?page=2, with the same total and the ledger's own rows", async () => {
+      const operator = server.accountForRole("operator");
+
+      for (const { path, ledger } of LEDGER_READS) {
+        const first = await server.get(path, { account: operator, query: { page: 1 } });
+        const second = await server.get(path, { account: operator, query: { page: 2 } });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+
+        const firstPage = first.json<LedgerReadResult>();
+        const secondPage = second.json<LedgerReadResult>();
+
+        // Both pages describe the same ledger: only the page number moves, and `total` — the ledger's own
+        // row count, read here from the table rather than from either response — is the same on both.
+        expect(secondPage.total).toBe(firstPage.total);
+        expect(secondPage.total).toBe(ledgerEntryCount(server, ledger));
+        expect(secondPage.page).toBe(2);
+
+        // The second page holds the rows immediately before the first page's, in insertion order. A
+        // ledger holding no more than one page answers the empty list with the same total, which is an
+        // ordinary answer to an ordinary request rather than an error or a `404`; the pages never
+        // overlap, so the two together are the newest two pages and never the same rows twice.
+        const stored = server
+          .query<{ readonly id: string }>(STORED_LEDGER_ORDER_SQL, ledger)
+          .map((row) => row.id);
+        const rowsBeforeTheFirstPage = stored.slice(
+          Math.max(0, stored.length - 2 * COLLECTION_PAGE_SIZE),
+          Math.max(0, stored.length - COLLECTION_PAGE_SIZE),
+        );
+
+        expect(secondPage.entries.map((entry) => entry.id)).toStrictEqual(rowsBeforeTheFirstPage);
+
+        for (const entry of secondPage.entries) {
+          expectLedgerEntryShape(entry, ledger);
+        }
+      }
+    });
+
+    it("refuses a page above the bound and answers the largest page it admits, on each ledger", async () => {
+      const operator = server.accountForRole("operator");
+
+      // The first page above the bound, then the two the finder reported as `500 internal_error` before
+      // the bound existed: `2^53 + 1`, the first whole number whose offset the paging arithmetic rounds,
+      // and a page beyond every range that arithmetic can state. Each is a value the schema refuses now,
+      // so each is the row's own `400` in the one envelope rather than a server fault raised from the
+      // window the route would otherwise have handed the domain read.
+      const refusedPages: readonly string[] = [
+        String(PAGE_NUMBER_MAX + 1),
+        "9007199254740993",
+        "999999999999999999999",
+      ];
+
+      for (const { path, ledger } of LEDGER_READS) {
+        for (const page of refusedPages) {
+          expectFailure(
+            await server.get(path, { account: operator, query: { page } }),
+            400,
+            "validation_error",
+          );
+        }
+
+        const atBound = await server.get(path, {
+          account: operator,
+          query: { page: PAGE_NUMBER_MAX },
+        });
+
+        expect(atBound.status).toBe(200);
+
+        const body = atBound.json<LedgerReadResult>();
+
+        // The page starts past every row the ledger holds, so it is the empty page the read documents —
+        // an ordinary answer to an ordinary request, never a refusal — while `total` still states the
+        // whole ledger's size, read here from the table rather than from the response.
+        expect(body.page).toBe(PAGE_NUMBER_MAX);
+        expect(body.entries).toStrictEqual([]);
+        expect(body.total).toBe(ledgerEntryCount(server, ledger));
       }
     });
 
@@ -544,10 +652,19 @@ describe("the operator ledger reads and the simulated commerce arithmetic", () =
 
       const body = response.json<FounderAllocationLedgerReadResult>();
 
-      // The read's own members and nothing beside them: no beneficiary, no entitlement, no account, no
-      // total. The founder-allocation contract structure is provisional — the UI and the docs label it
-      // "to be determined" — and this payload is where that shows as an absence.
-      expect(Object.keys(body).sort()).toStrictEqual(["entries", "ledger", "rate_basis_points"]);
+      // The read's own members and nothing beside them: the entries of the page it answered, the page
+      // number, the number of entries the whole ledger holds and the rate — and no beneficiary, no
+      // entitlement and no account. The page and the count are what a bounded read states about its
+      // ledger; the founder-allocation contract structure is provisional — the UI and the docs label it
+      // "to be determined" — and this payload is where that shows as an absence, because no member names
+      // a person or an entitlement and no column of the table could hold one.
+      expect(Object.keys(body).sort()).toStrictEqual([
+        "entries",
+        "ledger",
+        "page",
+        "rate_basis_points",
+        "total",
+      ]);
       expect(body.ledger).toBe("founder_allocation");
 
       // The rate is the one the stored rows state, and a ledger holding no entry states the product's

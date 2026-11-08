@@ -31,14 +31,22 @@
  * `created_at` from `new Date().toISOString()`, never from SQLite's `CURRENT_TIMESTAMP`, whose
  * `YYYY-MM-DD HH:MM:SS` form the contract does not accept. Every value is bound as a parameter.
  *
- * **The board read is deterministic.** Threads are ordered by `created_at` with `id` as the
- * tiebreak and a thread's posts by `created_at` with the implicit `rowid` as the tiebreak, so two
- * calls answer byte-identical bodies including item order, and no clock, locale or collation can
- * reorder the board. A thread's posts travel with the thread: the contract names no per-thread
- * read, and the threads page renders a thread's replies from this one response.
+ * **The board read is bounded, and deterministic within the page.** It answers one page of
+ * `COLLECTION_PAGE_SIZE` threads — page 1 is the newest page of the board, `?page=2` the page before
+ * it — ordered by `created_at` with `id` as the tiebreak, and each page's own threads carry their
+ * replies ordered by `created_at` with the implicit `rowid` as the tiebreak, so two calls answer
+ * byte-identical bodies including item order, and no clock, locale or collation can reorder the
+ * board. The page's rows are read from the newest end and reversed, which is what makes one page
+ * read oldest first rather than upside down. The payload therefore no longer grows with the number
+ * of threads on the board or with the reply volume written across it: it carries the page's threads
+ * and the replies belonging to them. A thread's replies still travel with the thread — the contract
+ * names no per-thread read, and the threads page renders a thread's replies from this one response —
+ * so the one collection the response still follows in size is a single thread's own reply list,
+ * which is that thread's own content rather than a slice of the board.
  *
- * **An empty board is an answer, not an error.** `200` with an empty collection, never a `404`, so
- * a fresh database reads as "no discussion has started yet" — which is the state
+ * **An empty page is an answer, not an error.** `200` with an empty collection, never a `404`, so a
+ * fresh database reads as "no discussion has started yet" and a page past the board's last reads as
+ * the board's own total with nothing on it — which is the state
  * `apps/web/src/pages/threads.tsx` renders with the action that leaves it.
  *
  * **Nothing is delegated and nothing is computed.** `apps/api` owns the `threads` and `thread_posts`
@@ -55,9 +63,17 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 
-import type { Thread, ThreadCreateBody, ThreadPost, ThreadPostBody } from "@adem/shared";
+import type {
+  CollectionPageQuery,
+  Thread,
+  ThreadCreateBody,
+  ThreadPost,
+  ThreadPostBody,
+} from "@adem/shared";
 import {
+  COLLECTION_PAGE_SIZE,
   DEMO_ACCOUNT_HEADER,
+  collectionPageQuerySchema,
   demoAccountHeaderSchema,
   threadCreateBodySchema,
   threadIdParamsSchema,
@@ -103,11 +119,24 @@ interface BoardThreadRow {
 }
 
 /**
+ * The one column the board read's count answers: how many threads the whole board holds, whatever
+ * page of it is being read.
+ *
+ * It is the declared result of the prepared statement, which is what removes the need for a cast
+ * when the count is read — the same reason {@link BoardThreadRow} is declared.
+ */
+interface BoardThreadTotalRow {
+  readonly total: number;
+}
+
+/**
  * One stored row of `thread_posts`, in the shape that migration declares it: the five columns, in
  * its order.
  *
- * `thread_id` is selected although the board read groups by it after the query rather than filtering
- * on it: the column is what the grouping reads, so leaving it out would force a per-thread query.
+ * `thread_id` is selected because the grouping reads it after the query: the statement is already
+ * narrowed to the page's own threads, and this is the column that says which of them each reply
+ * belongs to, so without it the rows could not be placed at all. Reading the replies per thread
+ * instead is what the single statement exists to avoid.
  */
 interface ThreadPostRow {
   readonly id: string;
@@ -142,14 +171,22 @@ interface ThreadBoardItem extends Thread {
 }
 
 /**
- * The body of the board read's `200`: the threads under `items`, the key this API's collection reads
- * use and the one `listThreads` in `apps/web/src/api-client.ts` reads first.
+ * The body of the board read's `200`: one page of the board under `items`, with the page it answered
+ * and the number of threads the whole board holds.
  *
- * The body carries that one key and nothing else: the contract fixes no total, no page and no cursor
- * for this row, and the board is not paginated.
+ * `items` is the key this API's collection reads use and the one `listThreads` in
+ * `apps/web/src/api-client.ts` reads first. The page is bounded at `COLLECTION_PAGE_SIZE` threads —
+ * page 1 carrying the newest page of the board — so the payload grows neither with the number of
+ * threads the board holds nor with the replies written across it; each item still carries its own
+ * replies, because the contract names no per-thread read. `total` counts the whole board rather than
+ * the page, so a client can tell the page it holds from the board it came from, and `page` echoes
+ * the resolved query parameter: a page past the last answers `items: []` beside the board's own
+ * `total`, which is an ordinary answer rather than a refusal.
  */
 interface ThreadBoardResult {
   readonly items: ThreadBoardItem[];
+  readonly total: number;
+  readonly page: number;
 }
 
 /**
@@ -166,32 +203,51 @@ const SELECTED_THREAD_COLUMNS = "id, title, author_account_id, created_at";
 const SELECTED_POST_COLUMNS = "id, thread_id, author_account_id, body, created_at";
 
 /**
- * The board's threads, in the one total order the read promises: `created_at ASC` with `id ASC` as
- * the tiebreak.
+ * One page of the board's threads, read from the newest end: `created_at DESC` with `id DESC` as the
+ * tiebreak, `LIMIT ? OFFSET ?`.
+ *
+ * The window is taken over the newest end because page 1 has to be the most recent page of the board,
+ * and the caller reverses the page's rows so that the page itself reads in the one total order the
+ * read promises: `created_at ASC` with `id ASC`.
  *
  * The tiebreak is not decoration. The writer stamps `new Date().toISOString()`, whose millisecond
  * resolution two threads started in one request's worth of work can share, and without a second key
  * SQLite would be free to return such rows in either order — making two calls differ and the read's
  * own claim false. `id` is the primary key, so the order is total and locale-independent (the
  * default `BINARY` collation compares these strings by code point).
+ *
+ * Both numbers are bound: the fixed page size and the requested page's offset. The statement text is
+ * therefore the same for every page and carries no placeholder count that grows with the board.
  */
-const SELECT_BOARD = `SELECT ${SELECTED_THREAD_COLUMNS} FROM threads ORDER BY created_at ASC, id ASC`;
+const SELECT_BOARD = `SELECT ${SELECTED_THREAD_COLUMNS} FROM threads ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`;
 
 /**
- * Every reply on the board, in insertion order, in the single query the read makes for posts.
+ * How many threads the whole board holds, in the one count the read states as `total`.
+ *
+ * It is a count over `threads` alone and answers exactly one row, so it costs one statement per read
+ * whatever page is asked for. It is what lets a client tell the page it holds from the board it came
+ * from, which is the reason the response carries a `total` at all.
+ */
+const SELECT_BOARD_TOTAL = "SELECT COUNT(*) AS total FROM threads";
+
+/**
+ * The replies belonging to the page's own threads, in insertion order, in the single query the read
+ * makes for posts.
  *
  * One query rather than one per thread: better-sqlite3 is synchronous and runs on the calling
- * thread, so a loop of queries would hold the process for as many round trips as the board has
+ * thread, so a loop of queries would hold the process for as many round trips as the page has
  * threads. The `rowid` tiebreak keeps two posts written in the same millisecond in the order they
  * were written — the ordinary case in a synchronous single-writer process — which is what makes two
  * calls answer byte-identical bodies.
  *
- * No filter narrows this statement, deliberately. The board read carries no paging and no filter of
- * its own, so it returns every thread and the payload carries every thread's posts: the reply rows
- * read here are exactly the rows the response serves. A `thread_id IN (...)` filter would add a bind
- * count that grows with the board and buys nothing, since nothing read is discarded.
+ * The filter is the same window {@link SELECT_BOARD} reads, spelled as a subquery over `threads`
+ * rather than as a `thread_id IN (...)` list composed in the handler: the statement carries exactly
+ * two bound numbers and no placeholder that grows with the board, and the rows it reads are exactly
+ * the rows the response serves — the replies of the page's own threads, and no other thread's. A
+ * thread on the page that nobody has answered contributes no row here, which the caller renders as
+ * the empty list.
  */
-const SELECT_ALL_POSTS = `SELECT ${SELECTED_POST_COLUMNS} FROM thread_posts ORDER BY created_at ASC, rowid ASC`;
+const SELECT_ALL_POSTS = `SELECT ${SELECTED_POST_COLUMNS} FROM thread_posts WHERE thread_id IN (SELECT id FROM threads ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?) ORDER BY created_at ASC, rowid ASC`;
 
 /**
  * Whether the thread a reply names exists. The lookup is exact equality on the primary key and reads
@@ -269,28 +325,59 @@ function groupPostsByThread(rows: readonly ThreadPostRow[]): Map<string, ThreadP
 }
 
 /**
- * Reads the whole board: every thread in the order {@link SELECT_BOARD} fixes, each carrying its
- * replies in the order {@link SELECT_ALL_POSTS} fixes.
+ * Reads one page of the board: the page's threads in the order {@link SELECT_BOARD} fixes, each
+ * carrying its replies in the order {@link SELECT_ALL_POSTS} fixes, beside the count
+ * {@link SELECT_BOARD_TOTAL} states.
  *
- * An empty board short-circuits before the post query, so a database with no thread reads exactly one
- * table and the answer is `[]` — an ordinary result rather than a refusal, which is what makes the
- * contract row's empty state a `200`.
+ * The offset is the fixed page size times the zero-based page number, and it is the only arithmetic
+ * in this file: it is paging rather than a domain value, and no amount, outcome or label is computed
+ * here. The window is read newest first, because that is what makes `LIMIT` take the newest page, and
+ * the page's rows are reversed in memory so the page itself reads oldest first — the order the board
+ * documents and the order the payload carries.
  *
- * Nothing is written, counted or amended here: the two statements are reads, and a read of either
- * table changes no row and appends no audit event.
+ * An empty page short-circuits before the post query, and that branch still saves a statement: the
+ * count and the page read answer `items: []` with the requested page and the board's own total, and
+ * the reply table is never read. It is also what makes an empty answer an ordinary result rather than
+ * a refusal — neither a board with no thread at all nor a page past its last throws — which is what
+ * the contract row's `200` empty state requires.
+ *
+ * Nothing is written or amended here: all three statements are reads, and a read of either table
+ * changes no row and appends no audit event. The `total` is a count read from `threads`, never a
+ * stored balance that a write maintains.
+ *
+ * @param database The caller's database handle.
+ * @param page The requested page, 1-based, already resolved from the query schema's default.
+ * @returns The page's threads with their replies, and the page and total the response states.
  */
-function listBoard(database: Database): ThreadBoardItem[] {
-  const threads = database.prepare<[], BoardThreadRow>(SELECT_BOARD).all();
+function listBoard(database: Database, page: number): ThreadBoardResult {
+  const totalRow = database.prepare<[], BoardThreadTotalRow>(SELECT_BOARD_TOTAL).get();
+  const total = totalRow === undefined ? 0 : totalRow.total;
+
+  const offset = COLLECTION_PAGE_SIZE * (page - 1);
+
+  const rows = database
+    .prepare<[number, number], BoardThreadRow>(SELECT_BOARD)
+    .all(COLLECTION_PAGE_SIZE, offset);
+
+  // Read newest first and reversed here: `LIMIT` has to take the newest page, and the page it takes
+  // has to read in the board's documented order rather than upside down.
+  const threads = rows.reverse();
 
   if (threads.length === 0) {
-    return [];
+    return { items: [], total, page };
   }
 
-  const postsByThread = groupPostsByThread(database.prepare<[], ThreadPostRow>(SELECT_ALL_POSTS).all());
-
-  return threads.map((row: BoardThreadRow): ThreadBoardItem =>
-    toBoardThread(row, postsByThread.get(row.id) ?? []),
+  const postsByThread = groupPostsByThread(
+    database.prepare<[number, number], ThreadPostRow>(SELECT_ALL_POSTS).all(COLLECTION_PAGE_SIZE, offset),
   );
+
+  return {
+    items: threads.map((row: BoardThreadRow): ThreadBoardItem =>
+      toBoardThread(row, postsByThread.get(row.id) ?? []),
+    ),
+    total,
+    page,
+  };
 }
 
 /**
@@ -397,26 +484,29 @@ function insertPost(
  * Registers this group's three routes — `GET /threads`, `POST /threads` and
  * `POST /threads/{id}/posts` — on the instance it is handed, in the contract table's order.
  *
- * The three paths are prefix-relative: the versioned prefix — `API_PREFIX`, from
- * `apps/api/src/server.ts` — is applied exactly once, by `./register-routes`, which calls this
- * function with its encapsulated scope. That literal appears nowhere in this file and must not: a
- * group that spelled it would be the second place the prefix is decided.
+ * The three paths are prefix-relative: the versioned prefix — `API_PREFIX`, declared once in the
+ * sibling `./register-routes` — is applied exactly once, by `./register-routes`, which calls this
+ * function with its encapsulated scope. That literal appears nowhere in this file and must not: a group
+ * that spelled it would be the second place the prefix is decided.
  *
  * **No `403` is reachable from here.** Both writes resolve the demo account and stop there — the
  * workspace's role check is neither called nor imported — because this row accepts any account that
  * resolves, whatever its role. The refusals this file can produce are therefore `401 unauthorized`
  * (the header schema at the edge, and `resolveDemoAccount` for a header that names no seeded
- * account), `400 validation_error` (the two body schemas and the parameter schema at the edge) and
- * `404 not_found` (the reply write, when the thread its path names does not exist). Tightening the
- * two writes into a role check would answer `403` where the contract answers `201`.
+ * account), `400 validation_error` (the two body schemas, the parameter schema and the board's query
+ * schema, all at the edge) and `404 not_found` (the reply write, when the thread its path names does
+ * not exist). Tightening the two writes into a role check would answer `403` where the contract
+ * answers `201`.
  *
- * The board read carries no route options at all: the row takes no parameter and has no error case to
- * validate, reads are unlimited (the 60-per-minute limit is on writes), and a public read that can
- * fail its documented contract would be the defect. Both writes carry the same two options — the
- * header and shape schema, and the resolved rate limit — read from `ApiConfig.writeRateLimit`, so the
- * contract's bound is written once for the whole workspace. Neither handler catches anything: the
- * server's single error handler owns `{ error: { code, message } }`, so no handler-local error body
- * exists to disagree with it.
+ * The board read carries the query schema and no identity: the page is the only thing that read takes
+ * from the request, and the schema is what bounds it, so `?page=0`, `?page=-1` and `?page=abc` are a
+ * `400 validation_error` at the edge rather than an unvalidated number reaching the handler, while an
+ * absent parameter is the schema's own default of 1. The route declares no header, so it stays the
+ * public read the contract lists, and reads are unlimited (the 60-per-minute limit is on writes).
+ * Both writes carry the same two options — the header and shape schema, and the resolved rate limit —
+ * read from `ApiConfig.writeRateLimit`, so the contract's bound is written once for the whole
+ * workspace. Neither handler catches anything: the server's single error handler owns
+ * `{ error: { code, message } }`, so no handler-local error body exists to disagree with it.
  */
 export function registerThreadRoutes(app: FastifyInstance, context: ThreadsRouteContext): void {
   // Resolved once, from the configuration, and shared by both writes: the numbers come from
@@ -427,10 +517,19 @@ export function registerThreadRoutes(app: FastifyInstance, context: ThreadsRoute
     timeWindow: context.config.writeRateLimit.timeWindow,
   };
 
-  app.get("/threads", (_request, reply) => {
-    const result: ThreadBoardResult = { items: listBoard(context.database) };
-    return reply.code(200).send(result);
-  });
+  app.get<{ readonly Querystring: CollectionPageQuery }>(
+    "/threads",
+    { schema: collectionPageQuerySchema },
+    (request, reply) => {
+      // The page is the schema's and is already resolved when this handler runs: the validator coerces
+      // the query string to an integer and fills the default of 1, so no default and no parse appears
+      // here. An unexpected query key — `?limit=100` — is removed by the validator before this handler
+      // runs, because the schema declares `additionalProperties: false`: it is neither honoured nor
+      // refused, so the fixed page size cannot be raised from a request.
+      const result: ThreadBoardResult = listBoard(context.database, request.query.page);
+      return reply.code(200).send(result);
+    },
+  );
 
   app.post<{ Body: ThreadCreateBody }>(
     "/threads",

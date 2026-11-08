@@ -74,10 +74,12 @@ export { recordFounderAllocation } from "./ledgers/founder-allocation";
 export type { RecordFounderAllocationInput } from "./ledgers/founder-allocation";
 
 export {
+  countLedgerEntries,
   insertLedgerEntries,
   insertLedgerEntry,
   listLedgerEntries,
 } from "./ledgers/ledger-repository";
+export type { LedgerEntryWindow } from "./ledgers/ledger-repository";
 
 export { buildReversalEntries } from "./refunds/reversal-entries";
 export type { BuildReversalEntriesInput } from "./refunds/reversal-entries";

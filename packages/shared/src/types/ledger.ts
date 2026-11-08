@@ -145,15 +145,31 @@ export interface LedgerEntry {
  * The response of each of the three operator ledger reads — `GET /ledger/marketplace`,
  * `GET /ledger/gate-fees` and `GET /ledger/founder-allocation`.
  *
- * Entries are returned in insertion order, so the history reads as it happened and a reversal
- * appears after the entry it corrects. A ledger with no rows answers with an empty `entries` array
- * and no error: an unused ledger is a state, not a failure.
+ * A ledger is append-only and grows with every checkout, every evaluation that records a gate fee
+ * and every refund, so the read is bounded rather than complete: it answers with one page of
+ * `COLLECTION_PAGE_SIZE` entries and states which page that was and how many entries the ledger
+ * holds in all, so a client reaches the rest by asking for the next page. Page 1 carries the most
+ * recent page of the history — the entries an operator opens the surface to see — and the entries
+ * within every page are in insertion order, so the history reads as it happened and a reversal
+ * appears after the entry it corrects. A ledger with no rows answers with an empty `entries` array,
+ * `total: 0` and no error: an unused ledger is a state, not a failure.
  */
 export interface LedgerReadResult {
   /** Which of the three ledgers these entries were read from. */
   ledger: LedgerName;
-  /** Every entry of that ledger, in insertion order. */
+  /**
+   * The entries of the page this response carries, in insertion order: at most
+   * `COLLECTION_PAGE_SIZE` of them, and the page numbered by {@link LedgerReadResult.page}.
+   */
   entries: LedgerEntry[];
+  /** How many entries the whole ledger holds, so a client can tell the page from the record. */
+  total: number;
+  /**
+   * Which page of the ledger's entries this response carries, 1-based: `1` is the most recent page
+   * of the history, `2` the page before it, and a page beyond the last answers `entries: []` with
+   * the ledger's own `total`.
+   */
+  page: number;
 }
 
 /**

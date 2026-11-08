@@ -61,10 +61,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaseResult, ScoredSubmission } from "../scoring/score-submission";
 import { SGI_SO_1_0_0 } from "../standards/sgi-so-1.0.0";
 import {
+  StandardDriftError,
   UnknownStandardError,
   getStandardVersion,
   registerStandardVersion,
 } from "../standards/standard-registry";
+import type { StandardVersionRecord } from "../standards/standard-registry";
 import { buildReport } from "./build-report";
 import type { ReportRecord } from "./build-report";
 import { findLatestReportId, getReport, insertReport } from "./report-repository";
@@ -106,6 +108,16 @@ const CANDIDATE_VERSION_ID = "candidate-version-unit-alpha";
 
 /** A second candidate version, for the cases that assert a report is found per version. */
 const OTHER_CANDIDATE_VERSION_ID = "candidate-version-unit-beta";
+
+/**
+ * The `accounts.id` the fixture plants, and the account the shipped standard version is published
+ * under.
+ *
+ * `governance_events.actor_account_id` is `NOT NULL REFERENCES accounts (id)`, and this suite runs
+ * under the enforced pragma, so the publication this fixture performs names the row planted below
+ * rather than adding a second one.
+ */
+const UNIT_DEVELOPER_ACCOUNT_ID = "account-unit-developer";
 
 /** The identifier of the first pinned report. */
 const FIRST_REPORT_ID = "report-unit-first";
@@ -341,9 +353,13 @@ function applyMigrations(database: Database.Database): void {
  * Publishes the shipped standard version through the registry and returns the row identifier it
  * produced, failing the case rather than a later assertion when the row cannot be read back: a report
  * cites that identifier, so a fixture whose standard is missing would fail every case for one reason.
+ *
+ * The publisher is the fixture's own demo account, which {@link insertForeignKeyParents} has to have
+ * planted before this call: the publication appends a `standard_version_published` governance event
+ * whose `actor_account_id` references `accounts`.
  */
 function seedStandardVersion(database: Database.Database): string {
-  const rowId = registerStandardVersion(database, SGI_SO_1_0_0);
+  const rowId = registerStandardVersion(database, SGI_SO_1_0_0, UNIT_DEVELOPER_ACCOUNT_ID);
   const published = getStandardVersion(database, STANDARD_VERSION_LABEL, STANDARD_VERSION_LABEL);
   if (published === null || published.id !== rowId) {
     throw new Error(
@@ -365,7 +381,7 @@ function seedStandardVersion(database: Database.Database): string {
 function insertForeignKeyParents(database: Database.Database): void {
   database
     .prepare("INSERT INTO accounts (id, handle, role, display_label) VALUES (?, ?, ?, ?)")
-    .run("account-unit-developer", "unit-developer", "developer", "Synthetic demo developer");
+    .run(UNIT_DEVELOPER_ACCOUNT_ID, "unit-developer", "developer", "Synthetic demo developer");
   database
     .prepare("INSERT INTO categories (id, slug, name) VALUES (?, ?, ?)")
     .run("category-unit", "unit-category", "Synthetic category");
@@ -406,8 +422,11 @@ function seededDatabase(): Database.Database {
   database.pragma("foreign_keys = ON");
 
   applyMigrations(database);
-  seedStandardVersion(database);
+  // The parent rows first: publishing the standard appends the publication's governance event, whose
+  // actor references the account planted here, and the report the reader tests build references the
+  // candidate version it plants.
   insertForeignKeyParents(database);
+  seedStandardVersion(database);
   return database;
 }
 
@@ -580,6 +599,18 @@ function publishedStandardVersionRowId(): string {
   return version.id;
 }
 
+/**
+ * The version record a caller resolves once and hands to the writers, which is what `apps/api`'s
+ * evaluation route does: the record it resolved for a submission rather than the label again.
+ */
+function resolvedStandardVersion(): StandardVersionRecord {
+  const version = getStandardVersion(db, STANDARD_VERSION_LABEL, STANDARD_VERSION_LABEL);
+  if (version === null) {
+    throw new Error(`expected the fixture to publish standard version ${STANDARD_VERSION_LABEL}`);
+  }
+  return version;
+}
+
 /** Reads a refusal out of a call that must fail, so its class and its fields can be asserted. */
 function captureRefusal(call: () => unknown): unknown {
   try {
@@ -749,6 +780,61 @@ describe("insertReport", () => {
     // The refusal fires before the transaction opens, so the counts are the ones from before.
     expect(scalarCount("SELECT COUNT(*) AS count FROM evaluation_reports")).toBe(reportsBefore);
     expect(scalarCount("SELECT COUNT(*) AS count FROM report_case_results")).toBe(evidenceBefore);
+  });
+
+  it("stores a report under the version its caller already resolved, reading no row for it", () => {
+    const resolved = resolvedStandardVersion();
+    // Resolved before the recorder is installed, so the fixture's own lookups are not part of what the
+    // record below is asserted to have prepared.
+    const publishedRowId = publishedStandardVersionRowId();
+    const record = firstReportRecord();
+    installPrepareRecorder();
+
+    insertReport(db, record, resolved);
+
+    // The stored foreign key is the resolved record's own row identifier and the read hands the label
+    // back, so the report a caller resolved once for a submission cites that same version.
+    expect(resolved.id).toBe(publishedRowId);
+    expect(rawReportRow(FIRST_REPORT_ID).standard_version_id).toBe(resolved.id);
+    expect(storedOrFail(FIRST_REPORT_ID).standardVersionId).toBe(STANDARD_VERSION_LABEL);
+    // The read the record form skips is the resolution probe, the one statement that looks a version
+    // up in `standard_versions`; its absence is the whole saving, and the appends that make the report
+    // are asserted beside it so this case cannot pass by having written nothing at all. The probe is
+    // named rather than the table, because the report read above joins the same table for its label.
+    expect(preparedStatements.some((source) => /FROM\s+standard_versions/.test(source))).toBe(false);
+    expect(
+      preparedStatements.some((source) => /INSERT\s+INTO\s+evaluation_reports/i.test(source)),
+    ).toBe(true);
+    expect(scalarCount("SELECT COUNT(*) AS count FROM report_case_results")).toBe(
+      record.caseResults.length,
+    );
+  });
+
+  it("refuses a resolved version labelled otherwise than the report cites, writing no row", () => {
+    const resolved = resolvedStandardVersion();
+    const record: ReportRecord = {
+      ...firstReportRecord(),
+      standardVersionId: UNPUBLISHED_STANDARD_VERSION_LABEL,
+    };
+
+    const refusal = captureRefusal(() => insertReport(db, record, resolved));
+
+    // A resolved record is not taken on trust: the module stores a report against the version it was
+    // scored against and never another, so the disagreement is refused — and it is refused as drift
+    // rather than as an unknown version, because the record resolved and it is the report that names
+    // something else. The message names both labels, which is what lets a reader see the mismatch
+    // without re-reading the database.
+    expect(refusal).toBeInstanceOf(StandardDriftError);
+    if (!(refusal instanceof StandardDriftError)) {
+      throw new Error("expected the refusal to be a StandardDriftError");
+    }
+    expect(refusal.name).toBe("StandardDriftError");
+    expect(refusal.code).toBe("standard_drift");
+    expect(refusal.standardVersionId).toBe(resolved.id);
+    expect(refusal.message).toContain(STANDARD_VERSION_LABEL);
+    expect(refusal.message).toContain(UNPUBLISHED_STANDARD_VERSION_LABEL);
+    expect(scalarCount("SELECT COUNT(*) AS count FROM evaluation_reports")).toBe(0);
+    expect(scalarCount("SELECT COUNT(*) AS count FROM report_case_results")).toBe(0);
   });
 
   it("stores either label verbatim, on a failing report as much as a passing one", () => {
@@ -993,6 +1079,22 @@ describe("findLatestReportId", () => {
       throw new Error("expected the refusal to be an UnknownStandardError");
     }
     expect(refusal.code).toBe("unknown_standard");
+  });
+
+  it("answers the same link for a version its caller already resolved", () => {
+    insertReport(db, firstReportRecord());
+    const resolved = resolvedStandardVersion();
+
+    // The route holds the record it resolved for the submission and asks this question with it rather
+    // than with the label again: the comparison binds the record's own row identifier, so the link a
+    // retest records is the one the label form answers.
+    expect(findLatestReportId(db, CANDIDATE_VERSION_ID, resolved)).toBe(FIRST_REPORT_ID);
+    expect(findLatestReportId(db, CANDIDATE_VERSION_ID, resolved)).toBe(
+      findLatestReportId(db, CANDIDATE_VERSION_ID, STANDARD_VERSION_LABEL),
+    );
+    // A record form reads no row of `standard_versions` at all, so a version no report cites yet is
+    // answered as it is for the label form: `null` rather than a refusal.
+    expect(findLatestReportId(db, OTHER_CANDIDATE_VERSION_ID, resolved)).toBeNull();
   });
 });
 

@@ -16,6 +16,18 @@
  * find it, while search is what a buyer browses. Every other status — `active` and `flagged` alike —
  * is readable by anyone.
  *
+ * **The detail read takes the shared page parameter, and only that.** Its version history is
+ * append-only and grows with every published version, so it is one of the bounded collection reads:
+ * the route declares {@link collectionPageQuerySchema} beside its parameter schema, its statements
+ * answer `COLLECTION_PAGE_SIZE` versions of the page it asked for, and the payload states the
+ * history's whole size in `version_total` so a client can read the rest by asking for the next page
+ * rather than by receiving the table. A page outside the schema — `?page=0`, `?page=-1`, `?page=abc`
+ * — is the `400` the schema validates and the server's single error handler answers, the same
+ * invalid-parameter refusal the search row documents; an unexpected key such as `?limit=100` is
+ * removed by the validator before this handler runs (Fastify's default `removeAdditional`), so a
+ * request cannot raise the bound the page size fixes. There is no page-size input anywhere in the
+ * product.
+ *
  * The two writes resolve the demo account `X-Demo-Account` names and require a developer: an absent
  * or unresolvable header is `401`, a resolvable account of another role is `403`, and the version
  * write adds the resource question `requireRole` deliberately does not answer — a developer that
@@ -85,6 +97,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import type {
   Category,
+  CollectionPageQuery,
   Listing,
   ListingClaim,
   ListingCreateBody,
@@ -102,8 +115,10 @@ import type {
   ReportOutcome,
 } from "@adem/shared";
 import {
+  COLLECTION_PAGE_SIZE,
   DEMO_ACCOUNT_HEADER,
   OFFER_MODELS,
+  collectionPageQuerySchema,
   demoAccountHeaderSchema,
   listingCreateBodySchema,
   listingIdParamsSchema,
@@ -188,7 +203,20 @@ interface ListingPageRow {
  * every page, which is what lets the listings page state how many pages remain.
  */
 interface ListingTotalRow {
-  /** How many listings the filters matched, counted over the same row source the page is read from. */
+  /** How many listings the filters matched, over the same match set the page is read from. */
+  readonly total: number;
+}
+
+/**
+ * The one row the version count answers with: how many versions one listing has published in all,
+ * which the detail payload states as `version_total`.
+ *
+ * The version list cannot answer this for itself: a page holds `COLLECTION_PAGE_SIZE` versions
+ * whether the listing holds that many or thousands, so the count beside the page is the only thing
+ * that tells a client which page of what it is reading.
+ */
+interface ListingVersionTotalRow {
+  /** How many versions the listing holds, counted over `listing_versions` for that listing. */
   readonly total: number;
 }
 
@@ -269,8 +297,21 @@ interface ListingClaimRow {
 }
 
 /**
- * The newest report for one candidate version, as the evidence link reads it: the four values a
- * badge and a listing page render, and nothing else.
+ * One row of the offer-model read: a pricing model some version's claim of one listing states.
+ *
+ * Deliberately one column wide. The question that read answers is which models the listing offers,
+ * so a claim's identifier, its version and its text are beside the point — and a narrower row is
+ * what lets the offers be read over every version of the listing while the payload's own claims stay
+ * within its page.
+ */
+interface ListingClaimModelRow {
+  /** A pricing model claimed for some version of the listing, one of `PRICING_MODELS`. */
+  readonly pricing_model: PricingModel;
+}
+
+/**
+ * The newest report for the newest version of one listing, as the evidence link reads it: the four
+ * values a badge and a listing page render, and nothing else.
  *
  * `standard_version_id` is the joined `standard_versions.version_label` rather than the row
  * identifier `evaluation_reports` stores, because the label is the value the contract quotes and the
@@ -394,13 +435,101 @@ const SELECT_LISTING_PAGE = `SELECT
   FROM (${LISTING_ROW_SOURCE}) AS matches`;
 
 /**
- * How many listings the filters matched, counted over the **same** row source the page is read from.
+ * The row source the count reads in place of {@link LISTING_ROW_SOURCE}: the same match set, carrying
+ * only the columns a filter compares.
  *
- * One source for both statements is what makes `total` and the page agree: a count taken over a
- * cheaper source would state a number the page could contradict, and the standard filter in
- * particular is a predicate on the joined report rather than on the listing row.
+ * A count answers with a number and never with a row, so the evidence the page's source joins in —
+ * the listing's newest version, that version's newest report, the standard version the report cites
+ * and the limitation of the newest version's first claim — is read by no predicate here and is
+ * therefore not carried. The two sources still match exactly the same listings, which is what keeps
+ * `total` and the page in agreement: each of the three joins left out is a `LEFT JOIN` that matches
+ * **at most one** row, because `listing_versions` and `evaluation_reports` are reached through a
+ * `LIMIT 1` subquery ordered `created_at DESC, rowid DESC` and `standard_versions` is joined on its
+ * primary key, so none of them can drop a listing or multiply one. The two `JOIN`s the page carries
+ * — `accounts` and `categories` — and the hidden-listing predicate are kept, so the two sources
+ * differ only in what they project and in the evidence they join.
+ *
+ * The columns are the ones the four filters that read the listing row compare: `title` and `summary`
+ * for `q`, `category_slug` for `category`, `license_code` for `license` and `pricing_model` for
+ * `model`. The fifth filter is the one thing this source cannot answer, which is why
+ * {@link LISTING_EVIDENCE_MATCH_SOURCE} exists.
  */
-const SELECT_LISTING_TOTAL = `SELECT COUNT(*) AS total FROM (${LISTING_ROW_SOURCE}) AS matches`;
+const LISTING_MATCH_SOURCE = `SELECT
+    l.title AS title,
+    l.summary AS summary,
+    c.slug AS category_slug,
+    l.license_code AS license_code,
+    l.pricing_model AS pricing_model
+  FROM listings AS l
+  JOIN accounts AS a ON a.id = l.developer_account_id
+  JOIN categories AS c ON c.id = l.category_id
+  WHERE l.status <> 'hidden'`;
+
+/**
+ * The count's row source for the one filter that reads joined evidence: {@link LISTING_MATCH_SOURCE}
+ * with the two joins the `standard` predicate compares against.
+ *
+ * `standard` narrows on the report a listing's evidence is linked to, which the page's source exposes
+ * as `report_standard_version_row_id` — the newest report's own `standard_version_id`, the row
+ * identifier the filter resolves a version label to. The newest version and its newest report are
+ * joined here by the same two `LIMIT 1` subqueries the page uses, so the value compared is the value
+ * the page compares; the page's third evidence join, the `standard_versions` join that produces the
+ * report's version **label**, is absent because no predicate reads a label. Everything else is
+ * {@link LISTING_MATCH_SOURCE}'s, unchanged, so the two count sources match the same listings as the
+ * page and as each other.
+ */
+const LISTING_EVIDENCE_MATCH_SOURCE = `SELECT
+    l.title AS title,
+    l.summary AS summary,
+    c.slug AS category_slug,
+    l.license_code AS license_code,
+    l.pricing_model AS pricing_model,
+    r.standard_version_id AS report_standard_version_row_id
+  FROM listings AS l
+  JOIN accounts AS a ON a.id = l.developer_account_id
+  JOIN categories AS c ON c.id = l.category_id
+  LEFT JOIN listing_versions AS v ON v.id = (
+    SELECT v2.id
+    FROM listing_versions AS v2
+    WHERE v2.listing_id = l.id
+    ORDER BY v2.created_at DESC, v2.rowid DESC
+    LIMIT 1
+  )
+  LEFT JOIN evaluation_reports AS r ON r.id = (
+    SELECT r2.id
+    FROM evaluation_reports AS r2
+    WHERE r2.candidate_version_id = v.id
+    ORDER BY r2.created_at DESC, r2.rowid DESC
+    LIMIT 1
+  )
+  WHERE l.status <> 'hidden'`;
+
+/**
+ * The count statement one search composes: how many listings that search's filters matched, over the
+ * same match set the page is read from.
+ *
+ * The source is the one the clause calls for — {@link LISTING_MATCH_SOURCE} for the four filters that
+ * read the listing row, {@link LISTING_EVIDENCE_MATCH_SOURCE} once a `standard` filter has
+ * contributed its predicate — and {@link ListingFilters.narrowsByStandard} is what decides, so the
+ * statement carries the evidence joins exactly when the clause it is composed with reads them and the
+ * count never evaluates a correlated lookup its filters do not call for.
+ *
+ * **Why the count and the page cannot disagree.** The clause is composed once by `listingFilters` and
+ * run by both statements, so no filter narrows one of them and not the other; the clause names the
+ * same columns of either source (`q` reads `title` and `summary`, `category` reads `category_slug`,
+ * `license` reads `license_code`, `model` reads `pricing_model`, and `standard` reads
+ * `report_standard_version_row_id`, which only the evidence source carries); and the two sources match
+ * the same listings, for the reason {@link LISTING_MATCH_SOURCE} states — every join either source
+ * keeps matches at most one row, and the two that are not `LEFT JOIN`s are carried by both statements
+ * with the same condition, so a clause over either one selects exactly the listings the other one
+ * holds. `total` therefore counts exactly the listings the page's source holds, which is the set
+ * `items` is drawn from.
+ */
+function listingTotalStatement(filters: ListingFilters): string {
+  const source = filters.narrowsByStandard ? LISTING_EVIDENCE_MATCH_SOURCE : LISTING_MATCH_SOURCE;
+
+  return `SELECT COUNT(*) AS total FROM (${source}) AS matches ${filters.clause}`;
+}
 
 /**
  * One listing by identifier, without the hidden-listing predicate {@link LISTING_ROW_SOURCE}
@@ -423,50 +552,121 @@ const SELECT_LISTING_BY_ID = `SELECT
   WHERE l.id = ?`;
 
 /**
- * A listing's version history, **newest first**.
+ * One page of a listing's version history, **newest first**.
  *
- * The order is the one the payload's shape states — `ListingDetail.versions` is "the version history,
- * newest first" — and the one its readers depend on: the listing page and the developer page both
- * take `versions[0]` as the listing's current version, and the detail read's evidence is the report
- * for exactly that version. `created_at DESC, rowid DESC` makes it a total order, so two versions
- * published in one millisecond keep the order they were written in. Nothing is edited: a version is
- * append-only, and the history is what the developer published.
+ * The order is the one the payload's shape states — `ListingDetail.versions` is "the most recent page
+ * of it, newest first within the page" — and the one its readers depend on: on the first page
+ * `versions[0]` is the listing's current version, which the listing page and the developer page both
+ * take as the version to open. The evidence the payload links is the report for the listing's newest
+ * version, whichever page was asked for, which the statement below resolves for itself.
+ * `created_at DESC, rowid DESC` makes it a total order, so two versions published in one millisecond
+ * keep the order they were written in — and so that every page is a slice of one order that does not
+ * move between requests.
+ *
+ * **The window is the bound.** `listing_versions` is append-only and grows with every published
+ * version, so the read answers the page the request asked for — `COLLECTION_PAGE_SIZE` rows at that
+ * page's own offset — rather than the history, and the payload states how many versions exist in all
+ * in `version_total` beside it so a client can tell the page from the history and ask for the next
+ * one. Nothing is edited: a page is a window over what the developer published.
  */
 const SELECT_LISTING_VERSIONS = `SELECT
     id, listing_id, version_string, notes, is_fixture_candidate, created_at
   FROM listing_versions
   WHERE listing_id = ?
-  ORDER BY created_at DESC, rowid DESC`;
+  ORDER BY created_at DESC, rowid DESC
+  LIMIT ? OFFSET ?`;
 
 /**
- * The claims of every version of one listing, in the order the claims were written.
+ * The claims of **the versions the payload carries** — the same page {@link SELECT_LISTING_VERSIONS}
+ * reads — in the order the claims were written.
  *
- * A claim belongs to a version, so the read reaches the listing through `listing_versions`; `rowid
- * ASC` is publication order and is the only order that can supply it, since two claims written for
- * one version in one transaction carry the same instant.
+ * A claim belongs to a version, so the read reaches the listing through `listing_versions`, and the
+ * versions are named by a subquery over that page rather than by a bind list of the identifiers the
+ * page returned: the statement then carries three bound numbers whatever the listing's size, where a
+ * list of version ids would carry one placeholder per row and grow into SQLite's parameter ceiling.
+ * `rowid ASC` is publication order and is the only order that can supply it, since two claims written
+ * for one version carry the same instant.
+ *
+ * Both windows must state the same page: the payload promises the claims *of the versions it
+ * carries*, and two different windows would break that promise. That is why the offers a listing
+ * makes are read separately by {@link SELECT_LISTING_CLAIM_MODELS} — a claim of a version outside
+ * this page is outside the payload, and only the offers have to reach past it.
  */
 const SELECT_LISTING_CLAIMS = `SELECT
     cl.id, cl.listing_version_id, cl.claim, cl.limitation, cl.evidence_summary, cl.license_code,
     cl.pricing_model
   FROM listing_claims AS cl
-  JOIN listing_versions AS v ON v.id = cl.listing_version_id
-  WHERE v.listing_id = ?
+  WHERE cl.listing_version_id IN (
+    SELECT v.id
+    FROM listing_versions AS v
+    WHERE v.listing_id = ?
+    ORDER BY v.created_at DESC, v.rowid DESC
+    LIMIT ? OFFSET ?
+  )
   ORDER BY cl.rowid ASC`;
 
 /**
- * The newest report for one candidate version: the four values the evidence link carries.
+ * How many versions one listing has published **in all**, which the detail payload states as
+ * `version_total`.
+ *
+ * One page of the history cannot state this — a listing with exactly one page looks the same as one
+ * with fifty — so the bound the read applies is only honest beside the size of what it bounds. The
+ * count is over the same table the page is read from and by the same listing identifier, so the page
+ * and the total cannot disagree about which listing they describe, and it always answers exactly one
+ * row.
+ */
+const SELECT_LISTING_VERSION_TOTAL = `SELECT COUNT(*) AS total FROM listing_versions WHERE listing_id = ?`;
+
+/**
+ * The distinct pricing models the claims of **every** version of one listing state.
+ *
+ * Deliberately not windowed while {@link SELECT_LISTING_CLAIMS} is, and the difference is the point:
+ * the payload shows the claims of the versions it carries, but the offers a listing makes are a
+ * property of the listing rather than of a page of its history. Reading them through the page would
+ * drop a selectable offer as soon as the version claiming it fell off the page — the listing page
+ * would then show less than the checkout accepts, because the checkout reads the claims of the
+ * version a buyer selects rather than this page's.
+ *
+ * Its result is bounded by the four-model vocabulary and not by the listing: `DISTINCT` over a column
+ * the migration's `CHECK` confines to those four values, however many versions and claims the listing
+ * holds. Every version's claims are read rather than only the newest version's, because an older
+ * version is still selectable at checkout.
+ */
+const SELECT_LISTING_CLAIM_MODELS = `SELECT DISTINCT cl.pricing_model
+  FROM listing_claims AS cl
+  JOIN listing_versions AS v ON v.id = cl.listing_version_id
+  WHERE v.listing_id = ?`;
+
+/**
+ * The newest report for the newest version of one listing: the four values the evidence link
+ * carries.
+ *
+ * The version the evidence is linked to is resolved **inside the statement** rather than taken from
+ * the page of the history the request asked for. A listing's evidence is the report for its newest
+ * version, and under paging the page's own first row is that version only on the first page: with
+ * `?page=2` the first row is an older version, and naming its report would point a reader at the
+ * evidence of a superseded version. `created_at DESC, rowid DESC` fixes which version is the newest
+ * one when two were published in one millisecond, and a listing with no version at all matches no
+ * row.
  *
  * The report's standard version is joined for its label, because the column stores the row
  * identifier while the contract quotes the label — the same join `@adem/sgi-core`'s own report read
  * performs. The order is `created_at DESC, rowid DESC`, so the newest report is the one a retest
- * followed rather than whichever row the engine returned first.
+ * followed rather than whichever row the engine returned first; a newest version with no report
+ * answers nothing, which is the `No SGI report yet` state and never an older version's report.
  */
-const SELECT_LATEST_REPORT_FOR_VERSION = `SELECT
+const SELECT_LATEST_REPORT_FOR_LISTING = `SELECT
     r.id, r.candidate_version_id, r.outcome, r.label,
     sv.version_label AS standard_version_id
   FROM evaluation_reports AS r
   JOIN standard_versions AS sv ON sv.id = r.standard_version_id
-  WHERE r.candidate_version_id = ?
+  WHERE r.candidate_version_id = (
+    SELECT v.id
+    FROM listing_versions AS v
+    WHERE v.listing_id = ?
+    ORDER BY v.created_at DESC, v.rowid DESC
+    LIMIT 1
+  )
   ORDER BY r.created_at DESC, r.rowid DESC
   LIMIT 1`;
 
@@ -663,11 +863,21 @@ function toListingClaim(row: ListingClaimRow): ListingClaim {
  * listing offers, and a model neither the row nor a claim names is absent — which is what makes the
  * checkout contract's `not_offered` refusal reachable rather than dead.
  *
+ * The caller hands it {@link SELECT_LISTING_CLAIM_MODELS}'s rows — the models claimed for **every**
+ * version of the listing — and not the windowed claim rows the payload carries, so paging the history
+ * cannot narrow the offers the listing makes. Those rows carry the model and nothing else, which is
+ * the whole of what this decision reads.
+ *
  * Nothing is priced here: `@adem/commerce-sim` owns the offer vocabulary and the amounts, and the
  * checkout route builds the offers a selection narrows from the same claims this read collects.
  */
-function offerModelsOf(listingModel: PricingModel, claims: readonly ListingClaimRow[]): OfferModel[] {
-  const claimed: readonly PricingModel[] = claims.map((claim: ListingClaimRow): PricingModel => claim.pricing_model);
+function offerModelsOf(
+  listingModel: PricingModel,
+  claimModels: readonly ListingClaimModelRow[],
+): OfferModel[] {
+  const claimed: readonly PricingModel[] = claimModels.map(
+    (claim: ListingClaimModelRow): PricingModel => claim.pricing_model,
+  );
 
   return OFFER_MODELS.filter(
     (model: OfferModel): boolean => model === listingModel || claimed.includes(model),
@@ -791,7 +1001,7 @@ function isVersionPairCollision(error: unknown): boolean {
  * only the codes listings and claims carry.
  *
  * An absent filter contributes nothing, so the clause is empty when the client narrows nothing and
- * the statement then reads the whole row source. The order of the predicates is fixed — query text,
+ * each statement then reads its whole row source. The order of the predicates is fixed — query text,
  * category, license, model, standard — so the same request always composes the same statement.
  *
  * The four filters that match a stored value are compared with `=`, on the row source's own columns:
@@ -804,6 +1014,17 @@ interface ListingFilters {
   readonly clause: string;
   /** The values the clause's bind markers are bound to, in the order the clause names them. */
   readonly params: readonly string[];
+  /**
+   * Whether the clause reads joined evidence, which is to say whether a `standard` filter contributed
+   * its predicate.
+   *
+   * `true` exactly when {@link ListingFilters.clause} carries
+   * `matches.report_standard_version_row_id = ?`: the count reads the newest-version and newest-report
+   * joins for that one predicate, and reads neither of them otherwise. It is set here rather than
+   * re-derived from the clause text by its reader, so the clause and the source it needs stay one
+   * decision made in one place.
+   */
+  readonly narrowsByStandard: boolean;
 }
 
 /**
@@ -855,10 +1076,11 @@ function requireKnownCategory(database: Database, slug: string): void {
   }
 }
 
-/** The clause and the bound values one search's filters compose. */
+/** The clause, the bound values and the evidence flag one search's filters compose. */
 function listingFilters(database: Database, query: ListingSearchQuery): ListingFilters {
   const predicates: string[] = [];
   const params: string[] = [];
+  let narrowsByStandard = false;
 
   if (query.q !== undefined) {
     const pattern = listingSearchPattern(query.q);
@@ -885,11 +1107,13 @@ function listingFilters(database: Database, query: ListingSearchQuery): ListingF
   if (query.standard !== undefined) {
     predicates.push("matches.report_standard_version_row_id = ?");
     params.push(standardVersionRowId(database, query.standard));
+    narrowsByStandard = true;
   }
 
   return {
     clause: predicates.length === 0 ? "" : `WHERE ${predicates.join(" AND ")}`,
     params,
+    narrowsByStandard,
   };
 }
 
@@ -969,12 +1193,95 @@ function evidenceLinkOf(report: LatestReportRow | null): {
 }
 
 /**
+ * The first offset SQLite cannot bind: `2 ** 63`, the exclusive upper bound of the offsets a search
+ * may read from.
+ *
+ * A page's offset is the fixed page size times the zero-based page number, and the search binds it as
+ * the `OFFSET` of the statement that reads the page. SQLite holds that value as a signed 64-bit
+ * integer and better-sqlite3 hands it over as it stands, so an offset outside that range is not
+ * clamped: it arrives as the float such a double is, the statement is refused with the driver's own
+ * `SqliteError` — `datatype mismatch`, SQLite's `SQLITE_MISMATCH` — and nothing in this file catches
+ * it, which is what would answer the client with the server fault of `500`. An offset from `0` below
+ * this bound is bound and answers zero rows once it is past the end, which is the empty page the
+ * contract documents, so this value is the upper end of the line between a page the store can address
+ * and one it cannot.
+ *
+ * It is `2 ** 63` and not `2 ** 63 - 1`, and the guard below compares with `>=` and not with `>`:
+ * JavaScript holds both expressions as the same double, so a bound written as one less would read the
+ * same number and would admit the one offset SQLite refuses.
+ */
+const FIRST_UNBINDABLE_OFFSET = 2 ** 63;
+
+/**
+ * The offset one page of search reads from, or this row's `400` when the page asks for one the store
+ * cannot address.
+ *
+ * The offset is the only arithmetic in this file, and it is paging rather than a domain value: the
+ * fixed page size times the zero-based page number, from two values the contract and the resolved
+ * configuration already hold. No count, outcome, label or amount is computed here — those are read
+ * back from the columns that hold them.
+ *
+ * **Why the page is judged here rather than by the request schema.** `page` is declared an integer of
+ * `1` or more with no ceiling, and that is deliberate: a page past the end of a result set is the
+ * documented empty result of this row — `200` with `items: []` and the requested page number, which
+ * this route must keep answering — so a ceiling in the schema would refuse the ordinary case the
+ * contract documents. What the schema cannot express is the refusal this row also documents, the
+ * `400` for an invalid parameter, whose sentence has to name the parameter the client sent: a schema
+ * rejection is answered with the product's one generic sentence, whatever it refused. The judgement
+ * therefore sits with the route's own refusals of a filter it cannot satisfy —
+ * {@link requireKnownCategory} and {@link standardVersionRowId} are the other two — and it runs
+ * before any statement is composed or run, so a page whose offset the search cannot bind never
+ * reaches the driver.
+ *
+ * **Why the lower end of the bindable range is judged here too.** The schema's `minimum: 1` is applied
+ * to the value the validator coerced the query string to, and that coercion admits a page written as a
+ * negative power: `?page=-1e309`, and `?page=-Infinity` with it, reaches this function as a page
+ * number of `-Infinity` rather than as a refusal. Its offset is the same value, which the driver
+ * refuses with exactly the `datatype mismatch` an offset above the 64-bit range produces, so an
+ * unaddressable offset can arrive from either end and the route checks the value it actually binds
+ * instead of trusting the bound the schema states. The offsets a search binds are therefore the ones
+ * from `0` up to and excluding {@link FIRST_UNBINDABLE_OFFSET}. The lower branch below is written as
+ * `!(offset >= 0)` and not as a safe-integer test: it is false for `-Infinity` and for `NaN`, which
+ * no comparison orders, and true for every offset a page number can reach, while a bound at
+ * `Number.MAX_SAFE_INTEGER` would refuse the addressable pages between it and
+ * {@link FIRST_UNBINDABLE_OFFSET} — pages whose only answer is the empty page the contract documents.
+ *
+ * The sentence is one short line, written from the characters the UI's error notice renders, so the
+ * reader is told which parameter was the problem instead of the generic explanation.
+ *
+ * @param pageSize The fixed page size the search answers with, from the resolved configuration.
+ * @param page The 1-based page number the query named, already coerced by the query schema.
+ * @returns The offset the requested page reads from: a non-negative value below
+ * {@link FIRST_UNBINDABLE_OFFSET}.
+ * @throws ApiError of `400 validation_error` when the offset is not a non-negative number, or is at
+ * or above {@link FIRST_UNBINDABLE_OFFSET}.
+ */
+function pageOffsetOf(pageSize: number, page: number): number {
+  const offset = pageSize * (page - 1);
+
+  // The lower end of the range first: this reads an offset that is not a non-negative number — the
+  // `-Infinity` a page written as a negative power coerces to, which the schema's `minimum` does not
+  // catch, and the `NaN` no comparison orders at all. The driver refuses such an `OFFSET` with the
+  // same `datatype mismatch` as one at or above the bound below, so all that reaches the bind site is
+  // a value from `0` up to that bound. The upper branch is the range's other end.
+  if (!(offset >= 0)) {
+    throw ApiError.validation("The page parameter is not a page number this search can read.");
+  }
+
+  if (offset >= FIRST_UNBINDABLE_OFFSET) {
+    throw ApiError.validation("The page parameter is beyond the last page this search can address.");
+  }
+
+  return offset;
+}
+
+/**
  * Registers this group's four routes — the exchange's discovery surface — on the instance it is
  * handed, in the order the contract table names them.
  *
  * | Path                     | Method | Role             | Answer                                        |
  * | `/listings`              | `GET`  | public           | `200` with `items`, `total` and `page`         |
- * | `/listings/:id`          | `GET`  | public           | `200` with the listing, or `404`               |
+ * | `/listings/:id`          | `GET`  | public           | `200` with the listing and one page of its versions, or `404` |
  * | `/listings`              | `POST` | developer        | `201` with the created listing                 |
  * | `/listings/:id/versions` | `POST` | owning developer | `201` with the created version, or `404`/`409` |
  *
@@ -982,6 +1289,14 @@ function evidenceLinkOf(report: LatestReportRow | null): {
  * `./register-routes`, which calls this function with its encapsulated scope. That literal appears
  * nowhere in this file and must not: a group that spelled it would be the second place the prefix is
  * decided.
+ *
+ * **The detail read's query, and why it is the only one here.** It declares the shared collection page
+ * schema beside its parameter schema, so its version history is read one page at a time and the
+ * payload states the history's whole size in `version_total`; a `page` outside the schema's bounds is
+ * a `400` from the same validation every other row uses, and an unexpected query key is removed by
+ * the validator rather than widening the read (Fastify's default `removeAdditional`, and no check of
+ * this file's own). There is no page-size input: `COLLECTION_PAGE_SIZE` is `@adem/shared`'s and is not
+ * a client's to raise.
  *
  * **What each route refuses, and in which order.** The two reads resolve no identity; the detail read
  * refuses `404` for an unknown listing and, for a hidden one, for every caller but an operator. Each
@@ -1008,26 +1323,31 @@ export function registerListingsRoutes(app: FastifyInstance, context: ListingsRo
     (request, reply) => {
       const { database, config } = context;
       const query: ListingSearchQuery = request.query;
+
+      // The page is judged before the filters are composed and before any statement is prepared or
+      // run: a page whose offset is not a non-negative value the search can bind is this row's `400`,
+      // so no catalogue lookup and no read stands behind it.
+      const offset = pageOffsetOf(config.pageSize, query.page);
+
       const filters = listingFilters(database, query);
 
-      // One count over the same row source the page is read from, so `total` and `items` cannot
-      // disagree about what the filters matched. The statement always answers exactly one row; a
-      // missing one would state no total, which is the empty match set rather than a failure.
+      // One count over the same match set the page is read from, so `total` and `items` cannot
+      // disagree about what the filters matched. The row source carries the evidence joins only when
+      // the `standard` filter reads them, which is what keeps the count off the correlated
+      // newest-version and newest-report lookups, and off the sorts behind them, when no standard
+      // narrows the search. The statement always answers exactly one row; a missing one would state
+      // no total, which is the empty match set rather than a failure.
       const totalRow = database
-        .prepare<unknown[], ListingTotalRow>(`${SELECT_LISTING_TOTAL} ${filters.clause}`)
+        .prepare<unknown[], ListingTotalRow>(listingTotalStatement(filters))
         .get(...filters.params);
       const total = totalRow === undefined ? 0 : totalRow.total;
 
-      // The only arithmetic in this file, and it is paging rather than a domain value: the offset of
-      // the requested page is the fixed page size times the zero-based page number, and the page size
-      // is the contract's, resolved once. No count, outcome, label or amount is computed here — those
-      // are read back from the columns that hold them.
-      const offset = config.pageSize * (query.page - 1);
-
       // One statement per page and one row per listing: the evidence is joined in rather than read
-      // per row, which matters because better-sqlite3's API is synchronous on the calling thread. A
-      // page past the last one answers an empty list with the requested page number and the whole
-      // matching total, which is an ordinary answer to an ordinary request.
+      // per row, which matters because better-sqlite3's API is synchronous on the calling thread.
+      // Every page the store can address is an ordinary answer to an ordinary request — a page past
+      // the last one answers an empty list with the requested page number and the whole matching
+      // total — and only a page whose offset is not a non-negative value the store can bind is
+      // refused, above, with the `400` this row documents for an invalid parameter.
       const rows = database
         .prepare<unknown[], ListingPageRow>(
           `${SELECT_LISTING_PAGE} ${filters.clause} ${ORDER_BY_LISTING_SORT[query.sort]} LIMIT ? OFFSET ?`,
@@ -1044,9 +1364,9 @@ export function registerListingsRoutes(app: FastifyInstance, context: ListingsRo
     },
   );
 
-  app.get<{ readonly Params: { readonly id: string } }>(
+  app.get<{ readonly Params: { readonly id: string }; readonly Querystring: CollectionPageQuery }>(
     "/listings/:id",
-    { schema: listingIdParamsSchema },
+    { schema: { ...listingIdParamsSchema, ...collectionPageQuerySchema } },
     (request, reply) => {
       const { database } = context;
       const listingRow = database.prepare<[string], ListingRow>(SELECT_LISTING_BY_ID).get(request.params.id);
@@ -1070,32 +1390,59 @@ export function registerListingsRoutes(app: FastifyInstance, context: ListingsRo
         }
       }
 
+      // The page's own offset: the fixed collection page size times the zero-based page number. The
+      // page size is `@adem/shared`'s and never a client input, so no request can widen the read, and
+      // the schema has already resolved `page` to a number at or above `1`.
+      const offset = COLLECTION_PAGE_SIZE * (request.query.page - 1);
+
+      // One page of the history, then the claims of exactly the versions that page carries: the two
+      // statements are windowed by the same page, which is what the payload promises. Both take three
+      // bound numbers however many versions the listing holds, so neither statement grows with it.
       const versionRows = database
-        .prepare<[string], ListingVersionRow>(SELECT_LISTING_VERSIONS)
-        .all(listingRow.id);
+        .prepare<[string, number, number], ListingVersionRow>(SELECT_LISTING_VERSIONS)
+        .all(listingRow.id, COLLECTION_PAGE_SIZE, offset);
       const claimRows = database
-        .prepare<[string], ListingClaimRow>(SELECT_LISTING_CLAIMS)
+        .prepare<[string, number, number], ListingClaimRow>(SELECT_LISTING_CLAIMS)
+        .all(listingRow.id, COLLECTION_PAGE_SIZE, offset);
+
+      // How many versions the listing holds in all: the page cannot state that for itself, so
+      // `version_total` is what tells a client which page of what it is reading, and `?page=2` is how
+      // it reaches the rest. One count over the same table the page is read from, and it always
+      // answers exactly one row; a missing one would state no total, which is the empty history rather
+      // than a failure.
+      const versionTotalRow = database
+        .prepare<[string], ListingVersionTotalRow>(SELECT_LISTING_VERSION_TOTAL)
+        .get(listingRow.id);
+      const versionTotal = versionTotalRow === undefined ? 0 : versionTotalRow.total;
+
+      // The offers the listing makes are a property of the listing rather than of the page of its
+      // history this request asked for, so they are read over every version's claims and not over the
+      // window's: a model whose only claim sits on a version this page does not carry is still offered
+      // by the checkout, and a page reporting less than the checkout accepts would make the UI refuse
+      // a selection the route would have taken. See SELECT_LISTING_CLAIM_MODELS.
+      const claimModelRows = database
+        .prepare<[string], ListingClaimModelRow>(SELECT_LISTING_CLAIM_MODELS)
         .all(listingRow.id);
 
-      // The evidence is the report for the listing's **newest** version, which is the version the
-      // detail payload's `versions[0]` states and the one a badge beside the listing names. A version
-      // with no report leaves the four provenance values `null` and does not make the page a `404`.
-      const newestVersion = versionRows[0] ?? null;
+      // The evidence is the report for the listing's **newest** version, which the first page's
+      // `versions[0]` states and a badge beside the listing names. The statement resolves that version
+      // itself rather than taking the page's first row, so a request for an older page of the history
+      // still points at the current version's report and never at a superseded version's. A newest
+      // version with no report leaves the four provenance values `null` and does not make the page a
+      // `404`.
       const report =
-        newestVersion === null
-          ? null
-          : (database
-              .prepare<[string], LatestReportRow>(SELECT_LATEST_REPORT_FOR_VERSION)
-              .get(newestVersion.id) ?? null);
+        database.prepare<[string], LatestReportRow>(SELECT_LATEST_REPORT_FOR_LISTING).get(listingRow.id) ??
+        null;
 
       const detail: ListingDetail = {
         ...toListing(listingRow),
         developer_handle: listingRow.developer_handle,
         category: toCategory(listingRow),
         versions: versionRows.map(toListingVersion),
+        version_total: versionTotal,
         claims: claimRows.map(toListingClaim),
         ...evidenceLinkOf(report),
-        offer_models: offerModelsOf(listingRow.pricing_model, claimRows),
+        offer_models: offerModelsOf(listingRow.pricing_model, claimModelRows),
       };
 
       return reply.code(200).send(detail);

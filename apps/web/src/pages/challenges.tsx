@@ -1,20 +1,21 @@
 /**
  * The `/challenges` route: the public challenges board, and the responses a challenge collects.
  *
- * A challenge is a buyer's public question about a listing's claims. The board lists every
- * challenge in the order the service returned it, a reader opens one through the query parameter
- * it is addressed by, and either the buyer who asked or the listing's developer answers it here.
- * A challenge is a question and never a measurement: nothing on this page describes a question or
- * an answer as evidence for a listing's claims, as a pass, or as anything about safety.
+ * A challenge is a buyer's public question about a listing's claims. The board lists the page of
+ * challenges the service answered with, in the order the service returned it, a reader opens one
+ * through the query parameter it is addressed by, and either the buyer who asked or the listing's
+ * developer answers it here. A challenge is a question and never a measurement: nothing on this
+ * page describes a question or an answer as evidence for a listing's claims, as a pass, or as
+ * anything about safety.
  *
  * Five decisions shape this file, each of which a later reader could otherwise "improve" into a
  * bug.
  *
  *   - **The selection lives in the address and nowhere else.** `?id=<challenge id>` is the whole
- *     of this page's state: every challenge on the board is a `<Link>` that rewrites that one
- *     parameter, `useSearchParams` reads it back, and clearing it returns to the whole board. There
- *     is no context provider, no shared state module and no stored preference, so a challenge is
- *     linkable and a reload of a link opens the same challenge.
+ *     of this page's state: every challenge on the page of the board is a `<Link>` that rewrites
+ *     that one parameter, `useSearchParams` reads it back, and clearing it returns to the board.
+ *     There is no context provider, no shared state module and no stored preference, so a challenge
+ *     is linkable and a reload of a link opens the same challenge.
  *
  *   - **The listing picker reads the public search, and for one reason.** A challenge cannot be
  *     written without a `listing_id` — `POST /challenges` requires one — and the contract exposes
@@ -33,10 +34,10 @@
  *     and would reach into a child's rendering for an event the child can report itself.
  *
  *   - **Every outcome a reader can meet is rendered in words.** A blank board, a challenge no one
- *     has answered, a selection naming no challenge on the board, a refused write, a spent write
- *     rate limit and a read that failed each get their own explanation and their own next step. No
- *     failure renders a stack trace, a raw response body or a URL: the two reads render
- *     `ErrorNotice`, and the response form renders the sentences declared below.
+ *     has answered, a selection naming no challenge on the page of the board, a refused write, a
+ *     spent write rate limit and a read that failed each get their own explanation and their own
+ *     next step. No failure renders a stack trace, a raw response body or a URL: the two reads
+ *     render `ErrorNotice`, and the response form renders the sentences declared below.
  *
  * Presentation only. Every read and write goes through `../api-client`, which owns the service's
  * address, the header naming the selected demo account and the one failure envelope; this file
@@ -50,11 +51,13 @@ import type { ChangeEvent, FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { DEFAULT_LISTING_SORT, DEMO_AUTHENTICATION_LABEL, WRITE_RATE_LIMIT_MAX } from "@adem/shared";
 import type { ChallengeStatus, ListingSearchResult, ListingSummary } from "@adem/shared";
-import { listChallenges, listListings, respondToChallenge } from "../api-client";
+import { getSelectedDemoAccountId, listChallenges, listListings, respondToChallenge } from "../api-client";
 import type { ChallengeListItem } from "../api-client";
 import { ChallengeForm } from "../components/challenge-form";
 import { EmptyState } from "../components/empty-state";
 import { ErrorNotice } from "../components/error-notice";
+import { findDemoAccount } from "../data/demo-accounts";
+import type { DemoAccount } from "../data/demo-accounts";
 import { Timestamp, describeRetryWait, readString, readWriteFailure, withFullStop } from "../payload-reading";
 import type { WriteFailureFacts } from "../payload-reading";
 
@@ -81,6 +84,38 @@ const STATUS_WORD_RESPONDED = "Responded";
 
 /** The word used for a status the closed vocabulary does not hold, rather than an empty space. */
 const STATUS_WORD_UNKNOWN = "Status not stated";
+
+/** The sentence the board's status region carries while a read of the board is in flight. */
+const LOADING_BOARD_MESSAGE = "Loading the challenges board…";
+
+/**
+ * What a response says about who answered when the board names an account the switcher does not
+ * list. The identifier itself is deliberately not rendered: it names nothing a reader can
+ * recognise, and the handle is the whole of the attribution this board shows.
+ */
+const RESPONDER_UNLISTED_LABEL = "an account the demo-account switcher does not list";
+
+/**
+ * The empty board, and the same state for an account the create form is withheld from.
+ *
+ * The two differ in one sentence: the form above the board is offered to a buyer and to a visitor
+ * who has selected no account, so pointing the first reader at it is a direction and pointing the
+ * second at it would be a direction to nothing.
+ */
+const EMPTY_BOARD_EXPLANATION =
+  "No one has asked a challenge yet. A challenge is a public question about a listing's claims, and the first one can be asked from the form above.";
+const EMPTY_BOARD_EXPLANATION_WITHOUT_FORM =
+  "No one has asked a challenge yet. A challenge is a public question about a listing's claims, and one can be asked by a buyer account.";
+
+/**
+ * A challenge nobody has answered yet, and the same state for an account the answer form is withheld
+ * from: the sentence that points at the form below is dropped where that form is not rendered.
+ */
+const NO_RESPONSES_HEADING = "No responses yet";
+const NO_RESPONSES_EXPLANATION =
+  "No one has answered this challenge yet. Either the developer whose listing it is or another buyer can answer it, in the form below.";
+const NO_RESPONSES_EXPLANATION_WITHOUT_FORM =
+  "No one has answered this challenge yet. Either the developer whose listing it is or another buyer can answer it.";
 
 /** The sentence beside the response field when nothing was entered. */
 const BLANK_RESPONSE_SENTENCE = "Enter your response to this challenge.";
@@ -120,14 +155,23 @@ interface ListingChoice {
 /**
  * What a failed response renders as: the sentence beside the field when the response itself is what
  * failed (`null` when it is not), the sentence the status region announces, and whether the state
- * offers the way back to the whole board.
+ * offers the way back to the board.
  */
 interface ResponseFailureReading {
   /** The sentence tied to the response field by `aria-describedby`, or `null`. */
   readonly fieldMessage: string | null;
   /** The sentence the form's polite status region announces. */
   readonly statusMessage: string;
-  /** Whether the selected challenge is gone, so the explanation also offers the whole board. */
+  /**
+   * The notice variant the status region renders: the error triple for a refusal of what was sent,
+   * and the warning triple for the write rate limit, which is a wait-and-send-again state rather
+   * than a failure of anything the reader can correct.
+   */
+  readonly variant: "notice--error" | "notice--warning";
+  /**
+   * Whether the selected challenge was not on the page of the board that was read, so the
+   * explanation also offers the board.
+   */
   readonly offersBoard: boolean;
 }
 
@@ -147,6 +191,22 @@ function readQuestion(value: unknown): string {
 function readResponseBody(value: unknown): string {
   const body = readString(value);
   return body.trim() === "" ? "A response whose text the board does not record" : body;
+}
+
+/**
+ * The account that answered a challenge, named by the handle the demo-account switcher lists its
+ * identifier under.
+ *
+ * The handle is the whole of the attribution: it is one of the six synthetic demo accounts, so an
+ * answer names which demonstration account wrote it and says nothing further about who that was.
+ * Either the buyer who asked the question or the listing's developer may answer, so who answered is
+ * read from the response rather than assumed from the challenge. An identifier the lookup does not
+ * know — an account the switcher no longer lists, or a response written by hand — states that much
+ * instead of putting an opaque identifier in front of a reader.
+ */
+function describeResponder(accountId: unknown): string {
+  const account = findDemoAccount(readString(accountId));
+  return account === null ? RESPONDER_UNLISTED_LABEL : account.handle;
 }
 
 /**
@@ -173,6 +233,22 @@ function describeResponseCount(count: number): string {
     return "1 response";
   }
   return `${count} responses`;
+}
+
+/**
+ * What the board's live region says once a read has settled, in the words the sibling boards use.
+ *
+ * The count is the one fact a reader cannot see from the list itself when it is long, and it is what
+ * tells a reader who just asked a challenge that the board has taken it.
+ */
+function describeLoadedBoard(count: number): string {
+  if (count === 0) {
+    return "The board is loaded and holds no challenge yet.";
+  }
+  if (count === 1) {
+    return "The board is loaded with one challenge on it.";
+  }
+  return `The board is loaded with ${count} challenges on it.`;
 }
 
 /** The one line a picker option shows: the listing's title and the handle of its developer. */
@@ -239,6 +315,7 @@ const BLANK_RESPONSE_FAILURE: WriteFailureFacts = Object.freeze({
 const BLANK_RESPONSE_READING: ResponseFailureReading = Object.freeze({
   fieldMessage: BLANK_RESPONSE_SENTENCE,
   statusMessage: "The response was not posted, and no request was sent.",
+  variant: "notice--error",
   offersBoard: false,
 });
 
@@ -246,6 +323,7 @@ const BLANK_RESPONSE_READING: ResponseFailureReading = Object.freeze({
 const REFUSED_RESPONSE_READING: ResponseFailureReading = Object.freeze({
   fieldMessage: REFUSED_RESPONSE_SENTENCE,
   statusMessage: REFUSED_RESPONSE_STATUS,
+  variant: "notice--error",
   offersBoard: false,
 });
 
@@ -262,7 +340,12 @@ function describeRespondFailure(error: unknown): ResponseFailureReading | null {
   }
   const failure = readWriteFailure(error);
   if (failure === null) {
-    return { fieldMessage: null, statusMessage: UNREADABLE_FAILURE_STATUS, offersBoard: false };
+    return {
+      fieldMessage: null,
+      statusMessage: UNREADABLE_FAILURE_STATUS,
+      variant: "notice--error",
+      offersBoard: false,
+    };
   }
   if (failure.code === LOCAL_BLANK_RESPONSE_CODE) {
     return BLANK_RESPONSE_READING;
@@ -274,6 +357,7 @@ function describeRespondFailure(error: unknown): ResponseFailureReading | null {
       return {
         fieldMessage: null,
         statusMessage: `No demo account is selected, so the response was not posted. Choose one in the demo account switcher in the header: a selection is a synthetic role for this demonstration, not a credential, which is why the banner carries the label "${DEMO_AUTHENTICATION_LABEL}". The text you typed has been kept.`,
+        variant: "notice--error",
         offersBoard: false,
       };
     case 403:
@@ -285,6 +369,7 @@ function describeRespondFailure(error: unknown): ResponseFailureReading | null {
         fieldMessage: null,
         statusMessage:
           "Only a buyer or the listing's developer may answer a challenge, and the selected demo account is neither, so the response was not posted. Switch to a buyer or a developer in the demo account switcher and post it again. The text you typed has been kept.",
+        variant: "notice--error",
         offersBoard: false,
       };
     case 404:
@@ -292,18 +377,21 @@ function describeRespondFailure(error: unknown): ResponseFailureReading | null {
         fieldMessage: null,
         statusMessage:
           "This challenge is no longer on the board, so the response was not posted. What you typed is still in the field, and it can be posted on a challenge that is still open.",
+        variant: "notice--error",
         offersBoard: true,
       };
     case 429:
       return {
         fieldMessage: null,
         statusMessage: `The write rate limit has been reached: ${WRITE_RATE_LIMIT_MAX} writes a minute is the whole allowance for a demo client. ${describeRetryWait(failure.retryAfterSeconds, "then post the response again.")} The text you typed has been kept.`,
+        variant: "notice--warning",
         offersBoard: false,
       };
     default:
       return {
         fieldMessage: null,
         statusMessage: `The response was not posted. ${withFullStop(failure.message)} The text you typed has been kept.`,
+        variant: "notice--error",
         offersBoard: false,
       };
   }
@@ -436,11 +524,11 @@ function ResponseForm(props: ResponseFormProps): JSX.Element {
           </div>
         ) : null}
         {reading === null ? null : (
-          <div className="notice notice--error">
+          <div className={`notice ${reading.variant}`}>
             <p>{reading.statusMessage}</p>
             {reading.offersBoard ? (
               <p>
-                <Link to={CHALLENGES_PATH}>Read the whole board</Link>
+                <Link to={CHALLENGES_PATH}>Read the board</Link>
               </p>
             ) : null}
           </div>
@@ -450,6 +538,38 @@ function ResponseForm(props: ResponseFormProps): JSX.Element {
   );
 }
 
+/** The heading of the state shown in place of the create form, for an account that cannot ask. */
+const ASK_ROLE_HEADING = "Asking a challenge needs a buyer account";
+
+/** The heading of the state shown in place of the answer form, for an account that cannot answer. */
+const ANSWER_ROLE_HEADING = "Answering a challenge needs a buyer or developer account";
+
+/**
+ * Why the create form is not offered the selected account: which account is selected, which role the
+ * write needs and where to choose one. A challenge is the buyer's to ask — the service refuses a
+ * developer, a contributor and an operator with `403` — so the form is withheld from them rather than
+ * offered and then refused, which is how `/developer` treats a half its account holds no role for.
+ */
+function askRoleExplanation(account: DemoAccount): string {
+  return (
+    `The selected demo account is ${account.display_label}, whose role is ${account.role}. Asking a ` +
+    "challenge is the buyer's write, so the form is not shown for this account. Choose a buyer " +
+    "account in the demo-account switcher in the page header to ask one."
+  );
+}
+
+/**
+ * Why the answer form is not offered the selected account. The write accepts two roles — the buyer
+ * who asked the question and the listing's developer — so the sentence names both, and a contributor
+ * or an operator holds neither.
+ */
+function answerRoleExplanation(account: DemoAccount): string {
+  return (
+    `The selected demo account is ${account.display_label}, whose role is ${account.role}. An answer ` +
+    "is the buyer's or the listing's developer's write, so the form is not shown for this account. " +
+    "Choose a buyer or a developer account in the demo-account switcher in the page header to answer."
+  );
+}
 
 /**
  * The public challenges board, the challenge a reader selected, and the answers it has collected.
@@ -464,6 +584,18 @@ export function Challenges(): JSX.Element {
   const idPrefix = useId();
   const [searchParams] = useSearchParams();
   const selectedChallengeId = readSelectedChallengeId(searchParams);
+
+  // The selected demo account, resolved on every render: the switcher in the page header writes the
+  // selection and the shell re-renders this route from it, so a render-time read follows it. Each of
+  // the two writes below belongs to a role or two alone, so an account holding neither is not offered
+  // the surface rather than offered a form whose write the service refuses. No account selected keeps
+  // both surfaces exactly as they were: the write's own explanation answers for the missing account.
+  const selectedAccount = findDemoAccount(getSelectedDemoAccountId());
+  const canAskChallenge = selectedAccount === null || selectedAccount.role === "buyer";
+  const canAnswerChallenge =
+    selectedAccount === null ||
+    selectedAccount.role === "buyer" ||
+    selectedAccount.role === "developer";
 
   const [challenges, setChallenges] = useState<readonly ChallengeListItem[]>([]);
   const [isBoardLoading, setIsBoardLoading] = useState<boolean>(true);
@@ -500,13 +632,26 @@ export function Challenges(): JSX.Element {
         null);
   const selectedRowId = selectedChallenge === null ? "" : readString(selectedChallenge.id);
 
-  // A selection the board does not hold is its own state, but only once the board has answered:
-  // during a read, and after a read that failed, the board has said nothing about the selection.
+  // A selection the page of the board does not hold is its own state, but only once the board has
+  // answered: during a read, and after a read that failed, the board has said nothing about it.
   const isSelectionUnavailable =
     selectedChallengeId !== null &&
     !isBoardLoading &&
     boardError === null &&
     selectedChallenge === null;
+
+  // The sentence the board's status region carries, or `null` when it should carry none.
+  //
+  // A read that failed carries none: the error notice beside the region is the explanation there,
+  // and a count of a board the read did not produce would contradict it. While a read is in flight
+  // the region says so, and once it has settled it states the count that tells a reader — who has
+  // just asked a challenge, or who cannot count a long list at a glance — what the board now holds.
+  const boardStatus =
+    boardError !== null
+      ? null
+      : isBoardLoading
+        ? LOADING_BOARD_MESSAGE
+        : describeLoadedBoard(challenges.length);
 
   // The board read. The read counter is the only input that re-runs it, which is what makes a
   // re-read happen after a write instead of a row being patched in place. The cancelled flag
@@ -582,10 +727,12 @@ export function Challenges(): JSX.Element {
     return choice === undefined ? "the listing this challenge is about" : choice.label;
   };
 
-  // The empty board offers the one action that changes it: the form above, or the listings to pick
-  // a challenge from when nothing is published yet.
+  // The empty board offers the one action that changes it: the form above, or the listings to pick a
+  // challenge from when nothing is published yet. An account that cannot ask is offered the form
+  // nowhere on this page, so for it the action is the link to the listings rather than a button that
+  // would move focus to a listing picker that is not rendered.
   const emptyBoardAction =
-    chosenListingId === "" ? (
+    chosenListingId === "" || !canAskChallenge ? (
       <Link to={LISTING_PATH_PREFIX}>Browse the listings</Link>
     ) : (
       <button type="button" className="button button--secondary" onClick={focusListingPicker}>
@@ -611,7 +758,13 @@ export function Challenges(): JSX.Element {
 
       <section aria-labelledby={`${idPrefix}-ask-heading`}>
         <h2 id={`${idPrefix}-ask-heading`}>Ask a challenge</h2>
-        {isChoicesLoading ? (
+        {selectedAccount !== null && !canAskChallenge ? (
+          <EmptyState
+            heading={ASK_ROLE_HEADING}
+            headingLevel={3}
+            explanation={askRoleExplanation(selectedAccount)}
+          />
+        ) : isChoicesLoading ? (
           <p className="field__hint">Loading the listings a challenge can be attached to…</p>
         ) : choicesError !== null ? (
           <ErrorNotice error={choicesError} onRetry={reloadListingChoices} />
@@ -660,7 +813,7 @@ export function Challenges(): JSX.Element {
             changes, which is what lets a later read — after a post, or after a failed read was
             retried — announce that it is loading rather than announce itself with its content. */}
         <div className="status-region" role="status" aria-live="polite">
-          {isBoardLoading ? <p>Loading the challenges board…</p> : null}
+          {boardStatus === null ? null : <p>{boardStatus}</p>}
         </div>
 
         {boardError === null ? null : <ErrorNotice error={boardError} onRetry={reloadBoard} />}
@@ -669,7 +822,9 @@ export function Challenges(): JSX.Element {
           <EmptyState
             heading="No challenges yet"
             headingLevel={2}
-            explanation="No one has asked a challenge yet. A challenge is a public question about a listing's claims, and the first one can be asked from the form above."
+            explanation={
+              canAskChallenge ? EMPTY_BOARD_EXPLANATION : EMPTY_BOARD_EXPLANATION_WITHOUT_FORM
+            }
             action={emptyBoardAction}
           />
         )}
@@ -744,9 +899,13 @@ export function Challenges(): JSX.Element {
 
             {selectedChallenge.responses.length === 0 ? (
               <EmptyState
-                heading="No responses yet"
+                heading={NO_RESPONSES_HEADING}
                 headingLevel={3}
-                explanation="No one has answered this challenge yet. Either the developer whose listing it is or another buyer can answer it, in the form below."
+                explanation={
+                  canAnswerChallenge
+                    ? NO_RESPONSES_EXPLANATION
+                    : NO_RESPONSES_EXPLANATION_WITHOUT_FORM
+                }
               />
             ) : (
               <>
@@ -761,7 +920,9 @@ export function Challenges(): JSX.Element {
                       >
                         <p>{readResponseBody(response.body)}</p>
                         <p>
-                          Answered <Timestamp value={response.created_at} />.
+                          Answered by{" "}
+                          <strong>{describeResponder(response.account_id)}</strong>,{" "}
+                          <Timestamp value={response.created_at} />.
                         </p>
                       </li>
                     );
@@ -770,26 +931,36 @@ export function Challenges(): JSX.Element {
               </>
             )}
 
-            <h3>Answer this challenge</h3>
-            <p>
-              Either the buyer who asked the question or the developer whose listing it is may
-              answer it. An answer is public and stays exactly as written, and answering moves the
-              challenge from open to responded.
-            </p>
-            <ResponseForm
-              key={selectedRowId === "" ? "selected-challenge" : selectedRowId}
-              challengeId={selectedRowId}
-              onResponded={reloadBoard}
-            />
+            {selectedAccount !== null && !canAnswerChallenge ? (
+              <EmptyState
+                heading={ANSWER_ROLE_HEADING}
+                headingLevel={3}
+                explanation={answerRoleExplanation(selectedAccount)}
+              />
+            ) : (
+              <>
+                <h3>Answer this challenge</h3>
+                <p>
+                  Either the buyer who asked the question or the developer whose listing it is may
+                  answer it. An answer is public and stays exactly as written, and answering moves the
+                  challenge from open to responded.
+                </p>
+                <ResponseForm
+                  key={selectedRowId === "" ? "selected-challenge" : selectedRowId}
+                  challengeId={selectedRowId}
+                  onResponded={reloadBoard}
+                />
+              </>
+            )}
           </>
         )}
 
         {isSelectionUnavailable ? (
           <EmptyState
-            heading="That challenge is not on the board"
+            heading="That challenge is not on this page of the board"
             headingLevel={3}
-            explanation="The address names a challenge this board does not list, so there is nothing to open here. It may have left the board since the link was copied."
-            action={<Link to={CHALLENGES_PATH}>Read the whole board</Link>}
+            explanation="The address names a challenge the page of the board read here does not carry, so there is nothing to open. The board is read one page at a time, most recent first: the challenge may be on an earlier page of the board, or it may have left the board since the link was copied."
+            action={<Link to={CHALLENGES_PATH}>Read the board</Link>}
           />
         ) : null}
       </section>

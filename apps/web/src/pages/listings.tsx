@@ -85,6 +85,7 @@ import { ListingCard } from "../components/listing-card";
 import { SearchFilters } from "../components/search-filters";
 import type { FilterOption } from "../components/search-filters";
 import { SponsoredLabel } from "../components/sponsored-label";
+import { describePricingModel } from "../labels";
 
 /** The route this page owns, and the address its clearing and recovering links point at. */
 const LISTINGS_PATH = "/listings";
@@ -468,13 +469,18 @@ function deriveListingOptions(items: readonly ListingSummary[]): {
 
 /**
  * The standard filter's options, taken from the standards catalogue because a listing's search result
- * carries a standard version identifier and nothing that names it.
+ * carries a standard version label and nothing else that names it.
  *
- * The value is the version's own identifier — what a report states and what the `standard` query
- * parameter narrows on — and the label is the standard's code, which for this release already carries
- * the version in it. The version label is added only when the code does not already contain it, so the
- * seeded `SGI-SO-1.0.0` reads as itself while a later version of it stays distinguishable. A version
- * row whose identifier is absent cannot be filtered on and is left out.
+ * The value is the version's own label, which is the form the `standard` query parameter narrows on:
+ * a report's payload states it, the listings page offers it, and the service hands it to the registry
+ * that owns both of a version's spellings to resolve it to a row. The row identifier is a second
+ * spelling of the same version that this parameter does not accept, so offering it as an option value
+ * would submit a filter the service refuses on every use.
+ *
+ * The label is the standard's code, which for this release already carries the version in it. The
+ * version label is added only when the code does not already contain it, so the seeded `SGI-SO-1.0.0`
+ * reads as itself while a later version of it stays distinguishable. A version row whose label is
+ * absent cannot be filtered on and is left out.
  */
 function standardVersionOptions(standards: readonly StandardListItem[]): readonly FilterOption[] {
   const options = new Map<string, string>();
@@ -482,20 +488,19 @@ function standardVersionOptions(standards: readonly StandardListItem[]): readonl
   standards.forEach((standard: StandardListItem): void => {
     const code = standard.code.trim();
     standard.versions.forEach((version): void => {
-      const value = version.id.trim();
-      if (value === "" || options.has(value)) {
+      const versionLabel = version.version_label.trim();
+      if (versionLabel === "" || options.has(versionLabel)) {
         return;
       }
-      const versionLabel = version.version_label.trim();
       let label: string;
       if (code === "") {
-        label = versionLabel === "" ? value : versionLabel;
-      } else if (versionLabel === "" || code.includes(versionLabel)) {
+        label = versionLabel;
+      } else if (code.includes(versionLabel)) {
         label = code;
       } else {
         label = `${code} (${versionLabel})`;
       }
-      options.set(value, label);
+      options.set(versionLabel, label);
     });
   });
 
@@ -522,7 +527,11 @@ function activeFiltersOf(
     filters.push({ name: "license", value: optionLabel(licenses, query.license) });
   }
   if (query.model !== undefined) {
-    filters.push({ name: "pricing model", value: query.model });
+    // The model is the one closed vocabulary this page does not derive an option list for — the
+    // contract itself fixes its four values — so it is named through the one formatter that
+    // presents it, exactly as the filters above are named through the options they offer. The
+    // address keeps the value the contract carries; the sentence names what the reader chose.
+    filters.push({ name: "pricing model", value: describePricingModel(query.model) });
   }
   if (query.standard !== undefined) {
     filters.push({ name: "standard version", value: optionLabel(standards, query.standard) });
@@ -558,6 +567,11 @@ function lastPageNumber(total: number): number {
   return total <= 0 ? 1 : Math.ceil(total / LISTING_PAGE_SIZE);
 }
 
+/** Where the results stop, as the paging controls and the past-the-end state phrase it. */
+function pastLastPageReason(lastPage: number): string {
+  return `the results stop at page ${String(lastPage)}`;
+}
+
 /**
  * What the results region states about the page it is showing.
  *
@@ -571,7 +585,7 @@ function describeResults(page: number, total: number, shown: number, lastPage: n
     if (total === 0) {
       return "No listings match the filters the address carries.";
     }
-    return `No results on page ${String(page)}; the results stop at page ${String(lastPage)}.`;
+    return `No results on page ${String(page)}; ${pastLastPageReason(lastPage)}.`;
   }
   if (total <= 1) {
     return `Showing the one result, on page 1 of 1. Each page holds up to ${String(LISTING_PAGE_SIZE)} results.`;
@@ -605,28 +619,50 @@ function pathWithQuery(params: URLSearchParams): string {
   return serialized === "" ? LISTINGS_PATH : `${LISTINGS_PATH}?${serialized}`;
 }
 
-/** The paging controls, each either moving or stating why it cannot. */
+/**
+ * The paging controls, each either moving or stating why it cannot.
+ *
+ * Two questions decide what a control says, and they are not the same question: whether the reader
+ * stands on the last page, and whether they have gone past it. A reader past the end still has a page
+ * with results to return to, so Last stays a real link back to it and Previous steps back to it as
+ * well rather than to the empty page in between — which is the page the past-the-end empty state's own
+ * link already offers. Only a reader standing on the last page is told that it is the last one.
+ */
 function pagerControls(page: number, lastPage: number): readonly PagerControl[] {
   const atFirstPage = page <= 1;
-  const atLastPage = page >= lastPage;
+  const onLastPage = page === lastPage;
+  const pastLastPage = page > lastPage;
   const lastPageReason = lastPage === 1 ? SINGLE_PAGE_REASON : LAST_PAGE_REASON;
+
+  // Next cannot move once the reader has reached the last page or gone beyond it, and which of the two
+  // it is decides the reason it states: on the last page the results end there, while past it they
+  // stopped at a page the reader has already left behind.
+  let nextBlockedReason: string | null = null;
+  if (onLastPage) {
+    nextBlockedReason = lastPageReason;
+  } else if (pastLastPage) {
+    nextBlockedReason = pastLastPageReason(lastPage);
+  }
 
   return [
     { label: FIRST_PAGE_LABEL, targetPage: 1, blockedReason: atFirstPage ? FIRST_PAGE_REASON : null },
     {
       label: PREVIOUS_PAGE_LABEL,
-      targetPage: Math.max(1, page - 1),
+      // The greater lower bound of the last page and the page before this one: from two or more pages
+      // past the end, Previous lands on the last page that holds results rather than walking the reader
+      // back through the empty pages in between.
+      targetPage: Math.max(1, Math.min(lastPage, page - 1)),
       blockedReason: atFirstPage ? FIRST_PAGE_REASON : null,
     },
     {
       label: NEXT_PAGE_LABEL,
       targetPage: Math.min(lastPage, page + 1),
-      blockedReason: atLastPage ? lastPageReason : null,
+      blockedReason: nextBlockedReason,
     },
     {
       label: LAST_PAGE_LABEL,
       targetPage: lastPage,
-      blockedReason: atLastPage ? lastPageReason : null,
+      blockedReason: onLastPage ? lastPageReason : null,
     },
   ];
 }
@@ -844,7 +880,13 @@ interface ResultsProps {
 
 /**
  * The settled results: one card per result, in the order the API returned them, then the paging
- * controls when there is more than one page to move between.
+ * controls, which belong to every settled result set that holds something.
+ *
+ * The pager is not tied to a set with more than one page: the `page` action is the page's own way of
+ * moving through its results, so a single-page set states there that its results fit on one page
+ * rather than leaving a reader to guess whether paging exists at all. An empty result set renders no
+ * pager — there is no page of it to move to, and the state below already says what the address asked
+ * for.
  *
  * The page's results are deliberately not re-ordered here. The ordering the search contract guarantees
  * is the server's, stated by the `sort` parameter, and a client that sorted one page of it would be
@@ -852,9 +894,7 @@ interface ResultsProps {
  */
 function renderResults(props: ResultsProps): JSX.Element {
   const pager: JSX.Element | null =
-    props.lastPage > 1 || props.page > 1
-      ? renderPager(props.page, props.lastPage, props.searchParams)
-      : null;
+    props.total > 0 ? renderPager(props.page, props.lastPage, props.searchParams) : null;
 
   if (props.items.length === 0) {
     return (

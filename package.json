@@ -20,7 +20,7 @@
     "dev": "npm run dev --workspace @adem/web",
     "seed": "npm run seed --workspace @adem/api",
     "test": "npm run test:unit && npm run test:integration && npm run test:scan",
-    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:unit": "vitest run --config vitest.unit.config.ts --exclude scripts/scan-exclusions.test.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:scan": "vitest run --config vitest.unit.config.ts scripts/scan-exclusions.test.ts",
     "test:e2e": "playwright test --project=loop",

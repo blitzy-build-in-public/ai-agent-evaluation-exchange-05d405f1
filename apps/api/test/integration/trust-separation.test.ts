@@ -186,14 +186,25 @@ const badgeListingIds: string[] = [];
 /** Each badge-bearing listing's canonical evidence block, captured before anything varies. */
 const evidenceBlocks = new Map<string, string>();
 
-/** The canonical organic result payload, captured before anything varies. */
-let organicPayload = "";
+/**
+ * The canonical organic result payload, captured before anything varies and absent until the capture
+ * case records it: an absent value can only mean that case did not run, so a later case reads it
+ * through {@link recorded} rather than against an initialiser nothing recorded.
+ */
+let organicPayload: string | undefined;
 
-/** The identifiers of the organic result page, in the order the page returned them. */
-let organicOrder: readonly string[] = [];
+/**
+ * The identifiers of the organic result page, in the order the page returned them, and absent until
+ * the capture case records them: an absent value can only mean that case did not run.
+ */
+let organicOrder: readonly string[] | undefined;
 
-/** How many items the sponsored collection held before anything was added. */
-let sponsoredItemCount = 0;
+/**
+ * How many items the sponsored collection held before anything was added, and absent until the
+ * capture case records it: an absent value can only mean that case did not run, and stays distinct
+ * from a legitimately captured count of `0`.
+ */
+let sponsoredItemCount: number | undefined;
 
 /** The identifiers of the slots this suite added. */
 const addedSlotIds: string[] = [];
@@ -253,6 +264,25 @@ function capturedFrom(before: ReadonlyMap<string, string>, key: string, what: st
 
   if (value === undefined) {
     throw new Error(`this suite captured no ${what} for "${key}".`);
+  }
+
+  return value;
+}
+
+/**
+ * The value the capture case recorded, refusing an absent one and saying why it is absent — which can
+ * only be that the capture case did not run, and is worth stating plainly rather than leaving a later
+ * case to fail against an initialiser nothing recorded.
+ *
+ * Absence is held apart from every recorded value deliberately: a recorded count may be `0`, a
+ * recorded ordering may be empty, and a recorded payload is a JSON text rather than `undefined`, so
+ * the absent state can never be mistaken for something the capture case observed. It is
+ * {@link capturedFrom}'s counterpart for the three values that travel alone rather than in a map
+ * keyed by a report or a listing identifier.
+ */
+function recorded<T>(value: T | undefined, what: string): T {
+  if (value === undefined) {
+    throw new Error(`this suite captured no ${what}, so the capture case did not run.`);
   }
 
   return value;
@@ -595,7 +625,9 @@ describe("trust separation", () => {
         expect(ids.has(id)).toBe(true);
       }
 
-      expect(slots.items.length).toBe(sponsoredItemCount + ADDED_SLOTS.length);
+      expect(slots.items.length).toBe(
+        recorded(sponsoredItemCount, "sponsored item count") + ADDED_SLOTS.length,
+      );
 
       for (const item of slots.items) {
         expect(
@@ -650,8 +682,10 @@ describe("trust separation", () => {
       expect(
         canonicalText(page),
         "the organic results changed once sponsorship and fee data varied",
-      ).toBe(organicPayload);
-      expect(page.items.map((item) => item.id)).toEqual(organicOrder);
+      ).toBe(recorded(organicPayload, "organic result payload"));
+      expect(page.items.map((item) => item.id)).toEqual(
+        recorded(organicOrder, "organic result ordering"),
+      );
     });
   });
 

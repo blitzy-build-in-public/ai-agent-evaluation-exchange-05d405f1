@@ -15,7 +15,9 @@
  * exactly as they were, which is the property the module holds, and its atomicity case stands a
  * temporary refusal of its own in front of the delivered table rather than a second schema beside it.
  * The proof that no route rewrites an append-only row belongs to the API's integration suite in
- * `apps/api/test/integration/`, which owns the routes.
+ * `apps/api/test/integration/`, which owns the routes. One case records the statements the module
+ * prepares while it answers a refund, which is how the transaction row it decides on is pinned as read
+ * once per request rather than once per question.
  *
  * No HTTP server, no database file and no per-package runner configuration: the file is discovered by
  * the root unit configuration's `packages/ * /src/**` glob.
@@ -819,6 +821,34 @@ describe('createRefund — the append it holds to', () => {
     expect(countRows(db, 'transactions')).toBe(transactionsBefore.length);
     expect(countRows(db, 'refunds')).toBe(refundsBefore.length + 1);
     expect(countRows(db, 'ledger_entries')).toBe(ledgerBefore.length + 2);
+  });
+
+  it('reads the transaction row once, deciding the eligibility rule on the row it read', () => {
+    // The statements the module prepares while it answers one refund, recorded the way
+    // `packages/sgi-core/src/reports/report-repository.test.ts` records its own: `prepare` is replaced
+    // with an own property on this case's connection, so what is recorded is what the module asked for.
+    const prepared: string[] = [];
+    const original = db.prepare.bind(db) as unknown as (source: string) => unknown;
+    (db as unknown as { prepare: (source: string) => unknown }).prepare = (source: string) => {
+      prepared.push(source.replace(/\s+/g, ' ').trim());
+      return original(source);
+    };
+
+    requireSuccess(createRefund(db, refundInput(PARTIAL_REFUND_MINOR_UNITS)));
+
+    // One read of `transactions` and one of `refunds` per request: the row is read once and the net
+    // remaining is computed from that same row, while the sum is still taken from the refund rows
+    // because no balance is stored anywhere. A module that asked `computeNetRemaining` for the figure
+    // would read the row a second time, which is what this case pins.
+    expect(prepared.filter((source) => /FROM transactions/.test(source))).toHaveLength(1);
+    expect(prepared.filter((source) => /FROM refunds/.test(source))).toHaveLength(1);
+
+    // And the figure those two reads produced is the one the eligibility refusals are decided on: the
+    // 4000 just refunded leaves 6000 of the 10000 charge, so a 10000 refund is still refused as larger
+    // than what remains. One read of the row therefore cannot have changed what the call answers.
+    const refusal = requireRefusal(createRefund(db, refundInput(TRANSACTION_AMOUNT_MINOR_UNITS)));
+
+    expect(refusal.reason).toBe('exceeds_net_remaining');
   });
 
   it('appends nothing at all when a reversal cannot be written', () => {

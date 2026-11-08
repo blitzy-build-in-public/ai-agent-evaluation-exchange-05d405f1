@@ -252,9 +252,9 @@ the guard has to live somewhere:
 
 ## 8. The ordered migration files
 
-The schema arrives in twelve files, applied in filename order, and they are additive: an applied file
-is never edited, which is why the integrality guard on the amount columns is `0012` rather than a
-change to `0008`.
+The schema arrives in thirteen files, applied in filename order, and they are additive: an applied
+file is never edited, which is why the integrality guard on the amount columns is `0012` rather
+than a change to `0008`.
 
 | File | What it produces |
 |---|---|
@@ -269,31 +269,85 @@ change to `0008`.
 | `0009_sponsored_slots_and_audit_events.sql` | `sponsored_slots` and `audit_events`. |
 | `0010_append_only_triggers.sql` | Eighteen triggers — a `BEFORE UPDATE` and a `BEFORE DELETE` running `RAISE(ABORT)` on each of the nine append-only tables of section 4. |
 | `0011_indexes.sql` | The read-path indexes listed below, and nothing else: no table, no trigger, no row. |
-| `0012_amount_integer_guards.sql` | The `typeof(...) = 'integer'` guard on the four amount columns, which SQLite cannot add to an existing table, so the file rebuilds `transactions`, `refunds`, `ledger_entries` and `sponsored_slots` with the guard in place, carrying every rowid across in its original order, recreating the two indexes of `0011` that stood on the rebuilt tables and the six triggers of `0010` that guarded them. A stored value the guards cannot admit makes the copy fail and the whole file roll back: an amount already written is never rewritten, so such a database refuses to apply this file rather than having a journalled amount silently rounded or dropped. |
+| `0012_amount_integer_guards.sql` | The `typeof(...) = 'integer'` guard on the four amount columns, which SQLite cannot add to an existing table, so the file rebuilds `transactions`, `refunds`, `ledger_entries` and `sponsored_slots` with the guard in place, carrying every rowid across in its original order, recreating the two indexes those tables carry afterwards — `idx_refunds_transaction_id` verbatim, and `idx_ledger_entries_ledger` on the rebuilt `ledger_entries`, the index the ledger reads run on today — and recreating the six triggers of `0010` that guarded them. A stored value the guards cannot admit makes the copy fail and the whole file roll back: an amount already written is never rewritten, so such a database refuses to apply this file rather than having a journalled amount silently rounded or dropped. |
+| `0013_newest_row_and_filter_indexes.sql` | The five read-path indexes `0011` does not declare, and nothing else: `listing_claims (listing_version_id)`, `listing_versions (listing_id, created_at)`, `evaluation_reports (candidate_version_id, created_at)`, `listings (slug)` and `challenge_responses (challenge_id)`. |
 
-The read-path indexes `0011` declares, by the read each one serves:
+The read-path indexes `0011` declares, and the ledger index `0012` creates on the table it rebuilds,
+with the read each one serves:
 
 | Index | The read it serves |
 |---|---|
-| `idx_listings_status` | Every listing read — search and compare — filters on `status`, because a hidden listing leaves both. |
+| `idx_listings_status` | No read in this release: the only status predicate the code writes is an inequality, `l.status <> 'hidden'` in `apps/api/src/routes/listings.ts`, which no B-tree index serves, and the search's row source scans `listings`. Kept as declared headroom. |
 | `idx_listings_category_id`, `idx_listings_pricing_model`, `idx_listings_license_code` | The three closed filters the search row names beside the free-text `q`. Each is selective on its own, so each gets its own single-column index rather than a composite a filter subset could not use. |
-| `idx_evaluation_reports_standard_version_id` | The search row's standard filter: whether a listing has a report for a standard version. |
-| `idx_evaluation_reports_candidate_version_id` (`candidate_version_id`, `standard_version_id`, `created_at`) | Two reads in that column order: the listing summary's latest-report join for a candidate version, and the retest lookup that derives `prior_report_id` from the newest existing report for the submitted candidate version and standard version. |
-| `idx_ledger_entries_ledger` | The three operator-only ledger reads, each filtering on the discriminator and reading its rows in the order they were appended — `rowid` order, which is why the index is on the discriminator alone. |
+| `idx_evaluation_reports_standard_version_id` | No read in this release either: the standard filter is a predicate on the derived column `report_standard_version_row_id`, and the search plan drives from `listings` and reaches a report by candidate version, so this index answers neither that filter nor any other read. Kept as declared headroom. |
+| `idx_evaluation_reports_candidate_version_id` (`candidate_version_id`, `standard_version_id`, `created_at`) | One read in that column order: the retest lookup that derives `prior_report_id` from the newest existing report for the submitted candidate version and standard version, both keys equated. The listing summary's latest-report join for a candidate version reads the newest row by `created_at`, which is this index's third key, so it is served by `idx_evaluation_reports_candidate_version_created_at` (`0013`) instead — see the table below, which names every read that one answers. |
+| `idx_ledger_entries_ledger` | The three operator-only ledger reads, each filtering on the discriminator and reading its rows in the order they were appended — `rowid` order, which is why the index is on the discriminator alone. The index on the table today is the one `0012` recreates there when it rebuilds `ledger_entries`; the `(ledger, created_at)` spelling `0011` itself declares was dropped with the table that carried it. |
 | `idx_refunds_transaction_id` | The net-remaining computation behind the refund contract's `409` and `422`: a transaction's amount minus the sum of its refunds, read from the refund rows because no balance is stored beside them. |
 | `idx_audit_events_created_at` | The operator audit feed, read in insertion order. |
 | `idx_governance_events_subject` (`subject_type`, `subject_id`) | Governance events read with the subject they concern, so a proposal's review trail and an appeal's ruling trail are visible from the log alone. |
+
+`0013_newest_row_and_filter_indexes.sql` declares five more, by the read each one serves:
+
+| Index | The read it serves |
+|---|---|
+| `idx_listing_claims_listing_version_id` | The limitation subquery of the listing row source, which the search and the detail read both project, and the claims of one listing read for the detail page and for compare. Without it each of those reads scanned the whole `listing_claims` table. |
+| `idx_listing_versions_listing_id_created_at` (`listing_id`, `created_at`) | Every "newest version" read: the listing row source's newest-version join, the compare read's newest-version probe and the detail read's version history, which orders one listing's versions by `created_at DESC, rowid DESC`. |
+| `idx_evaluation_reports_candidate_version_created_at` (`candidate_version_id`, `created_at`) | Every "newest report" read: the listing row source's newest-report join, the detail read's latest-report lookup and the compare read's latest-report statement. `idx_evaluation_reports_candidate_version_id` cannot serve them — `created_at` is its third key while only the first is equated — and it stays for the retest lookup, which equates the first two keys. |
+| `idx_listings_slug` | The slug walk of `POST /listings`: `freeSlug` asks whether a token is taken once per suffix it tries, inside the create-listing transaction. A slug is deliberately not UNIQUE, so no other index covers the column. |
+| `idx_challenge_responses_challenge_id` | The challenge board's batched response read, which selects the responses of the ids the board returned on every `GET /challenges`. |
 
 Three indexes stand outside `0011` and are deliberately not repeated there: `idx_accounts_role`
 (`0001`) and the two inquiry indexes (`0003`), plus the three UNIQUE constraints of `0002`, `0005`
 and `0006` that already provide the indexes for `listing_versions` `(listing_id, version_string)`,
 `standard_versions` `(standard_id, version_label)` and `report_case_results` `(report_id, case_id)`.
+Those three serve no read in this release either, and are kept as declared headroom: `accounts` is
+read by `id` and by `handle`, with a role compared in application code rather than in SQL, and
+`inquiries` is written by `POST /inquiries` and read by nothing, so neither index answers a query.
 Read paths left unindexed on purpose, so no later change adds an index that cannot be used: the
 free-text `q` match on `listings.title` and `listings.summary` is a `LIKE '%…%'` comparison no B-tree
 index can serve; `GET /compare` resolves each of its two to four ids by primary key; the challenge and
-thread board reads document no filter and no order to serve; `GET /evaluations/{id}` reads its report
-by primary key, with its per-case evidence served by the `(report_id, case_id)` UNIQUE index; and the
+thread board reads document no filter and order by their instant with an identifier tie-break, an
+order a scan serves and for which no index is added; `GET /evaluations/{id}` reads its report by
+primary key, with its per-case evidence served by the `(report_id, case_id)` UNIQUE index; and the
 governance event log read whole, or narrowed by `event_type` alone, scans `governance_events`.
+
+### Bounded collection reads
+
+Eight reads answer with a collection that grows as the product is used — the operator audit feed
+`GET /audit-events`, the three ledger reads `GET /ledger/marketplace`, `GET /ledger/gate-fees` and
+`GET /ledger/founder-allocation`, the two boards `GET /challenges` and `GET /threads`, the proposals
+`GET /standards` carries for each standard, and a listing's version history `GET /listings/{id}` —
+and each answers **one page** of it: `COLLECTION_PAGE_SIZE` rows (20, from
+`packages/shared/src/constants.ts`), applied in SQL as `LIMIT ? OFFSET ?` on seven of the eight and,
+on the catalogue, as a per-standard recency rank, because one standard's proposal history must not
+fill a page the other standards share. Page 1 is the most recent page of the collection and each
+later page reaches one page further back, while the rows inside a page are in the order that read
+documents: insertion order for the audit feed and the three ledgers, insertion order within each
+standard for the catalogue's proposals, oldest first for the two boards, and newest first for a
+listing's version history. `?page=` is the only paging input, the one
+`collectionPageQuerySchema` and `CollectionPageQuery` in
+`packages/shared/src/schemas/pagination-schema.ts` declare, so the page size cannot be raised from a
+request: `?limit=`, `?pageSize=`, `?size=` and an `X-Page-Size:` header are not part of the schema,
+and the validator removes an unexpected query key before the handler runs, exactly as on the listing
+search, while `?page=0`, `?page=-1` and `?page=abc` are refused
+`400 validation_error` through the one error envelope. `page` is bounded at both ends by
+`PAGE_NUMBER_MAX` (450359962737049, from the same `constants.ts`), the largest page whose offset —
+and, on the catalogue, whose rank window — the paging arithmetic still states as an exact whole
+number, so a page above it is refused that `400` at the edge rather than rounded into a `500`. The
+listing search declares the lower bound alone and refuses a page whose offset the store cannot
+address in its own route, which is the same `400` with a sentence naming the parameter the client
+sent. Each response states the page it answered
+and how much of the collection exists: `page` and `total` on the audit feed, the two boards and each
+ledger; `page` on the catalogue, with `proposal_total` on each item beside that standard's own page
+of proposals; and `version_total` on a listing's detail — which is what lets a reader tell a short
+collection from a clipped page and ask for the next one. The nested rows of a page are read for the
+parents that page carries rather than for the whole collection: a thread's replies are read for the
+page's threads and a challenge's responses for the page's challenges, so the rows of one parent are
+that parent's own content. The pages that render these reads show the newest page, and the older
+pages are reached through each read's own `page`. The paged board reads order by their instant with
+an identifier tie-break and page through that order, which no index serves and none is added for —
+an applied migration is immutable, so such an index is a new numbered migration rather than a change
+to `0011`.
 
 ## 9. How migration state is tracked
 
@@ -332,7 +386,10 @@ The consequence for a contributor is a rule about the files themselves: **migrat
 Nothing is dropped or rewritten except by the one rebuild a guard needs, an applied file is never
 edited or renumbered, and a change to the schema is a new numbered file. The checksum check is what
 makes that rule a fact rather than a convention — editing an applied file does not change the
-database, it refuses the server's start-up.
+database, it refuses the server's start-up. A contributor who meets that refusal on a database
+created from an earlier revision of the checkout has two remedies and needs no third: recreate the
+database file, since the only rows it holds are the seeded demo data, or point `ADEM_DB_PATH` at a
+fresh path and let the runner apply the current files into it.
 
 ## 10. Triggers: what they are and are not
 
@@ -349,8 +406,10 @@ byte-identical. The threat model and the trust boundaries are `docs/THREAT-MODEL
 
 The default database file is `.adem/adem.sqlite` under the repository root, resolved from
 `apps/api/src/config.ts` rather than from the process's working directory, and `ADEM_DB_PATH` names a
-different file for a throwaway run. The `.adem/` directory is gitignored; the connection creates it on
-first use, so a fresh checkout needs no step. Any SQLite client opens the file — nothing about it is
+different file for a throwaway run; a relative value is resolved against that same repository root, so
+a value written relative to your checkout root means one file whether `npm run seed` or `npm start`
+reads it. The `.adem/` directory is gitignored; the connection creates it on first use, so a fresh
+checkout needs no step. Any SQLite client opens the file — nothing about it is
 private to better-sqlite3 — and the schema a reader finds there is the one this document describes.
 `npm run seed` loads the synthetic demo data through the exported `seedDatabase` of
 `apps/api/src/seed/seed-database.ts` — **once, against a fresh database**: a file that already holds

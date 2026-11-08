@@ -100,22 +100,29 @@ export type ModerationAction = (typeof MODERATION_ACTIONS)[number];
  * contract behaviour rather than relax a constraint. `action` is constrained to
  * {@link MODERATION_ACTIONS}, so an unrecognised action is a `400` as well.
  *
+ * `reason` also carries a stated `maxLength` of 1000. The reason it states is
+ * what the appended governance event, the operator's audit feed and the
+ * listing's moderation history all carry, so a field with no ceiling lets one
+ * client inflate every payload that reads the trail. The number is this module's
+ * own choice, large enough to state a reason in full and no larger.
+ *
  * The listing acted on comes from the path, through
  * {@link moderationListingIdParamsSchema}, and never from the body; a route
  * spreads the two together:
  * `{ ...moderationListingIdParamsSchema, ...moderationActionBodySchema }`.
  *
- * Fastify 4 validates a body with `removeAdditional: true` among its validator's
- * defaults, so with `additionalProperties: false` an unexpected field — a
- * client-supplied `status`, say — is removed before the handler runs instead of
- * producing a `400`, and no handler may rely on reading one. The operator's
- * identity is resolved server-side from the `X-Demo-Account` header and is not a
- * body field, and a client-supplied `created_at` or `actor_account_id` would be
- * stripped the same way.
+ * The API holds a request body to this closed object before its validator runs —
+ * the check in `apps/api/src/routes/request-body-policy.ts` — so an unexpected
+ * field, a client-supplied `status` say, is answered `400 validation_error`
+ * instead of being removed before the handler runs, and no handler may rely on
+ * reading one. The operator's identity is resolved server-side from the
+ * `X-Demo-Account` header and is not a body field, and a client-supplied
+ * `created_at` or `actor_account_id` is refused the same way.
  *
  * Statuses this row produces: `400` for a missing or empty `action` or `reason`,
- * `404` for a listing id no listing carries, `401` for a missing or unresolvable
- * demo header, and `403` for a resolvable account whose role is not `operator`.
+ * or a `reason` over its stated maximum, `404` for a listing id no listing
+ * carries, `401` for a missing or unresolvable demo header, and `403` for a
+ * resolvable account whose role is not `operator`.
  * Success is `200`, carrying the listing's new status beside the governance event
  * the route appended — the event type `listing_moderated` against subject type
  * `listing`, both drawn from the closed vocabularies in
@@ -129,7 +136,7 @@ export const moderationActionBodySchema = {
     required: ['action', 'reason'],
     properties: {
       action: { type: 'string', enum: MODERATION_ACTIONS },
-      reason: { type: 'string', minLength: 1 },
+      reason: { type: 'string', minLength: 1, maxLength: 1000 },
     },
     additionalProperties: false,
   },
@@ -166,14 +173,15 @@ export const moderationListingIdParamsSchema = {
  * `status` is not a client field and must not become one. The route creates the
  * row `submitted`, and the only route that may move it is the operator review
  * route that consumes {@link standardProposalReviewBodySchema}, which appends a
- * governance event. Fastify 4 validates with `removeAdditional: true`, so a client
- * that submits `status: "accepted"` alongside an otherwise valid body has the
- * field silently dropped and the row is still created `submitted`. That is the
- * intended behaviour rather than a gap: the vocabulary of a creation is not the
- * vocabulary of a review, and a proposer cannot decide its own proposal. The
- * proposer is resolved server-side from the `X-Demo-Account` header and is never a
- * body field either, so a client-supplied `proposer_account_id` or `created_at`
- * would be stripped the same way.
+ * governance event. The request-body policy refuses an undeclared field with
+ * `400 validation_error`, so a client that submits `status: "accepted"` alongside
+ * an otherwise valid body is answered `400` rather than having the field silently
+ * dropped before the row is created `submitted`. The vocabulary of a creation is
+ * therefore not the vocabulary of a review, and a proposer cannot decide its own
+ * proposal — with the refusal visible to the client that tried. The proposer is
+ * resolved server-side from the `X-Demo-Account` header and is never a body field
+ * either, so a client-supplied `proposer_account_id` or `created_at` is refused
+ * the same way.
  *
  * The three required strings are the whole proposal: which standard it concerns,
  * what it would change, and why. All three are immutable once written — a review
@@ -182,10 +190,16 @@ export const moderationListingIdParamsSchema = {
  * proposal is a new proposal rather than an edit to this one.
  *
  * Statuses this row produces: `400` for a missing or empty `standard_id`, `title`
- * or `rationale`; `401` for a missing or unresolvable demo header; `403` for a
- * resolvable account whose role is not `contributor`; and `404` when `standard_id`
- * names no standard in the catalogue. Success is `201` with the created proposal
- * in status `submitted`.
+ * or `rationale`, or for a `title` or `rationale` over its stated maximum; `401`
+ * for a missing or unresolvable demo header; `403` for a resolvable account whose
+ * role is not `contributor`; and `404` when `standard_id` names no standard in the
+ * catalogue. Success is `201` with the created proposal in status `submitted`.
+ *
+ * `title` and `rationale` carry stated maxima — 200 and 4000 — because a
+ * proposal is read back by the governance trail that decides it and by the page
+ * that lists it, so a field with no ceiling lets one client inflate every
+ * payload that carries the proposal. The numbers are this module's own choice,
+ * large enough for a proposal's heading and its full reasoning.
  */
 export const standardProposalCreateBodySchema = {
   body: {
@@ -193,8 +207,8 @@ export const standardProposalCreateBodySchema = {
     required: ['standard_id', 'title', 'rationale'],
     properties: {
       standard_id: { type: 'string', minLength: 1 },
-      title: { type: 'string', minLength: 1 },
-      rationale: { type: 'string', minLength: 1 },
+      title: { type: 'string', minLength: 1, maxLength: 200 },
+      rationale: { type: 'string', minLength: 1, maxLength: 4000 },
     },
     additionalProperties: false,
   },
@@ -240,6 +254,12 @@ export const standardProposalIdParamsSchema = {
  * into the appended event rather than into the proposal, so an omitted reason
  * leaves the proposal's own text untouched as well.
  *
+ * `reason` carries a stated `maxLength` of 1000: it travels into that appended
+ * event, which the governance trail and the audit feed read back, so a field with
+ * no ceiling lets one client inflate every payload that carries the decision. The
+ * number is this module's own choice, large enough to state a decision's
+ * reasoning in full and no larger.
+ *
  * The review appends a governance event with `event_type` `proposal_reviewed` and
  * `subject_type` `standard_proposal`, and it **never rewrites the proposal's
  * text**: `title` and `rationale` are immutable after creation. It follows that
@@ -251,9 +271,10 @@ export const standardProposalIdParamsSchema = {
  * A route attaches it beside {@link standardProposalIdParamsSchema}
  * (`{ ...standardProposalIdParamsSchema, ...standardProposalReviewBodySchema }`).
  * Statuses this row produces: `400` for a missing `status` or a `status` outside
- * the review vocabulary, `404` for an unknown proposal id, `401` for a missing or
- * unresolvable demo header, `403` for a resolvable account whose role is not
- * `operator`, and `409` when the proposal already holds `accepted` or `rejected`.
+ * the review vocabulary, or for a `reason` over its stated maximum, `404` for an
+ * unknown proposal id, `401` for a missing or unresolvable demo header, `403` for
+ * a resolvable account whose role is not `operator`, and `409` when the proposal
+ * already holds `accepted` or `rejected`.
  * Success is `200`, carrying the proposal in its new status beside the appended
  * event.
  */
@@ -263,7 +284,7 @@ export const standardProposalReviewBodySchema = {
     required: ['status'],
     properties: {
       status: { type: 'string', enum: PROPOSAL_REVIEW_STATUSES },
-      reason: { type: 'string' },
+      reason: { type: 'string', maxLength: 1000 },
     },
     additionalProperties: false,
   },

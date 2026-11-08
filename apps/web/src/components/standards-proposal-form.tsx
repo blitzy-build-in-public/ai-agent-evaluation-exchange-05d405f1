@@ -118,13 +118,20 @@ const VALIDATION_ERROR_CODE = "validation_error";
 
 /**
  * What the form shows for one caught failure: a sentence for each field the refusal concerns, or one
- * sentence for the form as a whole, plus the sentence the polite region announces.
+ * sentence for the form as a whole, the sentence the polite region announces, and the notice variant
+ * that sentence renders in.
  */
 interface FailureExplanation {
   readonly titleMessage: string | null;
   readonly rationaleMessage: string | null;
   readonly formMessage: string | null;
   readonly announcement: string;
+  /**
+   * The notice variant the form-level sentence renders in: the warning triple for the write rate
+   * limit, which the proposer waits out and sends again, and the error triple for every other
+   * refusal.
+   */
+  readonly variant: "notice--error" | "notice--warning";
 }
 
 /**
@@ -156,23 +163,38 @@ function explanationForFields(
     rationaleMessage,
     formMessage: null,
     announcement: `The proposal was not sent: ${named}.`,
+    variant: "notice--error",
   };
 }
 
-/** A form-level explanation: the one sentence is both shown and announced. */
-function formExplanation(formMessage: string): FailureExplanation {
-  return { titleMessage: null, rationaleMessage: null, formMessage, announcement: formMessage };
+/**
+ * A form-level explanation: the one sentence is both shown and announced. Every refusal except the
+ * write rate limit renders in the error triple, which is why that is the variant a caller gets
+ * unless it says otherwise.
+ */
+function formExplanation(
+  formMessage: string,
+  variant: "notice--error" | "notice--warning" = "notice--error",
+): FailureExplanation {
+  return {
+    titleMessage: null,
+    rationaleMessage: null,
+    formMessage,
+    announcement: formMessage,
+    variant,
+  };
 }
 
 /** A throttled write's explanation, carrying the whole seconds the response asked the client to wait. */
 function throttledExplanation(retryAfterSeconds: number | null): FailureExplanation {
   if (retryAfterSeconds === null) {
-    return formExplanation(`${RATE_LIMIT_EXPLANATION} Wait a moment, then try again.`);
+    return formExplanation(`${RATE_LIMIT_EXPLANATION} Wait a moment, then try again.`, "notice--warning");
   }
   // The header holds whole seconds; a fraction is rounded up so the reader never retries too early.
   const seconds = Math.max(1, Math.ceil(retryAfterSeconds));
   return formExplanation(
     `${RATE_LIMIT_EXPLANATION} Wait ${seconds} second${seconds === 1 ? "" : "s"}, then try again.`,
+    "notice--warning",
   );
 }
 
@@ -276,7 +298,6 @@ export function StandardsProposalForm(props: StandardsProposalFormProps): JSX.El
   const explanation = explainFailure(failure);
   const titleMessage = explanation === null ? null : explanation.titleMessage;
   const rationaleMessage = explanation === null ? null : explanation.rationaleMessage;
-  const formMessage = explanation === null ? null : explanation.formMessage;
 
   const submitHint = submitting
     ? SUBMITTING_HINT
@@ -409,9 +430,9 @@ export function StandardsProposalForm(props: StandardsProposalFormProps): JSX.El
       <div className="status-region" role="status" aria-live="polite">
         {proposal !== null ? (
           <p className="notice notice--success">{confirmationSentence(proposal)}</p>
-        ) : formMessage !== null ? (
-          <p className="error-notice">{formMessage}</p>
-        ) : explanation === null ? null : (
+        ) : explanation === null ? null : explanation.formMessage !== null ? (
+          <p className={`notice ${explanation.variant}`}>{explanation.formMessage}</p>
+        ) : (
           <p>{explanation.announcement}</p>
         )}
       </div>

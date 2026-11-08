@@ -176,14 +176,19 @@ interface FailureText {
 /**
  * The sentence each status the contract fixes renders, chosen by status and never by code.
  *
- * Six rows: a `429` is built from the wait its response stated and a `500` is the generic sentence
+ * Eight rows: a `429` is built from the wait its response stated and a `500` is the generic sentence
  * below, so neither is a row here. The map is a partial record, read exactly as the API reads its own
  * status-to-code map, so a status it does not hold renders the generic sentence rather than nothing.
  *
- * The four that echo the server's sentence are the ones where the server knows what this component
+ * The five that echo the server's sentence are the ones where the server knows what this component
  * cannot: which parameter failed validation, which record does not exist, which state a record is
- * already in, which part of a request is missing. The two that do not are one role mismatch each,
- * which the sentence here already states in full.
+ * already in, which part of a request is missing, and how large a body the service accepts. The three
+ * that do not are the two role mismatches and the media type, which the sentences here state in full.
+ *
+ * The two transport rows are the pair the API answers at the status Fastify raised for a body it will
+ * not parse — one above the route's limit and one in a form no parser reads — and neither is a failure
+ * of the service: both exist so that a request the reader's own input caused is explained to the reader
+ * rather than described as a problem on the server's side.
  */
 const STATUS_TEXT: Readonly<Partial<Record<number, FailureText>>> = Object.freeze({
   400: {
@@ -218,6 +223,19 @@ const STATUS_TEXT: Readonly<Partial<Record<number, FailureText>>> = Object.freez
     guidance: "Reload the page to see the state the record is in, then choose a different change.",
     echoServerMessage: true,
   },
+  413: {
+    variant: "notice--error",
+    explanation:
+      "The text this request carried is larger than the service accepts, so the request was not sent.",
+    guidance: "Send the same content in a smaller request, then try again. Nothing was saved.",
+    echoServerMessage: true,
+  },
+  415: {
+    variant: "notice--error",
+    explanation: "This request was sent in a form the service does not read, so it was not accepted.",
+    guidance: "Send the request again from this page. Nothing was saved.",
+    echoServerMessage: false,
+  },
   422: {
     variant: "notice--error",
     explanation: "This request was well formed, but it is incomplete and was not accepted as it stands.",
@@ -242,12 +260,14 @@ const GENERIC_TEXT: FailureText = Object.freeze({
 /**
  * The sentence for a request that received no response at all. The client reports this as status `0`,
  * which is the only thing that status means, so a reader is told the service was not reached rather
- * than that a request failed somewhere on the server.
+ * than that a request failed somewhere on the server. A read and a write alike render this notice and
+ * the request was attempted in both cases, so the explanation says only that it did not complete and
+ * the guidance claims an outcome — nothing saved or changed — that is true of a read as well.
  */
 const TRANSPORT_TEXT: FailureText = Object.freeze({
   variant: "notice--error",
-  explanation: "The service could not be reached, so this request was not sent.",
-  guidance: "Check the connection, then send the request again. Nothing was saved.",
+  explanation: "The service could not be reached, so this request did not complete.",
+  guidance: "Check the connection, then send the request again. Nothing was saved or changed.",
   echoServerMessage: false,
 });
 
@@ -284,7 +304,7 @@ function rateLimitedText(retryAfterSeconds: number | undefined): FailureText {
     "Too many requests: this client has sent the maximum number of writes allowed in a minute";
   let explanation: string;
   if (retryAfterSeconds === undefined) {
-    explanation = `${refusal}, so this request was not sent. It can be retried shortly.`;
+    explanation = `${refusal}, so this request was refused. It can be retried shortly.`;
   } else if (retryAfterSeconds < 1) {
     explanation = `${refusal}, and the wait has passed, so send it again now.`;
   } else {
