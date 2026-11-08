@@ -48,10 +48,14 @@
  * 7. The single error handler maps every thrown value to the one envelope of
  *    `./errors/error-envelope`. Validation failures, the demo-session header's failure, a domain
  *    package's refusal and a server fault all leave by it, so no handler writes an error body of its
- *    own and no client parses a second shape. It records a refused request at warning level, with the
- *    method, the path, the status and the code, and a server fault at error level with the cause
- *    itself; a request body, the query string, the demo header's value and the envelope's sentence are
- *    never recorded — the query string is where a client's own free text travels.
+ *    own and no client parses a second shape. It hands the mapping the request the value was raised
+ *    for along with the handle, so that a rejection of a row which requires the demo-session header
+ *    is answered for the identity that request did not establish rather than for whichever schema
+ *    section Ajv reported first (see {@link requiresDemoIdentityOf}); it records a refused request at
+ *    warning level, with the method, the path, the status and the code, and a server fault at error
+ *    level with the cause itself; a request body, the query string, the demo header's value and the
+ *    envelope's sentence are never recorded — the query string is where a client's own free text
+ *    travels.
  * 8. The single not-found handler answers an `/api/` path, and a request for something that looks
  *    like a static file, with the envelope and status `404`; it answers every other path with the SPA
  *    entry, read from disk as it answers, and status `200`, which is what lets `/listings`,
@@ -89,16 +93,24 @@ import { join } from "node:path";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
-import type { ConnectionError, FastifyInstance, FastifyReply } from "fastify";
+import type {
+  ConnectionError,
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+} from "fastify";
 import type { Database } from "better-sqlite3";
 
+import { DEMO_ACCOUNT_HEADER } from "@adem/shared";
+
+import { resolveDemoAccount } from "./auth/resolve-demo-account";
 import type { ApiConfig, ApiConfigOverrides } from "./config";
 import { resolveConfig } from "./config";
 import { openDatabase } from "./db/connection";
 import type { MigrationRun } from "./db/migrate";
 import { runMigrations } from "./db/migrate";
 import { ERROR_STATUS, STATUS_DEFAULT_CODE } from "./errors/error-codes";
-import { ApiError, envelope, toApiError } from "./errors/error-envelope";
+import { ApiError, envelope, isApiError, isFailedRouteSchema, toApiError } from "./errors/error-envelope";
 import { API_PREFIX, registerRoutes } from "./routes/register-routes";
 import { WriteRateLimitStore } from "./write-rate-limit-store";
 
@@ -126,6 +138,14 @@ export { API_PREFIX };
  * meaningful rather than letting a slice at a missing separator widen it.
  */
 const API_ROOT_PATH = apiRootPath();
+
+/**
+ * The demo header's name as Fastify exposes it: the framework lowercases every incoming header name,
+ * so a request's own header map carries it in this spelling and no other. Derived from the header
+ * name's single declaration site in `@adem/shared` rather than retyped, the way the route handlers and
+ * `./errors/error-envelope` derive their own spellings of it, so the three cannot drift.
+ */
+const DEMO_HEADER_NAME = DEMO_ACCOUNT_HEADER.toLowerCase();
 
 /**
  * The one thing {@link createApp} needs from its caller, every member optional.
@@ -290,8 +310,11 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
   // One handler for every failure. The mapping belongs to `./errors/error-envelope`, so the status a
   // client is answered with, the code and the sentence it reads all come from the same place as the
   // closed vocabulary `./errors/error-codes` defines, and a route that throws never also formats.
+  // The request and the handle go with the thrown value because the mapping needs one fact no thrown
+  // value carries: whether this request established the demo identity its own route required. See
+  // {@link requiresDemoIdentityOf}.
   instance.setErrorHandler((error, request, reply) => {
-    const apiError = mapFailure(error);
+    const apiError = mapFailure(error, request, database);
 
     if (failureLogLevel(apiError.status) === "error") {
       // The cause is recorded here and never sent: the client reads the envelope's own generic
@@ -562,7 +585,7 @@ function sendApiError(reply: FastifyReply, error: ApiError): void {
 }
 
 /**
- * The {@link ApiError} a thrown value is answered with.
+ * The {@link ApiError} a thrown value is answered with, for the request it was raised for.
  *
  * The mapping is `./errors/error-envelope`'s, and this function adds the one case that mapper cannot
  * see: a failure Fastify itself raised carries no code of the closed vocabulary but does carry the
@@ -571,6 +594,12 @@ function sendApiError(reply: FastifyReply, error: ApiError): void {
  * for. Answering the fallback's 500 for one would tell a client the server failed when the request
  * did. Only a 4xx status is read this way: a fault at 5xx keeps the generic sentence and the 500 the
  * mapper chose, because its message is a driver report rather than a sentence.
+ *
+ * The second and third parameters are handed on to the mapper as the one fact a thrown value cannot
+ * carry: whether this request established the demo identity its own route required (see
+ * {@link requiresDemoIdentityOf}). Both are optional, and a caller that holds no request — the
+ * transport-level handler below, for a request the HTTP parser refused — omits them and reads the
+ * answer it has always read.
  *
  * A body the runtime's JSON parser refused is answered with the envelope's own sentence rather than
  * with the parser's. The parser's message is a sentence about the text it was handed, not one this
@@ -589,11 +618,19 @@ function sendApiError(reply: FastifyReply, error: ApiError): void {
  * composition root is otherwise its only caller.
  *
  * @param error - The value a route, a hook or a plugin threw, of any type.
+ * @param request - The request the value was raised for, whose own route schema declares whether the
+ *   demo-session header is required. Absent for a caller that holds no request.
+ * @param database - The handle the demo header is resolved against, which is the one the request's
+ *   route was built with. Read only beside a request.
  * @returns The mapped error, which is always an `ApiError`: this function never throws, so a mapping
  *   that cannot be made cannot turn one failure into two.
  */
-export function mapFailure(error: unknown): ApiError {
-  const mapped = toApiError(error);
+export function mapFailure(
+  error: unknown,
+  request?: FastifyRequest,
+  database?: Database,
+): ApiError {
+  const mapped = toApiError(error, requiresDemoIdentityOf(error, request, database));
 
   if (mapped.code !== "internal_error") {
     return mapped;
@@ -618,6 +655,109 @@ export function mapFailure(error: unknown): ApiError {
     code,
     message: isJsonParserRefusal(error) ? undefined : memberOf(error, "message"),
   });
+}
+
+/**
+ * Whether a route-schema rejection concerns a request that established no demo identity on a route
+ * which required one — the fact `./errors/error-envelope`'s mapper cannot read for itself.
+ *
+ * The contract defines two outcomes for every non-public row: `401` when the header is absent or names
+ * no seeded account, and `403` when a resolved account's role does not match. Fastify validates a
+ * route's parts in a fixed order — params, body, querystring, then headers — and reports the first
+ * failure alone, so a request that both omitted the header and failed its body is rejected for its
+ * body and never has the header named in the failure. Reading the route's own requirement and the
+ * header's resolution here is what makes the row's `401` total rather than dependent on which schema
+ * section the framework reported first.
+ *
+ * Three gates, in this order, and each one keeps the relabelling narrow:
+ *
+ * 1. The thrown value must be a route-schema rejection at all ({@link isFailedRouteSchema}). A
+ *    framework failure raised before any schema runs — a payload above the route's limit, a media
+ *    type with no parser, a body the JSON parser refused — is not one, so no transport refusal is ever
+ *    relabelled, and neither is an `ApiError` a route threw or a domain package's refusal. The scope's
+ *    own request-body policy (`./routes/request-body-policy`) sits at that edge deliberately: its
+ *    `preValidation` refusal enforces the schema's declared types and fields, yet it reaches this
+ *    handler as an `ApiError` raised before the framework validates anything, and it keeps the
+ *    `400 validation_error` its layer answers with — so a request the policy refuses is answered for
+ *    its body even where its header resolves to nothing, and only the schema rejection is relabelled.
+ * 2. The route must itself declare the demo-session header among its required headers
+ *    ({@link routeRequiresDemoHeader}). A public read declares no such header, so a schema rejection
+ *    on it keeps the `400 validation_error` every other rejection earns.
+ * 3. The request's own header must fail to resolve, asked the way every route handler asks it —
+ *    `resolveDemoAccount`, the required form, over the handle this instance was built with. Only that
+ *    function's own `401` means "no identity": a lookup that returned means the request did establish
+ *    one and the body's `400` stands, and anything else it threw — a driver failure, for instance — is
+ *    not evidence about identity, so it leaves the mapping as it was.
+ *
+ * A caller with no request, or no handle, answers `false`: there is nothing to resolve and nothing to
+ * read the route's requirement from.
+ *
+ * @param error - The value a route, a hook or a plugin threw, of any type.
+ * @param request - The request the value was raised for, or `undefined` for a caller that holds none.
+ * @param database - The handle the header resolves against, or `undefined` for a caller that holds none.
+ * @returns `true` only for a route-schema rejection of a request whose route required the demo header
+ *   and whose own header resolved to no seeded demo account.
+ */
+function requiresDemoIdentityOf(
+  error: unknown,
+  request: FastifyRequest | undefined,
+  database: Database | undefined,
+): boolean {
+  if (request === undefined || database === undefined || !isFailedRouteSchema(error)) {
+    return false;
+  }
+
+  if (!routeRequiresDemoHeader(request)) {
+    return false;
+  }
+
+  try {
+    resolveDemoAccount(database, request.headers[DEMO_HEADER_NAME]);
+    return false;
+  } catch (thrown) {
+    // The required form's own refusal is the only evidence of an unresolved header; anything else it
+    // threw — a driver failure on an unreadable table, say — is not, so the mapping keeps the answer
+    // it would have given without this helper.
+    return isApiError(thrown) && thrown.code === "unauthorized";
+  }
+}
+
+/**
+ * Whether the route a request matched declares the demo-session header among its required headers.
+ *
+ * The answer is read from the route's own schema, which Fastify holds for the request as it matched
+ * it, rather than from a table of this module's: a route that adds or drops the requirement stays the
+ * one decision site, and the check cannot disagree with the schema the framework validated against.
+ *
+ * The comparison is case-insensitive on purpose. Fastify lowercases the incoming header names, and the
+ * schema is read here exactly as the route registered it — where the header's own name carries its
+ * declared spelling — so the two spellings are compared as one name.
+ *
+ * Everything is guarded, and `false` is the answer for every way the read can fail: a request that
+ * matched no route carries no route schema at all, a `headers` section of any other shape than an
+ * object with a `required` array is no requirement this check can read, and a schema whose members
+ * raise on access must not turn one refusal into two. Answering `false` leaves the mapping as it was,
+ * which is the `400` the contract gives a schema rejection on a row that requires no demo account.
+ *
+ * @param request - The request whose matched route is read.
+ * @returns `true` when that route's header schema requires {@link DEMO_ACCOUNT_HEADER}.
+ */
+function routeRequiresDemoHeader(request: FastifyRequest): boolean {
+  try {
+    const headers = request.routeOptions.schema?.headers;
+    const required = memberOf(headers, "required");
+
+    if (!Array.isArray(required)) {
+      return false;
+    }
+
+    const names: unknown[] = required;
+    return names.some((name) => typeof name === "string" && name.toLowerCase() === DEMO_HEADER_NAME);
+  } catch {
+    // The `false` is the handling: a route schema that cannot be read is no evidence that the header
+    // was required, so the caller keeps the answer it would have given without this check.
+    return false;
+  }
 }
 
 /**

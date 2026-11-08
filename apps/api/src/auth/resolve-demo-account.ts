@@ -3,7 +3,9 @@
  * of `accounts`, by exact equality, before any non-public route does anything.
  *
  * {@link resolveDemoAccount} is the required form — it answers the row a header names, or refuses
- * the request with `401`. {@link resolveOptionalDemoAccount} answers the same question without ever
+ * the request with `401`. Two kinds of caller reach it: the nineteen non-public rows of the contract
+ * table, and the composition root's error mapper, which calls it to decide the status of a request a
+ * route's schema rejected. {@link resolveOptionalDemoAccount} answers the same question without ever
  * refusing, and exists for exactly one caller: `GET /listings/{id}` must return a hidden listing to
  * the operator while everyone else gets `404`, and a public read may not turn into a `401`.
  *
@@ -251,7 +253,10 @@ export function resolveDemoAccount(
  * It exists for exactly one caller: `GET /listings/{id}` is a public read that must stay `200`, so a
  * header that is absent, blank or unresolvable cannot become a `401` there. The route resolves the
  * account only to decide whether the caller may be shown a hidden listing, and `null` means "no
- * operator here", which is the answer every other reader of a public read gets.
+ * operator here", which is the answer every other reader of a public read gets. The required form
+ * carries the second caller of the pair: the composition root's error mapper asks it whether a
+ * rejected request established no identity, because the status that request is answered with depends
+ * on the answer.
  *
  * It answers `null` for all of the cases {@link resolveDemoAccount} refuses, and for a lookup that
  * fails outright: the promise is that this function never throws, so a failure of the underlying read

@@ -1,6 +1,7 @@
 /**
  * The one error envelope's mapping of a route's failed JSON schema — the demo-session header's
- * failure answered `401 unauthorized`, and every other schema rejection answered `400
+ * failure answered `401 unauthorized`, the same answer for a rejection of a request whose route
+ * required that header and resolved none, and every other schema rejection answered `400
  * validation_error` — the client errors Fastify raises for a body it will not parse, the transport
  * pair answered at their own statuses rather than as server faults and a body the runtime's JSON
  * parser refuses answered with the envelope's own sentence rather than the parser's, the refusal of a
@@ -10,11 +11,24 @@
  * `apps/api/src/server.ts` is the composition root whose one `setErrorHandler` performs that mapping
  * in the product, and it exports the mapping as `mapFailure` and its logging policy as
  * `failureLogLevel`, so the assertions below measure the product's own answer rather than a copy of
- * it. The probe instance composes `mapFailure` and the envelope exactly as that handler does, which
- * is what lets a real Fastify validation pass be measured: both probes carry the contract's own
- * wiring — `demoAccountHeaderSchema` from `@adem/shared` on each, and a body schema on the write
- * probe — so the header failure the contract answers `401` and a body failure it answers `400` are
- * observed at the edge rather than reconstructed by hand.
+ * it. The probe instance composes `mapFailure(error, request, database)` and the envelope exactly as
+ * that handler does — request and handle included, over a handle carrying one `accounts` row for its
+ * own probe account — which is what lets a real Fastify validation pass be measured against the
+ * request that produced it: the three probes carry the contract's own wiring, `demoAccountHeaderSchema`
+ * from `@adem/shared` on two of them and a body schema on each of those and on the third, so the
+ * header failure the contract answers `401`, a body failure it answers `400` and the doubly-invalid
+ * request whose route declares the header are all observed at the edge rather than reconstructed by
+ * hand.
+ *
+ * **The route's own header requirement outranks the body's shape.** Fastify validates a route's parts
+ * in a fixed order — params, body, querystring, then headers — and reports the first failure alone, so
+ * a request that both omitted the demo header and failed its body reaches the mapping as a body
+ * failure that never names the header. Where the route declares that header as required and no header
+ * of the request resolves, the answer is the contract's `401` for the row and not the body's `400`, in
+ * the same sentence an absent header is answered with when the body is valid — byte-identical either
+ * way, which is what makes the status independent of which schema section Ajv reported first. Where
+ * the route declares no such header, the body's failure keeps its `400`: that narrow gate is what the
+ * body-only probe below pins.
  *
  * The two conditions Fastify raises before any schema runs — a body above its 1 MiB limit and a media
  * type with no parser — are measured twice: as the mapped answer for the value the framework really
@@ -37,20 +51,22 @@
  *
  * Every request whose mapping is asserted goes through `app.inject`, so no port is bound and no
  * temporary file is written for those; the parser-refused ground above is the one that needs a real
- * socket. The two databases this file opens are in-memory handles, one per instance, each closed with
- * the instance it was handed to.
+ * socket. The three handles this file opens are in-memory connections — one per instance, and the
+ * probe mapping's own, which exists only so that the demo header of a rejected probe request has rows
+ * to resolve against — each migrated and closed in the teardown below.
  */
 
 import { createConnection } from "node:net";
 
 import Database from "better-sqlite3";
 import Fastify from "fastify";
-import type { InjectOptions } from "fastify";
+import type { FastifyRequest, InjectOptions } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { canonicalize } from "@adem/sgi-core";
 import { DEMO_ACCOUNT_HEADER, demoAccountHeaderSchema } from "@adem/shared";
 
+import { runMigrations } from "../../src/db/migrate";
 import type { ErrorEnvelope } from "../../src/errors/error-envelope";
 import { ApiError, envelope, toApiError } from "../../src/errors/error-envelope";
 // The product instance the real-request probes run against is built by the workspace's public entry,
@@ -74,14 +90,35 @@ const FASTIFY_VALIDATION_CODE = "FST_ERR_VALIDATION";
 const DEMO_HEADER_VALIDATION_NAME = DEMO_ACCOUNT_HEADER.toLowerCase();
 
 /**
- * The value the header schema accepts: the schema constrains presence and non-emptiness only, and
- * resolving it to a seeded account is `apps/api/src/auth/resolve-demo-account.ts`'s job, which
- * neither probe calls.
+ * The value the header schema accepts: the schema constrains presence and non-emptiness only, while
+ * resolving a value to a seeded account is `apps/api/src/auth/resolve-demo-account.ts`'s job. The
+ * probe instance's mapping does resolve it, against the handle {@link probeDatabase} holds and the
+ * product instance's against its own, so this value names one `accounts` row of each of those two
+ * handles with the role the write routes it probes require.
  */
 const PROBE_ACCOUNT = "demo-probe-account";
 
+/**
+ * The header value no handle has an `accounts` row for, so the required form refuses it with `401`.
+ * Its shape is an account identifier's and it is deliberately unlike every one a seed writes.
+ */
+const UNRESOLVABLE_ACCOUNT = "acct9999-nope";
+
+/**
+ * The report identifier the appeal probe's path carries. The path schema constrains the identifier's
+ * presence and not its existence, so this value lets the request's body be what the framework reports,
+ * and no row carries it: the handler that would answer `404` is never reached, because the schema
+ * rejection and the missing header are answered before any handler runs.
+ */
+const UNKNOWN_REPORT_ID = "rpt0000-no-such-report";
+
+/**
+ * The probe paths: a header-only route, a route requiring the header and a body, a route requiring a
+ * body and no header at all, and a route whose handler throws a domain package's refusal.
+ */
 const HEADER_PROBE_PATH = "/probe/demo-header";
 const WRITE_PROBE_PATH = "/probe/demo-write";
+const BODY_ONLY_PROBE_PATH = "/probe/body-only";
 const REFUSAL_PROBE_PATH = "/probe/domain-refusal";
 const PROBE_MARKER = "probe-handler-reached";
 
@@ -214,10 +251,63 @@ const WRITE_PROBE_SCHEMA = {
   },
 } as const;
 
+/**
+ * The body-only probe's schema: one required property and one typed property, and no header section
+ * at all — the shape every public read of the contract carries. It is what makes the narrow gate
+ * measurable: a request that sends no demo header and fails this body is answered `400
+ * validation_error`, because nothing on this route required a header to resolve.
+ */
+const BODY_ONLY_PROBE_SCHEMA = {
+  body: {
+    type: "object",
+    required: ["title"],
+    properties: {
+      title: { type: "string", minLength: 1 },
+      case_count: { type: "integer" },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
 const app = Fastify();
 
 /**
- * The product instance the two real-request probes run against: `createServer` over one in-memory
+ * The handle the probe instance's mapping resolves the demo header against: one in-memory
+ * connection, migrated and given the single `accounts` row {@link PROBE_ACCOUNT} names by
+ * {@link insertProbeAccount}.
+ *
+ * It exists because the mapping is handed a request context now. Deciding the status of a rejected
+ * request needs two facts the thrown value does not carry — whether the route declared the
+ * demo-session header as required, and whether the request's own header resolved to a seeded
+ * account — and the second of them is the same call every route handler makes:
+ * `resolveDemoAccount`, over a handle carrying the rows a header can name.
+ *
+ * It is a handle of its own rather than {@link productDatabase}, so that the probe ground and the
+ * product ground stay independent: this handle holds the probe's account and nothing else, and
+ * nothing asserted here can move what the product-level cases read. That handle is given the same row
+ * for the one product-level case whose header has to resolve, and nothing more.
+ */
+const probeDatabase = new Database(":memory:");
+
+/**
+ * Appends the one `accounts` row {@link PROBE_ACCOUNT} names to a migrated handle: the identifier and
+ * the handle are that value, the role is the `developer` the write routes require, and the display
+ * label is this file's own.
+ *
+ * Written here rather than by the product's seed writer, because the probe's account belongs to the
+ * probe: no seeded row, count or identifier of the product may depend on it, and the product-level
+ * cases below need it only so that one request's header resolves where the route requires one.
+ */
+function insertProbeAccount(database: Database.Database): void {
+  database
+    .prepare<[string, string, string, string]>(
+      "INSERT INTO accounts (id, handle, role, display_label) VALUES (?, ?, ?, ?)",
+    )
+    .run(PROBE_ACCOUNT, PROBE_ACCOUNT, "developer", "Probe demo account");
+}
+
+/**
+ * The product instance the real-request probes run against: `createServer` over one in-memory
  * handle, so the requests cross the composition root's own wiring — the one error handler, the
  * migration runner, the route groups and the rate-limit plugin — rather than a probe route of this
  * file's. Its configuration is resolved with the port pinned, so this file answers the same way in a
@@ -250,26 +340,37 @@ let parserPort = 0;
  * paired with a direct assertion on the raw failure Fastify raised.
  */
 let lastThrownValue: unknown = undefined;
+
+/**
+ * The request the mapping was handed for the most recent probe, as the composition root hands one
+ * beside a thrown value. It is what lets a direct assertion measure the same mapping the product's
+ * error handler applies, rather than the mapper's answer for a thrown value alone.
+ */
+let lastRequest: FastifyRequest | undefined = undefined;
 let headerHandlerReached = false;
 let writeHandlerReached = false;
+let bodyOnlyHandlerReached = false;
 
 interface ProbeResult {
   readonly status: number;
   readonly body: unknown;
   readonly thrownValue: unknown;
+  readonly request: FastifyRequest | undefined;
 }
 
 /**
- * Sends one probe request and answers with its status, its parsed body and the value the mapping
- * was handed for it.
+ * Sends one probe request and answers with its status, its parsed body, the value the mapping
+ * was handed for it and the request it was handed that value for.
  */
 async function probeWrite(options: InjectOptions): Promise<ProbeResult> {
   lastThrownValue = undefined;
+  lastRequest = undefined;
   const response = await app.inject(options);
   return {
     status: response.statusCode,
     body: JSON.parse(response.body),
     thrownValue: lastThrownValue,
+    request: lastRequest,
   };
 }
 
@@ -286,17 +387,39 @@ function expectEnvelopeFailure(body: unknown, code: string, message: string): vo
 }
 
 /**
+ * The request context the mapping is handed beside a thrown value: the request the failure was
+ * raised for and the handle a demo header is resolved against.
+ *
+ * Both are optional, and a case that omits them asserts the mapper's answer for a thrown value alone
+ * — which is the answer the transport-level handler uses, since a request the HTTP parser refused
+ * never became one.
+ */
+interface MapperContext {
+  /** The request the failure was raised for, whose own route declares a header requirement or none. */
+  readonly request?: FastifyRequest | undefined;
+
+  /** The handle a demo header resolves against, the same one the route's handler would be given. */
+  readonly database?: Database.Database | undefined;
+}
+
+/**
  * Asserts the mapping's own answer for a value Fastify really raised: the status, the code and the
  * sentence, never throwing on the way.
  *
  * The mapping measured is `apps/api/src/server.ts`'s exported `mapFailure`, which is the whole of
- * what the product's error handler applies to a thrown value — so an assertion here cannot drift
- * from the answer a client receives, and a case the composition root could not see would fail here
- * rather than pass.
+ * what the product's error handler applies to a thrown value and to the request it was raised for —
+ * so an assertion here cannot drift from the answer a client receives, and a case the composition
+ * root could not see would fail here rather than pass.
  */
-function expectMappedAs(value: unknown, status: number, code: string, message: string): void {
-  expect(() => mapFailure(value)).not.toThrow();
-  const mapped = mapFailure(value);
+function expectMappedAs(
+  value: unknown,
+  status: number,
+  code: string,
+  message: string,
+  context?: MapperContext,
+): void {
+  expect(() => mapFailure(value, context?.request, context?.database)).not.toThrow();
+  const mapped = mapFailure(value, context?.request, context?.database);
   expect(mapped.status).toBe(status);
   expect(mapped.code).toBe(code);
   expect(mapped.message).toBe(message);
@@ -441,9 +564,24 @@ const BODY_FAILURES: readonly unknown[] = [
 ];
 
 beforeAll(async () => {
-  app.setErrorHandler((error, _request, reply) => {
+  // The probe handle's schema and its one account row, before any probe runs: the mapping resolves
+  // the demo header of a rejected request against this handle, so the row a probe's header names has
+  // to be there first.
+  runMigrations(probeDatabase);
+  insertProbeAccount(probeDatabase);
+
+  // The product instance's handle too, for the one product-level case whose header has to resolve.
+  // `createServer` migrated that handle at construction, so the row is all it lacked: it stays
+  // otherwise unseeded, which is why a body this file sends it can only ever be answered by a refusal.
+  insertProbeAccount(productDatabase);
+
+  app.setErrorHandler((error, request, reply) => {
     lastThrownValue = error;
-    const mapped = mapFailure(error);
+    lastRequest = request;
+    // The composition root's own call, argument for argument: the request the failure was raised for
+    // and the handle a header resolves against are what make a doubly-invalid request's status the
+    // contract's for its row rather than the one the reported schema section would give it.
+    const mapped = mapFailure(error, request, probeDatabase);
     return reply.code(mapped.status).send(envelope(mapped.code, mapped.message));
   });
 
@@ -457,6 +595,14 @@ beforeAll(async () => {
     return reply.code(200).send({ marker: PROBE_MARKER });
   });
 
+  // The route that declares no header at all — the shape of every public row — so that the narrow
+  // gate is measurable: its body's failure keeps the `400` the contract gives a schema rejection on a
+  // row that requires no demo account.
+  app.post(BODY_ONLY_PROBE_PATH, { schema: BODY_ONLY_PROBE_SCHEMA }, (_request, reply) => {
+    bodyOnlyHandlerReached = true;
+    return reply.code(200).send({ marker: PROBE_MARKER });
+  });
+
   // The domain refusal, thrown from a handler exactly as `apps/api/src/routes/evaluations.ts` lets a
   // scoring refusal out: the route catches nothing, and the one error handler maps what it threw.
   app.post(REFUSAL_PROBE_PATH, { schema: demoAccountHeaderSchema }, () => {
@@ -466,7 +612,7 @@ beforeAll(async () => {
   await app.ready();
 
   // The product instance is readied for the same reason: its routes, the rate-limit plugin and the
-  // migration runner are what the two real-request probes cross.
+  // migration runner are what the real-request probes cross.
   await productApp.ready();
 
   // The parser-refused cases need a real socket, and a socket needs a bound port: `listen` is handed
@@ -485,12 +631,17 @@ beforeAll(async () => {
 
 beforeEach(() => {
   lastThrownValue = undefined;
+  lastRequest = undefined;
   headerHandlerReached = false;
   writeHandlerReached = false;
+  bodyOnlyHandlerReached = false;
 });
 
 afterAll(async () => {
   await app.close();
+
+  // The probe handle, closed after the instance whose mapping read it.
+  probeDatabase.close();
 
   // The instance first, then the handle it was handed: the composition root closes only a connection
   // it opened itself, so this file is the one that releases this one.
@@ -553,7 +704,7 @@ describe("the demo header's failed validation", () => {
 
 describe("another failed schema", () => {
   it("answers a body missing a required property with 400 validation_error", async () => {
-    const { status, body, thrownValue } = await probeWrite({
+    const { status, body, thrownValue, request } = await probeWrite({
       method: "POST",
       url: WRITE_PROBE_PATH,
       headers: { [DEMO_ACCOUNT_HEADER]: PROBE_ACCOUNT },
@@ -564,11 +715,14 @@ describe("another failed schema", () => {
     expectEnvelopeFailure(body, "validation_error", ApiError.validation().message);
     expect(writeHandlerReached).toBe(false);
     expect(carriedCode(thrownValue)).toBe(FASTIFY_VALIDATION_CODE);
-    expectMappedAs(thrownValue, 400, "validation_error", ApiError.validation().message);
+    expectMappedAs(thrownValue, 400, "validation_error", ApiError.validation().message, {
+      request,
+      database: probeDatabase,
+    });
   });
 
   it("answers a body carrying a wrong-typed property with 400 validation_error", async () => {
-    const { status, body, thrownValue } = await probeWrite({
+    const { status, body, thrownValue, request } = await probeWrite({
       method: "POST",
       url: WRITE_PROBE_PATH,
       headers: { [DEMO_ACCOUNT_HEADER]: PROBE_ACCOUNT },
@@ -579,7 +733,10 @@ describe("another failed schema", () => {
     expectEnvelopeFailure(body, "validation_error", ApiError.validation().message);
     expect(writeHandlerReached).toBe(false);
     expect(carriedCode(thrownValue)).toBe(FASTIFY_VALIDATION_CODE);
-    expectMappedAs(thrownValue, 400, "validation_error", ApiError.validation().message);
+    expectMappedAs(thrownValue, 400, "validation_error", ApiError.validation().message, {
+      request,
+      database: probeDatabase,
+    });
   });
 
   it("reaches the handler once both schemas pass", async () => {
@@ -595,23 +752,96 @@ describe("another failed schema", () => {
     expect(writeHandlerReached).toBe(true);
   });
 
-  it("answers a request that fails the body and the header together with 400", async () => {
-    // Fastify validates a route's parts in order — params, body, querystring, then headers —
-    // and reports the first failure alone, so a request that fails both is answered for its
-    // body. The assertion is here because it also pins that a body failure is never mistaken
-    // for a header one: the mapping reads the failure's own entries rather than answering
-    // `401` for any rejection.
-    const { status, body, thrownValue } = await probeWrite({
+  it("answers a request that fails the body and the header together with 401 unauthorized", async () => {
+    // The rule: the header requirement this route declares outranks the body's shape. Fastify
+    // validates a route's parts in order — params, body, querystring, then headers — and reports
+    // the first failure alone, so this request's failure names its body and never the header it
+    // also omitted. The route requires that header and none resolved, so the contract's `401` for
+    // this row is the answer — the same sentence, in the same shape, that the identical request
+    // with a valid body earns — which is what makes the status independent of which section the
+    // framework happened to report.
+    const { status, body, thrownValue, request } = await probeWrite({
       method: "POST",
       url: WRITE_PROBE_PATH,
       payload: {},
     });
 
+    expect(status).toBe(401);
+    expectEnvelopeFailure(body, "unauthorized", ApiError.unauthorized().message);
+    expect(writeHandlerReached).toBe(false);
+
+    // The value the mapping was handed is Fastify's own failure and it concerns the body: its
+    // spelling names the missing property and never the header, which is what makes the route's own
+    // requirement the only thing that can answer this case `401`.
+    expect(carriedCode(thrownValue)).toBe(FASTIFY_VALIDATION_CODE);
+    expect(carriedMessage(thrownValue)).toContain("title");
+    expect(carriedMessage(thrownValue)).not.toContain(DEMO_HEADER_VALIDATION_NAME);
+    expectMappedAs(thrownValue, 401, "unauthorized", ApiError.unauthorized().message, {
+      request,
+      database: probeDatabase,
+    });
+  });
+
+  it.each([
+    {
+      case: "names no seeded account",
+      account: UNRESOLVABLE_ACCOUNT,
+      status: 401,
+      code: "unauthorized",
+      message: ApiError.unauthorized().message,
+    },
+    {
+      case: "names the seeded probe account",
+      account: PROBE_ACCOUNT,
+      status: 400,
+      code: "validation_error",
+      message: ApiError.validation().message,
+    },
+  ])(
+    "answers a doubly-invalid write whose header $case with the header's own status",
+    async ({ account, status, code, message }) => {
+      // Both requests fail the write probe's body in the same way — the failure Fastify raises names
+      // the missing `title` and nothing else — and they differ in the header's value alone. It is the
+      // value that decides the status: a route that requires the header answers `401` when no seeded
+      // account resolves, the contract's answer for the row, and leaves the body's `400` to stand when
+      // one does. The header that resolves never reaches the probe's handler, because the failure that
+      // answered the request happened before any handler ran.
+      const { status: answered, body, thrownValue, request } = await probeWrite({
+        method: "POST",
+        url: WRITE_PROBE_PATH,
+        headers: { [DEMO_ACCOUNT_HEADER]: account },
+        payload: {},
+      });
+
+      expect(answered).toBe(status);
+      expectEnvelopeFailure(body, code, message);
+      expect(writeHandlerReached).toBe(false);
+      expect(carriedMessage(thrownValue)).not.toContain(DEMO_HEADER_VALIDATION_NAME);
+      expectMappedAs(thrownValue, status, code, message, {
+        request,
+        database: probeDatabase,
+      });
+    },
+  );
+
+  it("keeps a route that declares no demo header at 400 validation_error", async () => {
+    // The narrow gate: a schema rejection is answered `401` for the row only where the route itself
+    // declares the demo-session header as required. This route declares none, so a body failure with
+    // no header at all keeps the `400 validation_error` every other schema rejection earns — an
+    // absent header is no header failure where nothing asked for one.
+    const { status, body, thrownValue, request } = await probeWrite({
+      method: "POST",
+      url: BODY_ONLY_PROBE_PATH,
+      payload: {},
+    });
+
     expect(status).toBe(400);
     expectEnvelopeFailure(body, "validation_error", ApiError.validation().message);
-    expect(writeHandlerReached).toBe(false);
-    expect(carriedCode(thrownValue)).toBe(FASTIFY_VALIDATION_CODE);
-    expectMappedAs(thrownValue, 400, "validation_error", ApiError.validation().message);
+    expect(bodyOnlyHandlerReached).toBe(false);
+    expectMappedAs(thrownValue, 400, "validation_error", ApiError.validation().message, {
+      request,
+      database: probeDatabase,
+    });
   });
 
   it.each(BODY_FAILURES)("maps a body failure to 400 validation_error", (thrownValue) => {
@@ -777,6 +1007,79 @@ describe("a request Fastify refuses before any schema runs", () => {
       // code invented for it. It is answered as the mapper answered it, which is the generic server
       // fault, so no client ever reads a status the contract does not define.
       expectMappedAs({ statusCode }, 500, "internal_error", GENERIC_MESSAGE);
+    },
+  );
+});
+
+describe("the product's own answer to a doubly-invalid evaluation submission", () => {
+  it.each([
+    {
+      case: "no header at all",
+      account: undefined,
+      status: 401,
+      code: "unauthorized",
+      message: ApiError.unauthorized().message,
+    },
+    {
+      case: "the resolvable probe account",
+      account: PROBE_ACCOUNT,
+      status: 400,
+      code: "validation_error",
+      message: ApiError.validation().message,
+    },
+  ])(
+    "answers a submission carrying $case with that outcome's own status",
+    async ({ account, status, code, message }) => {
+      // This route's contract, answered at the product level and through the composition root: a
+      // submission whose body fails `evaluationSubmissionBodySchema` — `{}` lacks every required
+      // field — sent with and without a header that resolves. The body is validated before the handler
+      // runs, so both requests are answered by the mapping and neither reaches the handler: the one
+      // whose header resolves earns the `400 validation_error` its body's failure states, while the
+      // header-less one earns the `401 unauthorized` the contract gives a request that carries no
+      // demo account, in the one sentence every absent-header `401` uses.
+      const response = await productApp.inject({
+        method: "POST",
+        url: `${API_PREFIX}/evaluations`,
+        headers: {
+          "content-type": "application/json",
+          ...(account === undefined ? {} : { [DEMO_ACCOUNT_HEADER]: account }),
+        },
+        payload: "{}",
+      });
+
+      expect(response.statusCode).toBe(status);
+      expectEnvelopeFailure(JSON.parse(response.body), code, message);
+    },
+  );
+
+  it.each([
+    { route: "an evaluation", path: `${API_PREFIX}/evaluations` },
+    { route: "a standard proposal", path: `${API_PREFIX}/standards/proposals` },
+    {
+      route: "an appeal",
+      path: `${API_PREFIX}/evaluations/${UNKNOWN_REPORT_ID}/appeals`,
+    },
+  ])(
+    "answers a header-less write whose body is invalid on $route with 401 unauthorized",
+    async ({ path }) => {
+      // The same doubly-invalid request on every write route, and not only on the one above: the
+      // precedence belongs to the shared error path rather than to a route, so the answer has to be
+      // uniform across the API. Each body is `{}`, which fails that route's own schema, and each
+      // identifier the path needs is present and well shaped so the body is what the framework
+      // reports — the header's requirement is the row's and the missing account the `401`.
+      const response = await productApp.inject({
+        method: "POST",
+        url: path,
+        headers: { "content-type": "application/json" },
+        payload: "{}",
+      });
+
+      expect(response.statusCode).toBe(401);
+      expectEnvelopeFailure(
+        JSON.parse(response.body),
+        "unauthorized",
+        ApiError.unauthorized().message,
+      );
     },
   );
 });

@@ -285,8 +285,10 @@ function knownStatusOf(code: string): number | undefined {
  * `Record` over the union, and the statuses in it are the contract's — a framework spelling
  * must never be a value a client reads back as `error.code`, and the contract fixes no status
  * of the framework's. A schema rejection is therefore answered from the envelope's own
- * vocabulary instead: the demo-header pair below answers `401 unauthorized`, and every other
- * schema rejection answers `400 validation_error`.
+ * vocabulary instead: the demo-header pair below answers `401 unauthorized`, every other
+ * schema rejection answers `400 validation_error`, and the caller's own statement about the
+ * request it is answering — see {@link toApiError}'s `unidentifiedCaller` — moves a rejection
+ * to the `401` as well where the route required that header and the request resolved none.
  */
 const FASTIFY_VALIDATION_CODE = 'FST_ERR_VALIDATION';
 
@@ -338,8 +340,9 @@ function validatedPropertyOf(entry: unknown): string | undefined {
  *
  * Reads the failure's `validation` array — Ajv's entries — and answers `true` when any entry
  * names the demo header, compared case-insensitively against the header name's own declaration
- * site. Anything that is not an array is no evidence of a header failure: the answer is `false`
- * and the caller answers `400`, the contract's outcome for every other schema rejection.
+ * site. Anything that is not an array is no evidence of a header failure: the answer is `false`,
+ * and the caller answers `400` unless its own request context states that the route required that
+ * header and the request resolved none (see {@link toApiError}'s `unidentifiedCaller`).
  *
  * Nothing here throws. The `validation` property, its entries, their `params` and their
  * `instancePath` may each be absent or of any type, and an unreadable member yields no property
@@ -355,6 +358,25 @@ function concernsDemoHeader(error: unknown): boolean {
   return entries.some(
     (entry) => validatedPropertyOf(entry)?.toLowerCase() === DEMO_HEADER_VALIDATION_NAME,
   );
+}
+
+/**
+ * Whether a thrown value is Fastify's own refusal of a request that failed a route's schema.
+ *
+ * The one exported spelling of the comparison {@link toApiError} makes against
+ * {@link FASTIFY_VALIDATION_CODE}, so a caller holding the request a failure was raised for — the
+ * composition root's mapper is that caller — can ask the question the mapping asks without comparing
+ * the framework's code itself, and so the framework's spelling is still read in one place.
+ *
+ * `false` for everything else, and each of those matters here: an {@link ApiError} a route threw, a
+ * domain package's refusal, a framework failure raised before any schema runs — a body above the
+ * route's limit, a media type with no parser, a body the JSON parser refused — and any value that is
+ * not an object at all. None of those is a schema rejection, so nothing that reads this predicate can
+ * relabel one. It never throws, for the reason {@link stableCodeOf} gives: the value is arbitrary and
+ * the read is guarded.
+ */
+export function isFailedRouteSchema(error: unknown): boolean {
+  return stableCodeOf(error) === FASTIFY_VALIDATION_CODE;
 }
 
 /**
@@ -415,10 +437,11 @@ function safeMessageOf(error: unknown, status: number): string {
  * 2. The value's stable code is read from a string `code`, or failing that a string
  *    `reason` (see {@link stableCodeOf} for why both spellings exist).
  * 3. {@link FASTIFY_VALIDATION_CODE} — Fastify's own code, raised before the handler runs for a
- *    failed route schema — is answered from the envelope's own vocabulary: `401 unauthorized`
- *    when the failure concerns the demo-session header (see {@link concernsDemoHeader}, which is
- *    what makes an absent-header request and an unknown-account request both `401`), and `400
- *    validation_error` for every other schema rejection. Both sentences come from an
+ *    failed route schema — is answered from the envelope's own vocabulary: `401 unauthorized` when the
+ *    failure concerns the demo-session header (see {@link concernsDemoHeader}, which is what makes an
+ *    absent-header request and an unknown-account request both `401`) or when the caller states that the
+ *    request established no demo identity where its route required one (see `unidentifiedCaller` below),
+ *    and `400 validation_error` for every other schema rejection. Both sentences come from an
  *    {@link ApiError} factory, so the client reads the product's own sentence and never the
  *    schema's spelling, an `instancePath` or an echoed value. The branch sits here rather than in
  *    `ERROR_STATUS` because that map is the closed vocabulary of codes the API returns, and a
@@ -440,8 +463,23 @@ function safeMessageOf(error: unknown, status: number): string {
  *    so a programming error surfaces as a generic server failure rather than being
  *    answered as if a client had sent something invalid. A driver failure such as
  *    `SQLITE_CONSTRAINT_UNIQUE` is unmapped for the same reason.
+ *
+ * The second parameter, `unidentifiedCaller`, is the one fact this module cannot read from the thrown
+ * value: that the request a route's schema rejected established no demo identity where that route
+ * required one. The composition root supplies it for the request it is answering, since it holds both
+ * the request and the handle `apps/api/src/auth/resolve-demo-account.ts` resolves the header against.
+ * It is what keeps the contract's answer for such a row total: Fastify validates a route's parts in a
+ * fixed order — params, body, querystring, then headers — and reports the first failure alone, so a
+ * request that both omitted the header and failed its body arrives here as a body failure that never
+ * names the header, and the caller's own statement is the only evidence left that the row it asked for
+ * required one. The header's requirement therefore outranks the body's shape: the request is refused
+ * for the identity it did not establish, in the same `401` sentence the same request earns when its
+ * body is valid, and a client cannot make the status depend on which schema section Ajv reports first.
+ * A caller with no request — the transport-level handler for a request the HTTP parser refused — omits
+ * it, and the branch then answers from the failure's own entries alone. It defaults to `false`, so
+ * every existing caller of this mapper reads the answer it read before it existed.
  */
-export function toApiError(error: unknown): ApiError {
+export function toApiError(error: unknown, unidentifiedCaller = false): ApiError {
   if (isApiError(error)) {
     return error;
   }
@@ -450,8 +488,12 @@ export function toApiError(error: unknown): ApiError {
   if (code === FASTIFY_VALIDATION_CODE) {
     // The demo-header pair is the contract's: a request that reaches a non-public row without a
     // resolvable account is `401`, and every other schema rejection is the request failing the
-    // shape its endpoint validates, which is `400`.
-    return concernsDemoHeader(error) ? ApiError.unauthorized() : ApiError.validation();
+    // shape its endpoint validates, which is `400`. The caller's own statement is read beside the
+    // failure's entries because the framework reports one failure: a request that omitted the header
+    // and failed its body is reported for its body, and only the caller knows the route required one.
+    return concernsDemoHeader(error) || unidentifiedCaller
+      ? ApiError.unauthorized()
+      : ApiError.validation();
   }
   if (code !== undefined) {
     const status = knownStatusOf(code);

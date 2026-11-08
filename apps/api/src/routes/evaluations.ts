@@ -20,7 +20,10 @@
  * the ownership check (`403`), the versioned criteria and the fixture case set (`404`, `400`), the
  * scoring, and then — inside one transaction — the label, the server-derived retest link, the
  * report with its evidence, the `retest_created` governance event the link is recorded in, the gate
- * fee and the audit event.
+ * fee and the audit event. The order does not decide the answer to a request that is invalid twice:
+ * a request whose body fails this route's schema and which carries no resolvable demo-session header
+ * is answered `401`, the contract's answer for this row, so the status never depends on which schema
+ * section Fastify's validator reported first.
  *
  * **The `422` fires before anything is written.** A submission that records no output for a fixture
  * case is refused by the scorer as `incomplete_submission`, which maps to the contract's `422`, and
@@ -321,10 +324,14 @@ function toEvaluationReportDetail(report: ReportRecord): EvaluationReportDetail 
  * handler answers `401 unauthorized` for this header, and `evaluationSubmissionBodySchema` validates
  * the declarative submission, whose `additionalProperties: false` is what the scope's request-body
  * policy holds a client to, refusing a client-supplied retest field with `400 validation_error`
- * before this handler runs. The rate-limit option is the contract's write limit, read
- * from the resolved configuration rather than restated, and it is attached to this route alone: the
- * plugin is registered without a global default, so a route that wants the limit names it and every
- * read stays unlimited.
+ * before this handler runs. The two sections are one answer for a request that fails both: Fastify
+ * validates a route's parts in a fixed order and reports the first failure alone, so a submission
+ * whose body is rejected and which carries no resolvable header never has the header named in that
+ * failure — the error handler reads this route's own requirement and answers `401`, the contract's
+ * status for this row, rather than letting the body's section decide it. The rate-limit option is the
+ * contract's write limit, read from the resolved configuration rather than restated, and it is
+ * attached to this route alone: the plugin is registered without a global default, so a route that
+ * wants the limit names it and every read stays unlimited.
  *
  * No failure is caught here. The server's single error handler owns `{ error: { code, message } }`
  * and maps a domain refusal by its stable code, so a handler-local error body would be a second
