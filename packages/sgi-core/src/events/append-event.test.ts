@@ -1,16 +1,22 @@
 /**
- * Unit tests for the append-only governance event writer.
+ * The beside-source unit test of `appendEvent` from `./append-event`: the single insert path
+ * into `governance_events`, ADEM's append-only log of the domain decisions the Standard Gate
+ * Index records.
  *
  * Every case runs against a real SQLite database built from the ordered migrations in
- * `packages/shared/migrations/`, because the writer's contract is a statement executed
- * against a real schema: the stored shape, the canonical payload text, the generated id
- * and timestamp, and the append-only guard are all properties of the table rather than
- * of the function alone.
+ * `packages/shared/migrations/`, applied here in filename order exactly as
+ * `apps/api/src/db/migrate.ts` applies them, because the writer's contract is a statement
+ * executed against a real schema: the stored column shape, the canonical payload text, the
+ * generated id and instant, and the append-only guard are properties of the table rather
+ * than of the function alone. Nothing is stood in for — no table, column or trigger is
+ * declared in this file — so a migration the harness cannot read, or a column the module
+ * spells differently, fails loudly here instead of passing against duplicated DDL.
  *
- * Migration `0010_append_only_triggers.sql` is still being written, so the fixture
- * creates a stand-in guard when no trigger yet protects the table. The stand-in is
- * skipped as soon as that migration lands, and every other assertion reads the real
- * `governance_events` table `0007_governance_events_and_appeals.sql` declares.
+ * Nine behaviours are proven: the closed vocabulary and its fixed order; that every member
+ * is accepted with the fields the writer generates; the refusal outside the vocabulary and
+ * that it writes nothing; the canonical payload and its byte-stability; that the write
+ * appends rather than upserts; the append-only guard-rail behind the row; that this module
+ * writes no audit row; the exact shape of what it returns; and one row per call.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -19,6 +25,8 @@ import { fileURLToPath } from "node:url";
 import { GOVERNANCE_EVENT_TYPES as SHARED_GOVERNANCE_EVENT_TYPES } from "@adem/shared";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { canonicalize } from "../scoring/canonical-json";
 import {
   GOVERNANCE_EVENT_TYPES,
   UnknownEventTypeError,
@@ -28,8 +36,11 @@ import {
   type NewGovernanceEvent,
 } from "./append-event";
 
-/** The ordered migration files, resolved from this module's location rather than the working directory. */
-const migrationsDir = fileURLToPath(new URL("../../../../packages/shared/migrations/", import.meta.url));
+/**
+ * The ordered migrations, resolved from this module's own location rather than the working
+ * directory, so the same files are read wherever the suite was started.
+ */
+const migrationsDir = fileURLToPath(new URL("../../../shared/migrations/", import.meta.url));
 
 /** The synthetic operator account the appended events name, referencing `accounts.id`. */
 const ACTOR_ACCOUNT_ID = "demo-operator-account";
@@ -67,25 +78,79 @@ const eventWithoutReasonOrPayload: NewGovernanceEvent = {
   actorAccountId: ACTOR_ACCOUNT_ID,
 };
 
-/** The stand-in append-only guard, used only until migration 0010 is applied. */
-const APPEND_ONLY_STAND_IN = `CREATE TRIGGER governance_events_no_update BEFORE UPDATE ON governance_events
-BEGIN
-  SELECT RAISE(ABORT, 'governance_events is append-only');
-END;
-CREATE TRIGGER governance_events_no_delete BEFORE DELETE ON governance_events
-BEGIN
-  SELECT RAISE(ABORT, 'governance_events is append-only');
-END;`;
+/** The version-4 UUID shape `randomUUID` produces, which every appended row's id must match. */
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * The ISO-8601 UTC instant shape `new Date().toISOString()` produces: date, time to the
+ * millisecond and a trailing `Z`. SQLite's `CURRENT_TIMESTAMP` renders `YYYY-MM-DD HH:MM:SS`
+ * instead — no `T`, no milliseconds, no zone marker — which is why a timestamp is never left
+ * to a column default.
+ */
+const ISO_8601_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/**
+ * The closed vocabulary this module enforces, spelled out here in its fixed order.
+ *
+ * Written as a literal rather than compared against the shared tuple alone, so that a member
+ * added, dropped, renamed or reordered in `@adem/shared` fails this file rather than being
+ * followed silently: every reader of the trail switches on these values, so the set and its
+ * order are a contract rather than an implementation detail. None of the spellings the refusal
+ * cases below pass is a member.
+ */
+const EXPECTED_EVENT_TYPES: ReadonlyArray<GovernanceEventType> = [
+  "standard_version_published",
+  "proposal_reviewed",
+  "listing_moderated",
+  "appeal_opened",
+  "appeal_ruled",
+  "retest_created",
+];
+
+/**
+ * Spellings the guard refuses, typed as plain strings so this file may pass them.
+ *
+ * The first four are namespaced with a dot, the shape a caller who has not read the declared
+ * tuple would invent; the last is a plausible snake_case neighbour of a real member, which is
+ * what pins the guard to the declared list rather than to a prefix or a "close enough" rule.
+ * A `governance_events` row can never be corrected, which is why a spelling outside the
+ * vocabulary is refused before it is written rather than stored and regretted.
+ */
+const REFUSED_EVENT_TYPES: ReadonlyArray<string> = [
+  "listing.archived",
+  "listing.flagged",
+  "appeal.upheld",
+  "standard.published",
+  "proposal_rejected",
+];
+
+/**
+ * The members a returned event carries when the decision states both a reason and a payload,
+ * and the six it carries when it states neither.
+ *
+ * Typed as `keyof GovernanceEvent`, so a member renamed or dropped in the interface fails the
+ * build here instead of leaving an assertion that pins a shape nothing produces.
+ */
+const EVENT_MEMBERS_WITH_BOTH_OPTIONALS: ReadonlyArray<keyof GovernanceEvent> = [
+  "actorAccountId",
+  "createdAt",
+  "eventType",
+  "id",
+  "payload",
+  "reason",
+  "subjectId",
+  "subjectType",
+];
+const EVENT_MEMBERS_WITH_NEITHER_OPTIONAL: ReadonlyArray<keyof GovernanceEvent> = [
+  "actorAccountId",
+  "createdAt",
+  "eventType",
+  "id",
+  "subjectId",
+  "subjectType",
+];
 
 let db: Database.Database;
-
-/** How many triggers guard this table, by whatever names a migration gave them. */
-function triggerCount(database: Database.Database, table: string): number {
-  const rows = database
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?")
-    .all(table);
-  return rows.length;
-}
 
 /** Applies every migration in filename order, which is the order the runner applies them. */
 function applyMigrations(database: Database.Database): void {
@@ -96,20 +161,40 @@ function applyMigrations(database: Database.Database): void {
   }
 }
 
-/** Every stored row, in the order the log was written. */
+/**
+ * Every stored row, in the order the log was written. The statement is parameterised with the
+ * row shape rather than its result cast to it, so the reader's own typing is checked against
+ * the columns it selects.
+ */
 function readRows(): StoredEventRow[] {
   return db
-    .prepare(
+    .prepare<[], StoredEventRow>(
       `SELECT id, subject_type, subject_id, event_type, actor_account_id, reason, payload_json, created_at
        FROM governance_events
        ORDER BY created_at, id`,
     )
-    .all() as StoredEventRow[];
+    .all();
 }
 
 /** How many events the log holds. */
 function countEvents(): number {
   return readRows().length;
+}
+
+/**
+ * How many rows the *other* log holds.
+ *
+ * `audit_events` belongs to `apps/api`, which appends one row per write request and answers the
+ * question "what was written"; `governance_events` answers "what was decided". They are
+ * deliberately separate feeds, so a count taken here proves this module leaves the API's log
+ * alone.
+ */
+function countAuditEvents(): number {
+  const counted = db.prepare<[], { total: number }>("SELECT count(*) AS total FROM audit_events").get();
+  if (counted === undefined) {
+    throw new Error("the audit log answered no row for its own count");
+  }
+  return counted.total;
 }
 
 /** The only stored row, failing the case rather than the assertion when the log is empty. */
@@ -121,13 +206,31 @@ function firstRow(): StoredEventRow {
   return row;
 }
 
+/** The canonical payload text of the only stored row, failing the case when it stores none. */
+function firstPayloadJson(): string {
+  const { payload_json: payloadJson } = firstRow();
+  if (payloadJson === null) {
+    throw new Error("expected the appended row to store a payload");
+  }
+  return payloadJson;
+}
+
+/**
+ * The canonical text with every string value blanked out.
+ *
+ * It exists because the two halves of the whitespace rule are asserted on one string: whitespace
+ * *inside* a string value is data and must survive, while whitespace *between* tokens must not
+ * exist at all. Blanking the literals lets the second half be asserted without tripping over
+ * the first.
+ */
+function outsideStringValues(canonicalText: string): string {
+  return canonicalText.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+}
+
 beforeEach(() => {
   db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
   applyMigrations(db);
-  if (triggerCount(db, "governance_events") === 0) {
-    db.exec(APPEND_ONLY_STAND_IN);
-  }
   db.prepare("INSERT INTO accounts (id, handle, role, display_label) VALUES (?, ?, ?, ?)").run(
     ACTOR_ACCOUNT_ID,
     "demo-operator",
@@ -141,9 +244,12 @@ afterEach(() => {
 });
 
 describe("GOVERNANCE_EVENT_TYPES", () => {
-  it("is the frozen, closed vocabulary @adem/shared declares, in its order", () => {
-    expect(Object.isFrozen(GOVERNANCE_EVENT_TYPES)).toBe(true);
+  it("is the closed vocabulary, in its fixed order, and is frozen", () => {
+    expect(GOVERNANCE_EVENT_TYPES).toEqual(EXPECTED_EVENT_TYPES);
     expect([...GOVERNANCE_EVENT_TYPES]).toEqual([...SHARED_GOVERNANCE_EVENT_TYPES]);
+    // Frozen, so no caller can widen the set at runtime: a member is added to the shared tuple
+    // and read through every call site, never pushed on here.
+    expect(Object.isFrozen(GOVERNANCE_EVENT_TYPES)).toBe(true);
   });
 
   it("derives its union from the array, so a spelling outside it is a compile error", () => {
@@ -154,37 +260,95 @@ describe("GOVERNANCE_EVENT_TYPES", () => {
 });
 
 describe("appendEvent", () => {
-  it.each(GOVERNANCE_EVENT_TYPES)("appends a %s event as exactly one row", (eventType) => {
-    appendEvent(db, { ...validEvent, eventType });
+  it("accepts every member of the vocabulary, appending exactly one row each", () => {
+    const appendedEvents = GOVERNANCE_EVENT_TYPES.map((eventType) =>
+      appendEvent(db, { ...validEvent, eventType, payload: { recorded_event_type: eventType } }),
+    );
 
-    expect(countEvents()).toBe(1);
-    expect(firstRow().event_type).toBe(eventType);
+    // Every member round-trips through the closed set, in the order it declares...
+    const returnedTypes = appendedEvents.map((appended) => appended.eventType);
+    expect(returnedTypes).toEqual([...GOVERNANCE_EVENT_TYPES]);
+    // ...each returns the decision it was given, with only the two generated members added...
+    for (const appended of appendedEvents) {
+      expect(appended).toEqual({
+        ...validEvent,
+        eventType: appended.eventType,
+        payload: { recorded_event_type: appended.eventType },
+        id: appended.id,
+        createdAt: appended.createdAt,
+      });
+    }
+    // ...and one row was appended per member, no id written twice. The stored types are compared
+    // as sets because the read's order is the database's (`created_at`, then `id`) rather than
+    // insertion order: appends in the same millisecond share an instant.
+    const writtenIds = new Set(appendedEvents.map((appended) => appended.id));
+    const storedTypes = readRows().map((row) => row.event_type).sort();
+    expect(countEvents()).toBe(GOVERNANCE_EVENT_TYPES.length);
+    expect(writtenIds.size).toBe(GOVERNANCE_EVENT_TYPES.length);
+    expect(storedTypes).toEqual([...GOVERNANCE_EVENT_TYPES].sort());
   });
 
-  it("generates a UUID identifier and an ISO-8601 UTC instant for the row", () => {
+  it("generates a version-4 UUID and an ISO-8601 UTC instant for the row", () => {
     const appended: GovernanceEvent = appendEvent(db, validEvent);
     const row = firstRow();
 
-    expect(appended.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(appended.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-    expect(Number.isNaN(Date.parse(appended.createdAt))).toBe(false);
+    expect(appended.id).toMatch(UUID_V4_PATTERN);
+    expect(appended.createdAt).toMatch(ISO_8601_UTC_PATTERN);
+    // The instant round-trips unchanged, which a string in any other form or zone would not:
+    // it is the shape a reader orders the trail by, and it is why no column default supplies it.
+    expect(new Date(appended.createdAt).toISOString()).toBe(appended.createdAt);
     expect(row.id).toBe(appended.id);
     expect(row.created_at).toBe(appended.createdAt);
   });
 
-  it("returns the appended event from its input and the values it generated", () => {
+  it("returns the caller's decision unchanged, alongside the two values it generated", () => {
     const appended = appendEvent(db, validEvent);
 
     expect(appended).toEqual({ ...validEvent, id: appended.id, createdAt: appended.createdAt });
+    // Exactly the eight members a decision carrying both a reason and a payload fills, so
+    // nothing locale- or clock-dependent leaked into the shape.
+    expect(Object.keys(appended).sort()).toEqual([...EVENT_MEMBERS_WITH_BOTH_OPTIONALS].sort());
   });
 
-  it("stores the payload as canonical JSON: ordered keys, no insignificant whitespace", () => {
-    appendEvent(db, {
-      ...validEvent,
-      payload: { note: "kept exactly ", probes: [2, { z: null, a: true }], action: "flag" },
-    });
+  it("stores the payload as canonical JSON: code-unit key order, no insignificant whitespace", () => {
+    const payload = { note: "kept exactly ", probes: [2, { z: null, a: true }], action: "flag" };
 
-    expect(firstRow().payload_json).toBe('{"action":"flag","note":"kept exactly ","probes":[2,{"a":true,"z":null}]}');
+    appendEvent(db, { ...validEvent, payload });
+
+    const stored = firstPayloadJson();
+    expect(stored).toBe(canonicalize(payload));
+    expect(stored).toBe('{"action":"flag","note":"kept exactly ","probes":[2,{"a":true,"z":null}]}');
+
+    // Keys are ordered by UTF-16 code unit at every level rather than in the order they were
+    // written: "action" < "note" < "probes", and "a" < "z" inside the nested object.
+    const codeUnitOrderedPairs: ReadonlyArray<readonly [string, string]> = [
+      ['"action"', '"note"'],
+      ['"note"', '"probes"'],
+      ['"a":true', '"z":null'],
+    ];
+    for (const [earlier, later] of codeUnitOrderedPairs) {
+      expect(stored.indexOf(earlier)).toBeLessThan(stored.indexOf(later));
+    }
+
+    // Outside a string value no whitespace survives, while the trailing space *inside* the note
+    // is data and is kept — the distinction case `so-018` of the fixture set turns on.
+    const outsideStrings = outsideStringValues(stored);
+    expect(outsideStrings).not.toContain(": ");
+    expect(outsideStrings).not.toContain(", ");
+    expect(outsideStrings).not.toMatch(/\s/);
+    expect(stored).toContain('"note":"kept exactly "');
+  });
+
+  it("stores byte-identical text for two payloads that differ only in key order", () => {
+    const canonical = canonicalize({ action: "flag", note: "kept exactly " });
+
+    appendEvent(db, { ...validEvent, payload: { action: "flag", note: "kept exactly " } });
+    appendEvent(db, { ...validEvent, payload: { note: "kept exactly ", action: "flag" } });
+
+    // Two decisions, two rows — and one canonical text, because a reader that compared the
+    // written order instead would see a difference no reader of the JSON can observe.
+    expect(canonical).toBe('{"action":"flag","note":"kept exactly "}');
+    expect(readRows().map((row) => row.payload_json)).toEqual([canonical, canonical]);
   });
 
   it("stores a null payload as the string the canonical renderer produces", () => {
@@ -206,6 +370,9 @@ describe("appendEvent", () => {
       id: appended.id,
       createdAt: appended.createdAt,
     });
+    // Six members, not eight: an optional the decision does not state is omitted rather than
+    // carried as an explicit `undefined`, which a reader could not tell from an absent key.
+    expect(Object.keys(appended).sort()).toEqual([...EVENT_MEMBERS_WITH_NEITHER_OPTIONAL].sort());
   });
 
   it("appends a second row rather than replacing the first", () => {
@@ -219,8 +386,21 @@ describe("appendEvent", () => {
     // the order they were written rather than in id order. Sorting both sides asserts
     // which two ids were stored, whichever of those two orders the clock produced.
     expect(rows.map((row) => row.id).sort()).toEqual([first.id, second.id].sort());
-    expect(rows[0]?.payload_json).toBe(rows[1]?.payload_json);
     expect(first.id).not.toBe(second.id);
+    // Two appends carrying identical columns apart from the identifier each call generates
+    // produce two rows, so the write adds rather than collapsing on a natural key: an
+    // `INSERT OR REPLACE` or `INSERT OR IGNORE` keyed on any of the decision's own columns —
+    // `subject_type`, `subject_id`, `event_type`, `actor_account_id` — would leave one row here.
+    // A conflicting REPLACE removes the row it collides with *without* firing the DELETE trigger
+    // the guard-rail case below demonstrates, so the writer's rule that neither upsert clause is
+    // used is a code shape the table cannot enforce; this case therefore asserts two rows rather
+    // than trusting the guard.
+    const canonical = canonicalize({ action: "flag" });
+    expect(canonical).toBe('{"action":"flag"}');
+    expect(rows.map((row) => row.payload_json)).toEqual([canonical, canonical]);
+    // The two instants are what they claim to be, round-tripping unchanged.
+    expect(new Date(first.createdAt).toISOString()).toBe(first.createdAt);
+    expect(new Date(second.createdAt).toISOString()).toBe(second.createdAt);
   });
 
   it("reads no other table: a subject no table holds is still appended", () => {
@@ -245,19 +425,21 @@ describe("appendEvent", () => {
     expect(countEvents()).toBe(0);
   });
 
-  it.each([
-    "listing.archived",
-    "proposal.accepted",
-    "appeal.upheld",
-    "standard.published",
-  ])("refuses %s as an event type before it writes anything", (eventType) => {
+  it.each(REFUSED_EVENT_TYPES)("refuses %s before it writes anything", (eventType) => {
+    appendEvent(db, validEvent);
+    const before = countEvents();
     let failure: unknown;
     try {
-      appendEvent(db, { ...validEvent, eventType: eventType as GovernanceEventType });
+      // The cast is deliberate and is the only one in this file: the guard exists for untyped
+      // input — a value that reached the writer from a request body or a JSON file — so the test
+      // has to smuggle a non-member past the compiler to exercise it. Without it the guard would
+      // be unreachable from typed code and untested.
+      appendEvent(db, { ...validEvent, eventType: eventType as unknown as GovernanceEventType });
     } catch (error) {
       failure = error;
     }
 
+    expect(failure).toBeInstanceOf(Error);
     expect(failure).toBeInstanceOf(UnknownEventTypeError);
     const refusal = failure as UnknownEventTypeError;
     expect(refusal.name).toBe("UnknownEventTypeError");
@@ -265,18 +447,36 @@ describe("appendEvent", () => {
     expect(refusal.eventType).toBe(eventType);
     expect(refusal.message.startsWith("sgi-core:")).toBe(true);
     expect(refusal.message).toContain(eventType);
-    expect(countEvents()).toBe(0);
+    // The refusal happens before the statement runs, so it appends nothing: the row count is
+    // exactly what it was when the refused call was made.
+    expect(countEvents()).toBe(before);
+  });
+
+  it("writes no audit row, because the two logs answer different questions", () => {
+    appendEvent(db, validEvent);
+    appendEvent(db, eventWithoutReasonOrPayload);
+
+    expect(countEvents()).toBe(2);
+    expect(countAuditEvents()).toBe(0);
   });
 
   it("is guarded against mutation, so an appended row stands", () => {
     const appended = appendEvent(db, validEvent);
     const before = firstRow();
 
-    // The message is the trigger's; migration 0010 owns its wording, and the refusal itself is the contract.
+    // The guard is the pair of `BEFORE UPDATE` and `BEFORE DELETE` triggers
+    // `0010_append_only_triggers.sql` raises `ABORT` from, and it is defence in depth rather
+    // than a security boundary: a connection holding write access can drop one. What the
+    // assertion proves is the guard-rail, not a security property. The message is the
+    // trigger's — migration 0010 owns its wording — so only the refusal is asserted.
     expect(() =>
       db.prepare("UPDATE governance_events SET reason = ? WHERE id = ?").run("Rewritten later.", appended.id),
     ).toThrow();
     expect(() => db.prepare("DELETE FROM governance_events WHERE id = ?").run(appended.id)).toThrow();
+
+    // The row stands byte for byte, down to the two columns an attempt would have changed.
     expect(firstRow()).toEqual(before);
+    expect(firstRow().reason).toBe(validEvent.reason);
+    expect(firstRow().payload_json).toBe(canonicalize({ action: "flag" }));
   });
 });
