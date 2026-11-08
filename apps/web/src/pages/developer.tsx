@@ -417,13 +417,18 @@ function describePublishedVersion(version: ListingVersion): string {
 const CREATE_ACTION_LABEL = "Publish this listing";
 
 /**
- * What the create form adds to a `400` notice: the refusal names the parameter, so the form states
- * what it can — that nothing was written and that the fields still hold what was typed.
+ * What the create form adds to a `400` notice its own check could not foresee.
+ *
+ * `POST /listings` answers a `400` either for the shared schema's rejection of the request as written
+ * or for the route's own refusal of a `category_id` that matches no category, and this form renders
+ * whichever sentence arrives in the notice above, for the request rather than beside a field. So this
+ * sentence claims nothing about what that sentence says: it states what the notice cannot — that
+ * nothing was written, and that what was typed is still in the fields.
  */
 const CREATE_REFUSED_DETAIL =
-  "The listing's details are validated at the service's edge, and the sentence above names what it " +
-  "did not accept. Nothing was written, and everything you typed is still in the fields, so it can " +
-  "be corrected and sent again.";
+  "The service validates the whole request as it arrives, so its refusal is stated for the request " +
+  "and not beside a field, and the sentence above is the service's own wording for it. Nothing was " +
+  "written, and everything you typed is still in the fields, so it can be corrected and sent again.";
 
 /** The sentences a create refused for want of an account or for a wrong role renders. */
 const NO_ACCOUNT_CREATE_SENTENCE =
@@ -938,7 +943,12 @@ function ExplainedFailureNotice(props: {
       <p>{props.sentence}</p>
       {props.offersBrowse ? (
         <p>
-          <Link to="/listings">Browse the published listings</Link>
+          <Link
+            className="standalone-link"
+            to="/listings"
+          >
+            Browse the published listings
+          </Link>
         </p>
       ) : null}
     </div>
@@ -2152,15 +2162,76 @@ function PublishVersionForm(props: {
 }
 
 
-/** The sentence the create form's status region announces when its own check refused a field. */
-const CREATE_INCOMPLETE_SENTENCE =
-  "The listing was not published, and no request was sent: every field above needs a value.";
+/**
+ * The sentence the create form's status region announces when its own check refused a field.
+ *
+ * This check refuses a field for holding nothing and for holding more than the bound the shared schema
+ * fixes for it, so the sentence claims neither of those and points at the fields marked above instead:
+ * copy that said every field needs a value would be wrong for a reader whose summary overran its bound
+ * and was refused for that.
+ */
+const CREATE_FIELD_REFUSED_SENTENCE =
+  "The listing was not published, and no request was sent: correct the field or fields marked above, " +
+  "then publish it again.";
 
 /** The sentence beside each create field when it holds nothing. */
 const BLANK_TITLE_SENTENCE = "Enter a title before publishing the listing.";
 const BLANK_SUMMARY_SENTENCE = "Enter a one-paragraph summary before publishing the listing.";
 const BLANK_CATEGORY_SENTENCE = "Choose the category the listing sits in.";
 const BLANK_LICENSE_SENTENCE = "Enter the license code the listing is offered under.";
+
+/**
+ * The bounds `title`, `summary` and `license_code` carry in the body `POST /listings` validates.
+ *
+ * Those three fields are declared in `packages/shared/src/schemas/listings-schema.ts` as
+ * `listingCreateBodySchema`, and each of them carries a `maxLength` there: a title of at most 200
+ * characters, a summary of at most 2000 and a license code of at most 64. The numbers are restated
+ * here for the reason {@link VERSION_FIELD_HINT} restates the version string's own 32-character bound
+ * — this form refuses beside the field that carries the value what the schema would refuse for the
+ * whole request, rather than sending it and meeting the schema's refusal of the request as a whole.
+ *
+ * The category is not among them: it is chosen from a select of the categories the catalogue offers,
+ * so it has no length a reader could overrun.
+ */
+const TITLE_MAX_LENGTH = 200;
+const SUMMARY_MAX_LENGTH = 2000;
+const LICENSE_CODE_MAX_LENGTH = 64;
+
+/**
+ * The sentence beside a free-text create field whose value overran the bound the schema fixes.
+ *
+ * The field is named by its own label, read in lower case, and the length stated is the one the
+ * request would carry: all three of these fields are sent trimmed, and the trimmed value is what the
+ * schema's `maxLength` measures.
+ */
+function describeOverlongFieldSentence(fieldLabel: string, bound: number, length: number): string {
+  return `A ${fieldLabel.toLowerCase()} may be at most ${bound} characters, and this one is ${length}. Shorten it and publish the listing again.`;
+}
+
+/**
+ * What one free-text create field states before a request is sent: the sentence for a field that holds
+ * nothing, the sentence for a field that overran its bound, or `null` for a value the request can
+ * carry.
+ *
+ * Blankness is judged first, because a field holding nothing is what a reader most often left behind
+ * and a blank value is never over its bound. Each field keeps its own sentence for both states, which
+ * is why they are passed in rather than derived from the label.
+ */
+function describeFreeTextFieldSentence(
+  value: string,
+  fieldLabel: string,
+  bound: number,
+  blankSentence: string,
+): string | null {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return blankSentence;
+  }
+  if (trimmed.length > bound) {
+    return describeOverlongFieldSentence(fieldLabel, bound, trimmed.length);
+  }
+  return null;
+}
 
 /** What the submit control states when no category exists to place a listing in. */
 const NO_CATEGORY_SUBMIT_HINT =
@@ -2194,14 +2265,20 @@ function hasCreateFieldErrors(errors: CreateFieldErrors): boolean {
  *
  * The developer's identity comes from the demo account selected in the header rather than from a
  * field, and the service derives the listing's address token and its status, so neither is a field
- * here. The four blank-field checks are this form's own, because a value the reader can supply is
- * cheap to ask for before a request is sent; everything else the service decides is rendered from its
- * own refusal, and a `400` is explained by the error notice, which echoes the sentence naming the
- * parameter it did not accept.
+ * here. This form's own check covers what a field can be asked for cheaply before a request is sent: a
+ * value for each of the four, and for the three free-text fields a length within the bound the shared
+ * schema fixes for that field — {@link TITLE_MAX_LENGTH}, {@link SUMMARY_MAX_LENGTH} and
+ * {@link LICENSE_CODE_MAX_LENGTH}, which restate the `maxLength` values of `listingCreateBodySchema`
+ * in `packages/shared/src/schemas/listings-schema.ts`. A field that overran its bound is therefore
+ * refused beside the field itself, naming the bound and the length typed, instead of being sent and
+ * refused with one sentence stated for the whole request. A `400` this check could not foresee is
+ * rendered by the error notice, which echoes the service's own sentence and adds the form's own
+ * statement that the refusal is stated for the request rather than beside a field.
  *
- * A refusal the service gave is deliberately left on screen while a field is edited: it names what
- * the service did not accept, and a reader correcting the field is reading it. Only the field's own
- * error is cleared by typing in it, and the next submission replaces the refusal either way.
+ * A refusal the service gave is deliberately left on screen while a field is edited: it is the
+ * service's own wording for the request it refused, and a reader correcting the field is reading it.
+ * Only the field's own error is cleared by typing in it, and the next submission replaces the refusal
+ * either way.
  */
 function CreateListingForm(props: {
   readonly categories: readonly Category[];
@@ -2244,7 +2321,7 @@ function CreateListingForm(props: {
 
   const serviceReading = describeCreateFailure(failure);
   const reading: WriteFailureReading | null = hasCreateFieldErrors(fieldErrors)
-    ? { kind: "explained", sentence: CREATE_INCOMPLETE_SENTENCE, variant: "notice--error", offersBrowse: false }
+    ? { kind: "explained", sentence: CREATE_FIELD_REFUSED_SENTENCE, variant: "notice--error", offersBrowse: false }
     : serviceReading;
 
   const handleTitleChange = (event: ChangeEvent<HTMLInputElement>): void => {
@@ -2289,11 +2366,28 @@ function CreateListingForm(props: {
       return;
     }
 
+    // Each free-text field is judged on the trimmed value the request would carry, against the bound
+    // the shared schema fixes for it; the category comes from a select and has no length to judge.
     const errors: CreateFieldErrors = {
-      title: title.trim() === "" ? BLANK_TITLE_SENTENCE : null,
-      summary: summary.trim() === "" ? BLANK_SUMMARY_SENTENCE : null,
+      title: describeFreeTextFieldSentence(
+        title,
+        TITLE_FIELD_LABEL,
+        TITLE_MAX_LENGTH,
+        BLANK_TITLE_SENTENCE,
+      ),
+      summary: describeFreeTextFieldSentence(
+        summary,
+        SUMMARY_FIELD_LABEL,
+        SUMMARY_MAX_LENGTH,
+        BLANK_SUMMARY_SENTENCE,
+      ),
       category: categoryId === "" ? BLANK_CATEGORY_SENTENCE : null,
-      license: licenseCode.trim() === "" ? BLANK_LICENSE_SENTENCE : null,
+      license: describeFreeTextFieldSentence(
+        licenseCode,
+        LICENSE_FIELD_LABEL,
+        LICENSE_CODE_MAX_LENGTH,
+        BLANK_LICENSE_SENTENCE,
+      ),
     };
     if (hasCreateFieldErrors(errors)) {
       setCreated(null);
@@ -2493,7 +2587,12 @@ function CreateListingForm(props: {
           <div className="notice notice--success">
             <p>{describeCreatedListing(created)}</p>
             <p>
-              <Link to={listingPath(created.id)}>Read the listing's public page</Link>
+              <Link
+                className="standalone-link"
+                to={listingPath(created.id)}
+              >
+                Read the listing's public page
+              </Link>
             </p>
           </div>
         )}
@@ -2931,6 +3030,15 @@ const LEDGERS_HEADING_ID = "developer-ledgers-heading";
 const AUDIT_HEADING_ID = "developer-audit-heading";
 
 /**
+ * No ledger read has settled yet: the state the operator half opens in, before any panel has reported
+ * that its read left `loading`.
+ *
+ * Nothing mutates this set — a panel's report replaces it with a new one — so the same value is shared
+ * by every mount and never carries a previous page's reads into a fresh one.
+ */
+const NO_SETTLED_LEDGERS: ReadonlySet<LedgerName> = new Set<LedgerName>();
+
+/**
  * The operator half of the page: the three append-only ledgers and the audit feed.
  *
  * Every read here is operator-only, which is why this half is mounted only for the operator account
@@ -2940,10 +3048,47 @@ const AUDIT_HEADING_ID = "developer-audit-heading";
  * ledger and the audit feed because the entries it appended belong to both — each panel reading again
  * the page it is on, so the appended entries appear where the reader is standing rather than sending
  * them back to the newest page.
+ *
+ * **The three ledger bodies are laid out in one commit, and the audit feed's section in that same
+ * one.** A region that persists while the page loads is displaced out of the viewport when something
+ * above it grows, and here each panel grows from a one-line reading sentence into a body of up to a
+ * page of entries — thousands of pixels for a populated ledger. The audit feed's section is the region
+ * that persists below the ledgers, so a body that landed first would push it down the page and the
+ * reader would watch the page jump: exactly the layout shift this surface must not have. So no panel
+ * renders its body until every ledger read has left `loading`, and the audit feed's section is mounted
+ * in that same commit, when nothing is left to arrive above it. A paragraph that is removed is not a
+ * shift source; a region that moves is, which is why the panels hold their one-line sentence instead
+ * of laying a body out early, and why the audit feed follows the ledgers rather than mounting beside
+ * them. The cost accepted here is that the audit feed's own read starts when its section mounts rather
+ * than with the three ledger reads; the surfaces it feeds are read independently either way, and
+ * moving the page under a reader who is reading it is the thing worth avoiding.
+ *
+ * The alternative — reserving a block height per ledger, so the reading sentence already occupied the
+ * space its body will take — was considered and rejected: a ledger page's height is the service's
+ * answer rather than a number this surface holds, so a reserved height the answer did not exactly fill
+ * would move the audit feed exactly as the placeholder did. Leaving the arrangement below at the
+ * panels' own pace was rejected for the same reason it was reported: a body landing displaces the feed.
  */
 function OperatorSurfaces(): JSX.Element {
   const [ledgerToken, setLedgerToken] = useState<number>(0);
   const [auditToken, setAuditToken] = useState<number>(0);
+  const [settledLedgers, setSettledLedgers] = useState<ReadonlySet<LedgerName>>(NO_SETTLED_LEDGERS);
+
+  /**
+   * Records that one ledger's read has left `loading`, whether it answered with a page or failed.
+   *
+   * A failed read is settled too: it renders its error notice in place of a body, so waiting for it is
+   * what keeps the commit below honest. The callback is stable and the set is only ever replaced, so a
+   * panel reporting its state cannot re-render the half on every state change of its own.
+   */
+  const handleLedgerSettled = useCallback((ledger: LedgerName): void => {
+    setSettledLedgers((previous: ReadonlySet<LedgerName>): ReadonlySet<LedgerName> =>
+      previous.has(ledger) ? previous : new Set(previous).add(ledger),
+    );
+  }, []);
+
+  /** Whether a ledger read is still in flight, and with it whether a body may be laid out yet. */
+  const awaitingLedgerReads = settledLedgers.size < LEDGER_NAMES.length;
 
   /**
    * A refund appended reversal entries: the ledgers are read again so the appended entries appear
@@ -2976,19 +3121,26 @@ function OperatorSurfaces(): JSX.Element {
             <LedgerPanel
               key={ledger}
               ledger={ledger}
+              holdBody={awaitingLedgerReads}
               reloadToken={ledgerToken}
               onRetry={reloadLedgers}
               onRefunded={handleRefunded}
+              onSettled={handleLedgerSettled}
             />
           ),
         )}
       </section>
 
-      <section aria-labelledby={AUDIT_HEADING_ID}>
-        <h2 id={AUDIT_HEADING_ID}>{AUDIT_HEADING}</h2>
-        <p>{AUDIT_EXPLANATION}</p>
-        <AuditFeed reloadToken={auditToken} onRetry={reloadAudit} />
-      </section>
+      {/* Mounted in the commit that lays the three ledger bodies out, so nothing is ever laid out
+          below a body that has not arrived. Until then the half renders these three reading
+          sentences and no audit section at all. */}
+      {awaitingLedgerReads ? null : (
+        <section aria-labelledby={AUDIT_HEADING_ID}>
+          <h2 id={AUDIT_HEADING_ID}>{AUDIT_HEADING}</h2>
+          <p>{AUDIT_EXPLANATION}</p>
+          <AuditFeed reloadToken={auditToken} onRetry={reloadAudit} />
+        </section>
+      )}
     </>
   );
 }
@@ -3066,12 +3218,36 @@ function CollectionPager(props: {
  * ledger. A failed read is rendered as the explanation the error notice carries with a retry control,
  * and a refusal for want of the operator role adds what the notice cannot know — that these are the
  * operator-only reads — so it never surfaces as a status code.
+ *
+ * **The body waits for its siblings.** {@link holdBody} keeps this panel's one-line reading sentence on
+ * screen until every ledger read in the half has left `loading`, so all three bodies — and the audit
+ * feed's section below them — are laid out in one commit. That is what stops the audit feed from being
+ * pushed out of the viewport by whichever body lands first; {@link OperatorSurfaces} states the
+ * arrangement and why it is the one taken. A re-read after that first settlement does not bring the
+ * sentence back: the read keeps the value already on screen, so the body stays where the reader is
+ * reading it.
  */
 function LedgerPanel(props: {
   readonly ledger: LedgerName;
+  /**
+   * Whether this panel must keep its reading sentence whatever its own read has done, because a
+   * sibling ledger read is still in flight.
+   *
+   * True while the half has not settled every ledger read. A body rendered under it would be followed
+   * by the other ledgers' bodies arriving one at a time, and each arrival would move everything below
+   * — here the audit feed's section — down the page: the layout shift this surface must not have. A
+   * paragraph that is removed is not a shift source, so the sentence is held and then removed in the
+   * same commit that lays the three bodies out.
+   */
+  readonly holdBody: boolean;
   readonly reloadToken: number;
   readonly onRetry: () => void;
   readonly onRefunded: () => void;
+  /**
+   * Reports that this panel's read has left `loading` — by answering with a page or by failing, since
+   * either one decides what this panel renders — so the half can lay every ledger body out together.
+   */
+  readonly onSettled: (ledger: LedgerName) => void;
 }): JSX.Element {
   const ledger = props.ledger;
   const [page, setPage] = useState<number>(FIRST_COLLECTION_PAGE);
@@ -3080,6 +3256,20 @@ function LedgerPanel(props: {
     [ledger, page],
   );
   const state = useServiceRead(read, props.reloadToken);
+  const onSettled = props.onSettled;
+
+  // The half is told as soon as this read leaves `loading`, by whichever of the two outcomes it took.
+  // `onSettled` is stable, so this effect runs on this read's own state changes rather than on every
+  // render of the half; a report that changes nothing is dropped by the half's own update.
+  useEffect((): void => {
+    if (state.kind !== "loading") {
+      onSettled(ledger);
+    }
+  }, [onSettled, ledger, state]);
+
+  if (props.holdBody || state.kind === "loading") {
+    return <p className="ledger-table__note">{describeLedgerLoading(ledger)}</p>;
+  }
 
   if (state.kind === "failed") {
     return (
@@ -3089,10 +3279,6 @@ function LedgerPanel(props: {
         detail={isForbidden(state.error) ? <p>{OPERATOR_ROLE_DETAIL}</p> : null}
       />
     );
-  }
-
-  if (state.kind === "loading") {
-    return <p className="ledger-table__note">{describeLedgerLoading(ledger)}</p>;
   }
 
   // The page the read answered is the page rendered rather than the one that was asked for: until a

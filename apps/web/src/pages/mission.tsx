@@ -217,16 +217,36 @@ export function Mission(): JSX.Element {
         <p>Four routes in this running product are a contributor's entry points.</p>
         <ul className="item-list">
           <li className="item-list__item">
-            <Link to="/standards">Read the provisional standard and propose a change</Link>
+            <Link
+              className="standalone-link"
+              to="/standards"
+            >
+              Read the provisional standard and propose a change
+            </Link>
           </li>
           <li className="item-list__item">
-            <Link to="/challenges">Read the public challenges board and answer a question</Link>
+            <Link
+              className="standalone-link"
+              to="/challenges"
+            >
+              Read the public challenges board and answer a question
+            </Link>
           </li>
           <li className="item-list__item">
-            <Link to="/threads">Join the discussion threads</Link>
+            <Link
+              className="standalone-link"
+              to="/threads"
+            >
+              Join the discussion threads
+            </Link>
           </li>
           <li className="item-list__item">
-            <Link to="/listings">Browse what developers have listed and compare two of them</Link>
+            <Link
+              className="standalone-link"
+              to="/listings"
+            >
+              Browse what developers have listed and compare two of them
+            </Link>
           </li>
         </ul>
         <p>

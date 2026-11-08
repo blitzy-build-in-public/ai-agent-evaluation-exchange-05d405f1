@@ -238,7 +238,12 @@ function renderListings(listings: readonly ListingSummary[], total: number): JSX
       </ul>
       <p>{describeResultCount(total, shown.length)}</p>
       <p>
-        <Link to="/listings">Browse, search and filter every published listing</Link>
+        <Link
+          className="standalone-link"
+          to="/listings"
+        >
+          Browse, search and filter every published listing
+        </Link>
       </p>
     </>
   );
@@ -341,7 +346,12 @@ export function Home(): JSX.Element {
           {NO_REPORT_LABEL}" in place of both an outcome and a badge.
         </p>
         <p>
-          <Link to="/mission">Read the full mission statement, including what ADEM does not do</Link>
+          <Link
+            className="standalone-link"
+            to="/mission"
+          >
+            Read the full mission statement, including what ADEM does not do
+          </Link>
         </p>
       </section>
 
@@ -350,7 +360,12 @@ export function Home(): JSX.Element {
         <ul className="item-list">
           <li className="item-list__item">
             <p>
-              <Link to="/listings">Browse listings and search the exchange</Link>
+              <Link
+                className="standalone-link"
+                to="/listings"
+              >
+                Browse listings and search the exchange
+              </Link>
             </p>
             <p>
               Search and filter every published listing, and open one to read its claims, its version
@@ -359,7 +374,12 @@ export function Home(): JSX.Element {
           </li>
           <li className="item-list__item">
             <p>
-              <Link to="/compare">Compare two to four listings side by side</Link>
+              <Link
+                className="standalone-link"
+                to="/compare"
+              >
+                Compare two to four listings side by side
+              </Link>
             </p>
             <p>
               A comparison sets each listing's claims against its measured evidence, with the
@@ -368,7 +388,12 @@ export function Home(): JSX.Element {
           </li>
           <li className="item-list__item">
             <p>
-              <Link to="/standards">Read the standard and how it is governed</Link>
+              <Link
+                className="standalone-link"
+                to="/standards"
+              >
+                Read the standard and how it is governed
+              </Link>
             </p>
             <p>
               The provisional standard with its rubric, its pass rule and the proposals a community
@@ -378,7 +403,12 @@ export function Home(): JSX.Element {
           </li>
           <li className="item-list__item">
             <p>
-              <Link to="/developer">Publish a listing and run an evaluation</Link>
+              <Link
+                className="standalone-link"
+                to="/developer"
+              >
+                Publish a listing and run an evaluation
+              </Link>
             </p>
             <p>
               A developer publishes a listing and a version of it, runs a simulated evaluation on

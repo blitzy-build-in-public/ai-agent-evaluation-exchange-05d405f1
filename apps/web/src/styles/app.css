@@ -268,6 +268,16 @@ canvas {
   background-color: var(--color-accent-strong);
 }
 
+/* Revealed, the chip occupies the header's own top band, and the header gives that band up while
+   the chip holds focus: its first padding grows by the chip's own height, so the navigation row
+   moves clear of the chip instead of under it. Both values are the ones the two rules above and
+   below already use — the header's padding and the chip's minimum — so nothing here is a literal.
+   Its own rule, for the reason the nav's :has() rule further down is isolated: a browser that
+   cannot parse :has() drops only this rule and still moves the chip into view. */
+.app-header:has(.app-skip-link:focus) {
+  padding-block-start: calc(var(--space-3) + var(--touch-target-min));
+}
+
 /* The absent state's elements. The route root above owns this page's gap and block padding. */
 .not-found__heading {
   margin-block: 0;
@@ -304,6 +314,22 @@ canvas {
   background-color: var(--color-surface-sunken);
   color: var(--color-accent-strong);
   border-radius: var(--radius-sm);
+}
+
+/* A link that IS the control of what it sits in holds --touch-target-min, because the row around it
+   is not clickable: a list item's own link, a link that is its paragraph's whole content, a card's
+   "Open the comparison", a comparison column's heading link and an empty state's next step. The
+   class marks that role wherever the markup can express it; the three structural selectors cover the
+   contexts whose own structure already makes the role unambiguous, and they are deliberately narrow,
+   because an <a> inside a sentence cannot be told apart from one that is its paragraph's whole
+   content: sizing the former to this minimum would push the text around it apart. */
+.standalone-link,
+.listing-card__actions > a,
+.compare-table__listing > h3 > a,
+.empty-state > div a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
 }
 
 /* ==========================================================================

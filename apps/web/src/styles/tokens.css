@@ -237,12 +237,16 @@
      checkbox and radio controls are drawn at 1.25rem inside a label that holds
      this minimum.
 
-     A link that is part of a sentence, or that is a row's own text — a listing
-     title, a board row's question or listing, a link to a report — is exempt:
-     its box is the line box it sits in, so padding it to this minimum would
-     push the text around it apart, and WCAG 2.1 AA sets no target-size
-     criterion in any case; this is the plan's own value for controls. In rem,
-     so the target grows with the reader's font size like the text inside it. */
+     A link that is part of a sentence, or that is a row's own text — a results
+     card's title, a board row's question or listing, a link to a report — is
+     exempt: its box is the line box it sits in, so padding it to this minimum
+     would push the text around it apart. A link that IS the control of what it
+     sits in is not exempt and holds this minimum: a list item's own link, a link
+     that is its paragraph's whole content, a card's comparison link, a
+     comparison column's heading link and an empty state's next step, each sized
+     by the rules app.css states for it. WCAG 2.1 AA sets no target-size
+     criterion in any case; this is the plan's own value for controls. In rem, so
+     the target grows with the reader's font size like the text inside it. */
 
   --layout-max-width: 75rem; /* 1200px */
   --breakpoint-narrow: 48rem; /* 768px — documentation; app.css repeats the literal in its media conditions */

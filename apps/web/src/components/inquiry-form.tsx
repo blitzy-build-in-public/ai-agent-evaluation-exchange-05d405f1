@@ -367,7 +367,12 @@ export function InquiryForm(props: InquiryFormProps): JSX.Element {
       </p>
       {offersBrowse ? (
         <p className="field__hint">
-          <Link to="/listings">Browse listings</Link>
+          <Link
+            className="standalone-link"
+            to="/listings"
+          >
+            Browse listings
+          </Link>
         </p>
       ) : null}
     </form>

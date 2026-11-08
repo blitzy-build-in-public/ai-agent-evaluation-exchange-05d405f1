@@ -756,7 +756,12 @@ function renderRefusalNotice(refusal: AddressRefusal, validHref: string): JSX.El
           </p>
           {refusal.parameter === PAGE_PARAM ? <p>{REFUSED_PAGE_PARAMETER_NOTE}</p> : null}
           <p>
-            <Link to={validHref}>{`Search without the ${refusal.parameter} parameter`}</Link>
+            <Link
+              className="standalone-link"
+              to={validHref}
+            >
+              {`Search without the ${refusal.parameter} parameter`}
+            </Link>
           </p>
         </>
       }
@@ -781,7 +786,12 @@ function renderFailureNotice(failure: unknown, onRetry: () => void): JSX.Element
       error={failure}
       detail={
         <p>
-          <Link to={LISTINGS_PATH}>{START_WITHOUT_FILTERS_LABEL}</Link>
+          <Link
+            className="standalone-link"
+            to={LISTINGS_PATH}
+          >
+            {START_WITHOUT_FILTERS_LABEL}
+          </Link>
         </p>
       }
     />

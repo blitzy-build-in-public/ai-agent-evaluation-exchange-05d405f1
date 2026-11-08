@@ -584,7 +584,10 @@ function renderTooManyState(requestedIds: readonly string[]): JSX.Element {
         <>
           <p>{tooManyExplanation(count)}</p>
           <p>
-            <Link to={comparisonPath(requestedIds.slice(0, COMPARE_MAX_IDS))}>
+            <Link
+              className="standalone-link"
+              to={comparisonPath(requestedIds.slice(0, COMPARE_MAX_IDS))}
+            >
               {TRIM_TO_BOUND_LABEL}
             </Link>
           </p>
@@ -627,7 +630,12 @@ function renderFailureState(error: unknown, onRetry: () => void): JSX.Element {
         <>
           <p>{RESET_EXPLANATION}</p>
           <p>
-            <Link to={COMPARE_PATH}>{RESET_LABEL}</Link>
+            <Link
+              className="standalone-link"
+              to={COMPARE_PATH}
+            >
+              {RESET_LABEL}
+            </Link>
           </p>
         </>
       }
@@ -763,7 +771,12 @@ export function ComparePage(): JSX.Element {
             bound the prompt's own action is what a reader needs. */}
         {count < COMPARE_MIN_IDS ? null : count < COMPARE_MAX_IDS ? (
           <p>
-            <Link to={LISTINGS_PATH}>{ADD_ANOTHER_LABEL}</Link>
+            <Link
+              className="standalone-link"
+              to={LISTINGS_PATH}
+            >
+              {ADD_ANOTHER_LABEL}
+            </Link>
           </p>
         ) : (
           <p>{AT_LIMIT_EXPLANATION}</p>
