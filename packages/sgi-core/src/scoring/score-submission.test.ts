@@ -7,9 +7,10 @@
  * - **The acceptance values of the delivered pack.** Every seed candidate is scored here, from
  *   the real case set and the real recordings read through `@adem/sgi-fixtures`, and the outcome,
  *   the matched and total counts, the critical failures and the failing case ids are asserted
- *   against `expected-outcomes.json` — the document the pack itself publishes as the expectation.
- *   The assertions therefore restate no threshold: a rule that changed in the standard version
- *   while the pack stayed as it is fails here instead of passing silently.
+ *   against `expected-outcomes.json` — the document the pack itself publishes as the expectation —
+ *   and pinned beside it as literals, so a change that moved the fixture data and its published
+ *   expectation together fails here as well. No threshold is restated: a rule that changed in the
+ *   standard version while the pack stayed as it is fails here instead of passing silently.
  * - **Reproducibility.** Two independent runs over the same submission return deeply equal
  *   results, and every per-case evidence string is canonical JSON text, which is what makes the
  *   comparison byte-stable rather than merely equal in shape.
@@ -35,6 +36,7 @@ import type {
   FixtureCase,
   JsonValue,
   RecordedOutput,
+  ReportOutcome,
 } from "@adem/sgi-fixtures";
 
 import { canonicalize } from "./canonical-json";
@@ -61,6 +63,52 @@ const STANDARD: StandardVersionDefinition = SGI_SO_1_0_0;
  * data and never through a literal written here.
  */
 const SEED_CANDIDATE_IDS = ["seed-alpha", "seed-beta", "seed-gamma"] as const;
+
+/**
+ * Criterion 3's acceptance values, pinned as literals.
+ *
+ * The assertions below cross-check these numbers against the record the fixture pack publishes;
+ * pinning them here as well is what makes the pack's own numbers the contractual ones, so a change
+ * that moved the fixture data and its published expectation together would fail this suite instead
+ * of passing as a self-consistent pair.
+ */
+interface PinnedAcceptance {
+  /** The seed candidate these values belong to. */
+  readonly candidateId: string;
+  /** The outcome criterion 3 fixes for the candidate. */
+  readonly outcome: ReportOutcome;
+  /** How many of the twenty fixture cases the candidate matches. */
+  readonly matchedCount: number;
+  /** How many `critical` cases the candidate fails. */
+  readonly criticalFailures: number;
+  /** The cases the candidate does not match. */
+  readonly failingCaseIds: readonly string[];
+}
+
+/** One pinned expectation per seed candidate, in the order the pack records them. */
+const PINNED_ACCEPTANCE: readonly PinnedAcceptance[] = [
+  {
+    candidateId: "seed-alpha",
+    outcome: "PASS",
+    matchedCount: 20,
+    criticalFailures: 0,
+    failingCaseIds: [],
+  },
+  {
+    candidateId: "seed-beta",
+    outcome: "FAIL",
+    matchedCount: 19,
+    criticalFailures: 1,
+    failingCaseIds: ["so-003"],
+  },
+  {
+    candidateId: "seed-gamma",
+    outcome: "FAIL",
+    matchedCount: 17,
+    criticalFailures: 0,
+    failingCaseIds: ["so-014", "so-016", "so-018"],
+  },
+];
 
 /** The case set the standard version publishes, read fresh so no run shares loaded state with another. */
 function caseSetOf(): CaseSet {
@@ -258,18 +306,67 @@ describe("scoreSubmission", () => {
       },
     );
 
-    it("scores every case of the set, in case-set order, and names the versions it scored against", () => {
+    it("pins criterion 3's acceptance values for every seed candidate", () => {
       const caseSet = caseSetOf();
-      const candidate = candidateOf("seed-alpha");
 
-      const scored = scoreSubmission(STANDARD, caseSet, candidate);
+      for (const pinned of PINNED_ACCEPTANCE) {
+        const scored = scoreSubmission(STANDARD, caseSet, candidateOf(pinned.candidateId));
 
-      expect(scored.caseResults.map((caseResult) => caseResult.caseId)).toEqual(
-        caseSet.cases.map((fixtureCase) => fixtureCase.id),
-      );
-      expect(scored.totalCount).toBe(caseSet.cases.length);
-      expect(scored.standardVersionId).toBe(STANDARD.versionLabel);
-      expect(scored.candidateVersionId).toBe(candidate.candidate_version_id);
+        expect(scored.outcome).toBe(pinned.outcome);
+        expect(scored.matchedCount).toBe(pinned.matchedCount);
+        expect(scored.totalCount).toBe(20);
+        expect(scored.criticalFailures).toBe(pinned.criticalFailures);
+        expect(scored.failingCaseIds).toStrictEqual([...pinned.failingCaseIds]);
+      }
+
+      expect(PINNED_ACCEPTANCE.map((pinned) => pinned.candidateId)).toStrictEqual([
+        ...SEED_CANDIDATE_IDS,
+      ]);
+    });
+
+    it("reads the pack's expectations in the pack's own candidate order", () => {
+      const expected = loadExpectedOutcomes();
+
+      expect(expected.standard_version_id).toBe(STANDARD.fixtureSetId);
+      expect(expected.candidates.map((entry) => entry.candidate_id)).toStrictEqual([
+        "seed-alpha",
+        "seed-beta",
+        "seed-gamma",
+      ]);
+    });
+
+    it("names the standard version it scored against and the candidate version the submission declares", () => {
+      const caseSet = caseSetOf();
+
+      for (const candidateId of SEED_CANDIDATE_IDS) {
+        const candidate = candidateOf(candidateId);
+        const scored = scoreSubmission(STANDARD, caseSet, candidate);
+
+        expect(scored.standardVersionId).toBe(caseSet.standard_version_id);
+        expect(scored.standardVersionId).toBe(STANDARD.versionLabel);
+        expect(scored.candidateVersionId).toBe(candidate.candidate_version_id);
+        expect(scored.candidateVersionId).toBe(expectedOutcomeOf(candidateId).candidate_version_id);
+      }
+    });
+
+    it("scores every case of the set, in case-set order, carrying the case set's own severities", () => {
+      const caseSet = caseSetOf();
+
+      for (const candidateId of SEED_CANDIDATE_IDS) {
+        const scored = scoreSubmission(STANDARD, caseSet, candidateOf(candidateId));
+
+        expect(scored.caseResults).toHaveLength(20);
+        expect(scored.totalCount).toBe(caseSet.cases.length);
+        expect(scored.caseResults.map((caseResult) => caseResult.caseId)).toStrictEqual(
+          caseSet.cases.map((fixtureCase) => fixtureCase.id),
+        );
+        expect(scored.caseResults.map((caseResult) => caseResult.severity)).toStrictEqual(
+          caseSet.cases.map((fixtureCase) => fixtureCase.severity),
+        );
+        expect(
+          scored.caseResults.filter((caseResult) => caseResult.severity === "critical"),
+        ).toHaveLength(STANDARD.criticalCases);
+      }
     });
 
     it("carries exactly the five evidence fields a report stores, and no comparison reason", () => {
@@ -313,6 +410,35 @@ describe("scoreSubmission", () => {
         expect(caseResult.expectedJson).toBe(canonicalize(fixtureCase.expected_output));
         expect(caseResult.actualJson).toBe(canonicalize(recorded.output));
       }
+    });
+
+    it("stores the canonical text of both sides of the enum-case mismatch, differing only in the enum value", () => {
+      const scored = scoreSubmission(STANDARD, caseSetOf(), candidateOf("seed-beta"));
+
+      const failing = requireCaseResult(scored, "so-003");
+
+      expect(failing.match).toBe(false);
+      expect(failing.expectedJson).toBe('{"order_id":"demo-order-1003","status":"staged"}');
+      expect(failing.actualJson).toBe('{"order_id":"demo-order-1003","status":"STAGED"}');
+    });
+
+    it("matches so-017 although the order its keys are recorded in differs from the expected output", () => {
+      const caseSet = caseSetOf();
+      const candidate = candidateOf("seed-alpha");
+      const fixtureCase = requireCase(caseSet, "so-017");
+      const recorded = requireRecordedOutput(candidate, "so-017");
+
+      const caseResult = requireCaseResult(
+        scoreSubmission(STANDARD, caseSet, candidate),
+        "so-017",
+      );
+
+      // Deliberate, and not to be "corrected": the raw JSON text of the two sides differs only in the
+      // order the keys are written, so this case matches solely because the comparison is over
+      // canonical JSON rather than over the text either side was authored in.
+      expect(JSON.stringify(recorded.output)).not.toBe(JSON.stringify(fixtureCase.expected_output));
+      expect(caseResult.match).toBe(true);
+      expect(caseResult.actualJson).toBe(caseResult.expectedJson);
     });
 
     it("reports a matched case as equal canonical evidence and an unmatched case as differing evidence", () => {
@@ -360,23 +486,48 @@ describe("scoreSubmission", () => {
       expect(first.failingCaseIds).not.toBe(second.failingCaseIds);
     });
 
+    it("returns byte-identical per-case results and the same outcome for two runs of every seed candidate", () => {
+      for (const candidateId of SEED_CANDIDATE_IDS) {
+        const first = scoreSubmission(STANDARD, caseSetOf(), candidateOf(candidateId));
+        const second = scoreSubmission(STANDARD, caseSetOf(), candidateOf(candidateId));
+
+        expect(second.caseResults).toStrictEqual(first.caseResults);
+        expect(second.outcome).toBe(first.outcome);
+        expect(second).toStrictEqual(first);
+      }
+    });
+
+    it("compares every per-case evidence string equally across two runs", () => {
+      for (const candidateId of SEED_CANDIDATE_IDS) {
+        const evidenceOf = () =>
+          scoreSubmission(STANDARD, caseSetOf(), candidateOf(candidateId)).caseResults.map(
+            (caseResult) => ({
+              caseId: caseResult.caseId,
+              expectedJson: caseResult.expectedJson,
+              actualJson: caseResult.actualJson,
+              match: caseResult.match,
+            }),
+          );
+
+        expect(evidenceOf()).toStrictEqual(evidenceOf());
+      }
+    });
+
     it("leaves the standard version, the case set and the submission as they were", () => {
       const caseSet = caseSetOf();
       const candidate = candidateOf("seed-gamma");
       const checks: EvaluatorCheck[] = [mismatchCheck("unused-check", ["no-such-case"], "never")];
-      const caseSetBefore = JSON.stringify(caseSet);
-      const candidateBefore = JSON.stringify(candidate);
+      const caseSetBefore = structuredClone(caseSet);
+      const candidateBefore = structuredClone(candidate);
+      const standardBefore = structuredClone(STANDARD);
       const checksBefore = [...checks];
-      const thresholdBefore = STANDARD.passThresholdMatches;
-      const criticalAllowanceBefore = STANDARD.criticalFailuresAllowed;
 
       scoreSubmission(STANDARD, caseSet, candidate, { checks });
 
-      expect(JSON.stringify(caseSet)).toBe(caseSetBefore);
-      expect(JSON.stringify(candidate)).toBe(candidateBefore);
-      expect(checks).toEqual(checksBefore);
-      expect(STANDARD.passThresholdMatches).toBe(thresholdBefore);
-      expect(STANDARD.criticalFailuresAllowed).toBe(criticalAllowanceBefore);
+      expect(caseSet).toStrictEqual(caseSetBefore);
+      expect(candidate).toStrictEqual(candidateBefore);
+      expect(STANDARD).toStrictEqual(standardBefore);
+      expect(checks).toStrictEqual(checksBefore);
     });
 
     it("reports the same results whether no options are passed or options without checks are", () => {
@@ -404,6 +555,11 @@ describe("scoreSubmission", () => {
         passThresholdMatches: shipped.matchedCount,
       };
 
+      // The boundary, stated without restating a number: the candidate matched exactly one case
+      // fewer than the shipped threshold, and passes the moment the versioned threshold is lowered
+      // to the count it reached. Only the standard version differs between the two runs.
+      expect(shipped.matchedCount + 1).toBe(STANDARD.passThresholdMatches);
+      expect(shipped.criticalFailures).toBe(0);
       expect(scoreSubmission(relaxed, caseSet, candidate).outcome).toBe("PASS");
       expect(shipped.outcome).toBe("FAIL");
     });
@@ -421,7 +577,11 @@ describe("scoreSubmission", () => {
         criticalFailuresAllowed: shipped.criticalFailures,
       };
 
+      // Only the versioned tolerance for a critical failure differs between the two runs: the
+      // matched count clears the threshold in both, so the critical clause alone decides the pair.
       expect(scoreSubmission(tolerant, caseSet, candidate).outcome).toBe("PASS");
+      expect(shipped.matchedCount).toBe(19);
+      expect(shipped.criticalFailures).toBe(1);
     });
 
     it("fails a candidate that misses the threshold although no critical case failed", () => {
@@ -433,6 +593,9 @@ describe("scoreSubmission", () => {
     });
   });
 
+  // Every refusal below reads `code` from the `StandardDriftError` this package's standards registry
+  // declares — imported above and never redefined in this folder — which is what lets
+  // `apps/api/src/errors/error-codes.ts` map one code to one contract status.
   describe("drift refusals", () => {
     it("refuses a case set that belongs to another standard version", () => {
       const caseSet = caseSetOf();
@@ -516,13 +679,27 @@ describe("scoreSubmission", () => {
       expect(refusal.code).toBe("standard_drift");
       expect(refusal.message).toContain(String(caseSet.critical_cases));
     });
+
+    it("refuses a standard version whose declared case count is not the case set's", () => {
+      const caseSet = caseSetOf();
+      const resized: StandardVersionDefinition = {
+        ...STANDARD,
+        totalCases: STANDARD.totalCases - 1,
+      };
+
+      const refusal = driftFrom(() => scoreSubmission(resized, caseSet, candidateOf("seed-alpha")));
+
+      expect(refusal.code).toBe("standard_drift");
+      expect(refusal.standardVersionId).toBe(resized.versionLabel);
+      expect(refusal.message).toContain(String(resized.totalCases));
+    });
   });
 
   describe("structural refusals", () => {
     it("refuses a recorded output for a case the case set does not define", () => {
       const caseSet = caseSetOf();
       const candidate = candidateOf("seed-alpha");
-      const unknownCaseId = `${firstCase(caseSet).id}-absent`;
+      const unknownCaseId = "so-999";
       const extended = withRecordedOutputs(candidate, [
         ...candidate.recorded_outputs,
         { case_id: unknownCaseId, output: null },
@@ -530,8 +707,9 @@ describe("scoreSubmission", () => {
 
       const refusal = unknownCaseFrom(() => scoreSubmission(STANDARD, caseSet, extended));
 
+      expect(refusal).toBeInstanceOf(UnknownCaseError);
       expect(refusal.code).toBe("unknown_case");
-      expect(refusal.caseId).toBe(unknownCaseId);
+      expect(refusal.caseId).toBe("so-999");
       expect(refusal.message).toContain(unknownCaseId);
     });
 
@@ -608,6 +786,30 @@ describe("scoreSubmission", () => {
       expect(refusal.message).toContain(refusal.missingCaseIds.join(", "));
     });
 
+    it("names a case the submission left unrecorded and lists every missing id in case-set order", () => {
+      const caseSet = caseSetOf();
+      const candidate = candidateOf("seed-alpha");
+
+      const single = incompleteFrom(() =>
+        scoreSubmission(STANDARD, caseSet, withoutRecordingsFor(candidate, ["so-014"])),
+      );
+
+      expect(single).toBeInstanceOf(IncompleteSubmissionError);
+      expect(single.code).toBe("incomplete_submission");
+      expect(single.missingCaseIds).toStrictEqual(["so-014"]);
+
+      // The missing ids are reported in case-set order rather than in the order the caller dropped
+      // them, because the refusal is composed from the case set and never from the submission.
+      expect(() =>
+        scoreSubmission(STANDARD, caseSet, withoutRecordingsFor(candidate, ["so-018", "so-014"])),
+      ).toThrow(IncompleteSubmissionError);
+      expect(
+        incompleteFrom(() =>
+          scoreSubmission(STANDARD, caseSet, withoutRecordingsFor(candidate, ["so-018", "so-014"])),
+        ).missingCaseIds,
+      ).toStrictEqual(["so-014", "so-018"]);
+    });
+
     it("refuses a submission whose only missing case is critical rather than failing it", () => {
       const caseSet = caseSetOf();
       const candidate = candidateOf("seed-alpha");
@@ -682,16 +884,87 @@ describe("scoreSubmission", () => {
       expect(scored.failingCaseIds).toEqual([...baseline.failingCaseIds, declared.id].sort());
     });
 
-    it("consults the first check in the list that declares a case", () => {
+    it("lets a contributed verdict rescue the case the built-in comparison failed", () => {
+      const caseSet = caseSetOf();
+      const candidate = candidateOf("seed-beta");
+      const builtIn = scoreSubmission(STANDARD, caseSet, candidate);
+      expect(builtIn.outcome).toBe("FAIL");
+      expect(builtIn.matchedCount).toBe(19);
+      expect(builtIn.criticalFailures).toBe(1);
+      expect(builtIn.failingCaseIds).toStrictEqual(["so-003"]);
+
+      const alwaysMatch: EvaluatorCheck = {
+        id: "check-always-match",
+        title: "Always match",
+        appliesTo: ["so-003"],
+        compare: () => ({
+          match: true,
+          expectedCanonical: "x",
+          actualCanonical: "x",
+          reason: "match",
+        }),
+      };
+
+      const scored = scoreSubmission(STANDARD, caseSet, candidate, { checks: [alwaysMatch] });
+
+      expect(scored.outcome).toBe("PASS");
+      expect(scored.matchedCount).toBe(20);
+      expect(scored.criticalFailures).toBe(0);
+      expect(scored.failingCaseIds).toStrictEqual([]);
+    });
+
+    it("leaves the cases a check does not declare on the built-in canonical path", () => {
+      const caseSet = caseSetOf();
+      const candidate = candidateOf("seed-gamma");
+      const builtIn = scoreSubmission(STANDARD, caseSet, candidate);
+      const declared = requireCaseResult(builtIn, "so-003");
+      expect(declared.match).toBe(true);
+
+      const check: EvaluatorCheck = {
+        id: "declares-so-003",
+        title: "Declares so-003",
+        appliesTo: ["so-003"],
+        compare: () => ({
+          match: declared.match,
+          expectedCanonical: declared.expectedJson,
+          actualCanonical: declared.actualJson,
+          reason: "match",
+        }),
+      };
+
+      const scored = scoreSubmission(STANDARD, caseSet, candidate, { checks: [check] });
+
+      // The declared case is answered by the check and the other nineteen stay canonical, so the
+      // three failures the check says nothing about are still the ones the built-in run reports.
+      expect(scored).toStrictEqual(builtIn);
+      expect(scored.failingCaseIds).toStrictEqual(["so-014", "so-016", "so-018"]);
+    });
+
+    it("consults the first check in the list that declares a case, and lets its verdict decide the outcome", () => {
       const caseSet = caseSetOf();
       const candidate = candidateOf("seed-alpha");
       const declared = firstCase(caseSet);
-      const first = mismatchCheck("first-declaring", [declared.id], "first-marker");
+      const first: EvaluatorCheck = {
+        id: "first-declaring",
+        title: "First declaring",
+        appliesTo: [declared.id],
+        compare: () => ({
+          match: true,
+          expectedCanonical: "first-marker",
+          actualCanonical: "first-marker",
+          reason: "match",
+        }),
+      };
       const second = mismatchCheck("second-declaring", [declared.id], "second-marker");
 
       const scored = scoreSubmission(STANDARD, caseSet, candidate, { checks: [first, second] });
 
+      // The second check would have failed this critical case and put the candidate at FAIL, so the
+      // verdict the first check reports is what decides both the evidence and the outcome.
       expect(requireCaseResult(scored, declared.id).actualJson).toBe("first-marker");
+      expect(scored.outcome).toBe("PASS");
+      expect(scored.matchedCount).toBe(20);
+      expect(declared.severity).toBe("critical");
     });
 
     it("lets a contributed verdict reach the outcome the report records", () => {
@@ -711,9 +984,34 @@ describe("scoreSubmission", () => {
       expect(scored.matchedCount).toBe(baseline.matchedCount - 1);
     });
 
+    it("leaves every case on the canonical path for a check that declares no case", () => {
+      const caseSet = caseSetOf();
+      const candidate = candidateOf("seed-beta");
+      const builtIn = scoreSubmission(STANDARD, caseSet, candidate);
+      let calls = 0;
+      const inert: EvaluatorCheck = {
+        id: "declares-no-case",
+        title: "Declares no case",
+        appliesTo: [],
+        compare: () => {
+          calls += 1;
+          return { match: true, expectedCanonical: "x", actualCanonical: "x", reason: "match" };
+        },
+      };
+
+      const scored = scoreSubmission(STANDARD, caseSet, candidate, { checks: [inert] });
+
+      // A check with no declared case is inert rather than global: it is never consulted, so the run
+      // is the built-in one.
+      expect(calls).toBe(0);
+      expect(scored).toStrictEqual(builtIn);
+    });
+
     it("lets an error a check throws propagate rather than scoring the case as a match", () => {
       const caseSet = caseSetOf();
       const candidate = candidateOf("seed-alpha");
+      // The rule is refuse rather than pass: nothing here catches or swallows the defect, because a
+      // contribution that fails loudly must never be scored as a match.
       const defect = new Error("contribution defect");
       const check: EvaluatorCheck = {
         id: "defective-check",
