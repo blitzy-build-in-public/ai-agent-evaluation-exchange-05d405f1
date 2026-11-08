@@ -2193,6 +2193,20 @@ describe("route walk: every row of the API contract table", () => {
        * largest-page probe below.
        */
       readonly boundedAbove?: boolean;
+      /**
+       * What brings the read's own collection into the state the largest-page probe asserts on, done
+       * through the product's own routes; a read that leaves it out asserts on the rows the walk
+       * itself wrote, which is every other read of this table.
+       *
+       * It exists because a case of this block also runs under a name filter — `npm run
+       * test:integration -- --testNamePattern=ledger` is the pattern the criterion fixes — and a
+       * filter skips the earlier commerce block, whose checkouts fill the two amount ledgers: the
+       * seed writes the three gate-fee rows and no marketplace and no founder-allocation row at
+       * all. A read that states its collection's size is evidence only where the collection is not
+       * empty, so a read whose collection the seed leaves empty declares here how it becomes
+       * non-empty.
+       */
+      readonly prepare?: () => Promise<void>;
     }
 
     /** The three ledger reads, which are the operator's and answer one body shape. */
@@ -2299,6 +2313,10 @@ describe("route walk: every row of the API contract table", () => {
           label: `the ledger at ${path}`,
           path: () => path,
           options: () => actingAs("operator"),
+          // These are the reads whose collection a name-filtered run has to establish for itself: the
+          // seed writes the gate-fee rows alone, and the two amount ledgers are filled only by the
+          // commerce block a `--testNamePattern=ledger` run skips.
+          prepare: () => establishLedgerRows(path),
           answered: (response) => {
             const ledger = response.json<LedgerReadResult>();
 
@@ -2311,6 +2329,46 @@ describe("route walk: every row of the API contract table", () => {
         }),
       ),
     ];
+
+    /**
+     * Brings one ledger's collection into the state the largest-page probe asserts on: the rows the
+     * read already holds, or — where it holds none — the marketplace charge and the founder
+     * allocation that one eligible checkout appends.
+     *
+     * The guard is the read's own `total`, so this writes only where an empty collection would make
+     * the probe vacuous: in the walk's own run it is one `GET` and no write at all. Where it writes,
+     * it posts the one checkout the contract documents — the buyer, the seeded fixture candidate's
+     * own listing and version, the alpha version of `SEED_LISTING_INTAKE_DESK_ID`, whose claim
+     * states the same `purchase` model this file's own listing declares, which
+     * `apps/api/src/seed/seed-data.ts` documents as seeded so that "an eligible purchase has to be
+     * reachable without creating a listing first" — so the row is created exactly as a buyer
+     * creates it and by no private arrangement. One eligible checkout appends both the marketplace
+     * charge and the founder allocation this table's two amount reads are about, and rows are never
+     * removed, which is why one function serves both.
+     *
+     * The identifiers come from `beforeAll`'s captured walk state, which runs under any name filter.
+     */
+    async function establishLedgerRows(path: string): Promise<void> {
+      const read = await server.get(path, actingAs("operator"));
+
+      expect(read.status).toBe(200);
+
+      if (read.json<LedgerReadResult>().total > 0) {
+        return;
+      }
+
+      const checkout = await server.post(
+        "/checkout-simulations",
+        {
+          listing_id: captured(walk.seededListingId, "the seeded listing"),
+          listing_version_id: captured(walk.candidateVersionId, "the seeded fixture candidate version"),
+          offer_model: DECLARED_PRICING_MODEL,
+        },
+        actingAs("buyer"),
+      );
+
+      expect(checkout.status).toBe(201);
+    }
 
     /**
      * The pages a read must refuse: the first page above the bound, and the two the finder reported as
@@ -2339,6 +2397,13 @@ describe("route walk: every row of the API contract table", () => {
     it.each(reads)(
       "answers the largest page the bound admits on $label with an empty page and the collection's own size",
       async (read) => {
+        // The collection is established through the product's own route before the two answers are
+        // compared, so the size asserted below is a collection's size and not a precondition of the
+        // case; nothing is written here in the walk's own run.
+        if (read.prepare !== undefined) {
+          await read.prepare();
+        }
+
         const first = await server.get(read.path(), { ...read.options(), query: { page: 1 } });
         const last = await server.get(read.path(), {
           ...read.options(),
