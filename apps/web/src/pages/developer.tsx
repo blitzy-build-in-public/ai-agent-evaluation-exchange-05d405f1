@@ -2934,9 +2934,9 @@ function AuditFeed(props: {
 /**
  * The audit events as a table, in the order the read returned them.
  *
- * Five facts and two timestamps, each rendered as it was stored: the action is free-form text copied
- * verbatim rather than narrowed to a vocabulary this page invents, and an event that recorded no
- * reason states that it recorded none instead of rendering a blank cell.
+ * Five facts and two timestamps, each rendered as it was stored: the action is copied verbatim as
+ * the writing route recorded it rather than narrowed to a vocabulary this page invents, and an event
+ * that recorded no reason states that it recorded none instead of rendering a blank cell.
  */
 function AuditTable(props: { readonly events: readonly AuditEvent[] }): JSX.Element {
   return (

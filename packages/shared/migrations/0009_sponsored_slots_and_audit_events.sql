@@ -78,8 +78,10 @@ CREATE TABLE sponsored_slots (
 -- could refuse a legitimate future kind for good, and a refused append is a request the record
 -- would simply never hold. resource_type's closed list of the twelve resources the contract's
 -- write rows act on is declared in packages/shared/src/types/audit-event.ts, which the writing
--- route and every reader of the feed take it from, and action carries the route's own method and
--- path, which that type likewise declines to narrow.
+-- route and every reader of the feed take it from. action carries the <resource>.<verb> member
+-- the writing route states, closed to its seventeen values by the vocabulary in
+-- apps/api/src/audit/append-audit-event.ts rather than by a CHECK here, and the stored row type
+-- keeps action a plain string because this column is open TEXT.
 --
 -- status_code is an HTTP status — the one the write returned, so a refused write is as auditable
 -- as an accepted one — and the CHECK holds it inside the range such a status can occupy. A value

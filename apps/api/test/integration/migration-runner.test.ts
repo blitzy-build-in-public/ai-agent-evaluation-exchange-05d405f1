@@ -4,7 +4,7 @@
  *
  * What it evidences, in the terms the plan states them:
  *
- * - **A first run applies the delivered set.** Eleven files, in filename order, each recorded once
+ * - **A first run applies the delivered set.** Twelve files, in filename order, each recorded once
  *   with its own name and a SHA-256 recomputed here from that file's bytes, and `PRAGMA user_version`
  *   left at the highest applied version.
  * - **A second run is a no-op.** Nothing applied, nothing recorded, the same highest version.
@@ -213,15 +213,17 @@ describe("runMigrations on a fresh database", () => {
 
     const run = runMigrations(database);
 
-    // The set is the eleven files the plan maps, read from the directory so a removed or added file
-    // fails here rather than passing as an empty sweep.
-    expect(MIGRATION_FILE_NAMES).toHaveLength(11);
-    expect(run.appliedCount).toBe(11);
+    // The set is the twelve files the directory carries — the plan's eleven plus
+    // `0012_amount_integer_guards.sql`, which adds the integrality guard on the four amount columns —
+    // read from the directory so a removed or added file fails here rather than passing as an empty
+    // sweep.
+    expect(MIGRATION_FILE_NAMES).toHaveLength(12);
+    expect(run.appliedCount).toBe(12);
     expect(run.appliedFiles).toStrictEqual(MIGRATION_FILE_NAMES);
-    expect(run.highestVersion).toBe(11);
+    expect(run.highestVersion).toBe(12);
 
     const rows = recordedMigrations(database);
-    expect(rows).toHaveLength(11);
+    expect(rows).toHaveLength(12);
     rows.forEach((row, index) => {
       expect(row.version).toBe(index + 1);
       expect(row.name).toBe(MIGRATION_FILE_NAMES[index]);
@@ -232,7 +234,7 @@ describe("runMigrations on a fresh database", () => {
     });
 
     // The highest applied version, as the integer marker the plan describes.
-    expect(database.pragma("user_version", { simple: true })).toBe(11);
+    expect(database.pragma("user_version", { simple: true })).toBe(12);
 
     // 0010's eighteen triggers: an updating and a deleting guard on each of the nine append-only
     // tables, and on no other table.
@@ -247,8 +249,9 @@ describe("runMigrations on a fresh database", () => {
       expect(triggerNames).toContain(`trg_${table}_no_delete`);
     }
 
-    // The tables 0011's indexes serve: the read-path indexes are created by the last file applied, so
-    // each of those tables has to be in place by then.
+    // The tables 0011's indexes serve: every one of them is in place by the time that file is applied,
+    // which is the ordering 0011 depends on. 0012 follows it, rebuilding four tables — ledger_entries
+    // and refunds among them — and recreating, verbatim, the two indexes 0011 declares for those two.
     const tableNames = schemaObjectNames(database, "table");
     for (const table of INDEXED_TABLES) {
       expect(tableNames).toContain(table);
@@ -258,15 +261,15 @@ describe("runMigrations on a fresh database", () => {
   it("is idempotent: a second run applies nothing and adds no row", () => {
     const database = newDatabase();
     const first = runMigrations(database);
-    expect(first.appliedCount).toBe(11);
+    expect(first.appliedCount).toBe(12);
 
     const second = runMigrations(database);
 
     expect(second.appliedCount).toBe(0);
     expect(second.appliedFiles).toStrictEqual([]);
-    expect(second.highestVersion).toBe(11);
-    expect(recordedRowCount(database)).toBe(11);
-    expect(database.pragma("user_version", { simple: true })).toBe(11);
+    expect(second.highestVersion).toBe(12);
+    expect(recordedRowCount(database)).toBe(12);
+    expect(database.pragma("user_version", { simple: true })).toBe(12);
   });
 
   it("sets PRAGMA user_version to the highest applied version and never reads it as state", () => {
@@ -274,7 +277,7 @@ describe("runMigrations on a fresh database", () => {
 
     const first = runMigrations(database);
 
-    expect(first.highestVersion).toBe(11);
+    expect(first.highestVersion).toBe(12);
     expect(database.pragma("user_version", { simple: true })).toBe(first.highestVersion);
     // Set on the connection outside any transaction, and the run leaves none open behind it.
     expect(database.inTransaction).toBe(false);
@@ -286,9 +289,9 @@ describe("runMigrations on a fresh database", () => {
 
     const second = runMigrations(database);
 
-    expect(second).toStrictEqual({ appliedFiles: [], appliedCount: 0, highestVersion: 11 });
-    expect(database.pragma("user_version", { simple: true })).toBe(11);
-    expect(recordedRowCount(database)).toBe(11);
+    expect(second).toStrictEqual({ appliedFiles: [], appliedCount: 0, highestVersion: 12 });
+    expect(database.pragma("user_version", { simple: true })).toBe(12);
+    expect(recordedRowCount(database)).toBe(12);
   });
 });
 

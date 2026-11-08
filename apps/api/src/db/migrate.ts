@@ -34,9 +34,9 @@
  * tables that `packages/shared/migrations/0010_append_only_triggers.sql` guards — `standard_versions`,
  * `evaluation_reports`, `report_case_results`, `governance_events`, `ledger_entries`, `transactions`,
  * `refunds`, `audit_events` and `listing_versions` — and it applies the eighteen triggers that guard
- * them as the last-but-one file. Those triggers are defence in depth behind the rule that no route
- * mutates an append-only resource, and never a security boundary: a connection holding write access
- * can drop one. `schema_migrations` is not one of the nine, so this module writes it.
+ * them from `0010_append_only_triggers.sql`. Those triggers are defence in depth behind the rule
+ * that no route mutates an append-only resource, and never a security boundary: a connection holding
+ * write access can drop one. `schema_migrations` is not one of the nine, so this module writes it.
  *
  * The migrations directory is resolved from this module's own URL rather than from the working
  * directory, so a run started from anywhere over this checkout finds the same files. The database

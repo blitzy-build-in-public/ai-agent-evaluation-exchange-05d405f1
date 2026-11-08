@@ -14,13 +14,13 @@
 -- of a simulated purchase is computed from the offer model the listing makes for the version it is
 -- made for, which is why the checkout body in
 -- packages/shared/src/schemas/commerce-schema.ts carries no amount field. Every monetary column in
--- this schema is such an integer for the same reason — INTEGER affinity alone would store a
--- fractional value beside this non-negativity guard without refusing it, so what holds a fraction
--- out of this product's ledger arithmetic is that no writer on the path produces one: the
--- configuration refuses a non-integer fee or rate, the request schemas accept `type: 'integer'`
--- only, and the product's single rounding point
--- (packages/commerce-sim/src/ledgers/allocate.ts) resolves its one fraction to a whole unit before
--- a row is built.
+-- this schema is such an integer, and two guards keep this one that: the non-negativity check on the
+-- column below, and the `typeof(amount_minor_units) = 'integer'` guard 0012 adds to this table, which
+-- is what refuses the fractional or non-numeric value INTEGER affinity would otherwise store beside
+-- the first of them. The writer side holds the same line a layer up: the configuration refuses a
+-- non-integer fee or rate, the request schemas accept `type: 'integer'` only, and the product's
+-- single rounding point (packages/commerce-sim/src/ledgers/allocate.ts) resolves its one fraction to
+-- a whole unit before a row is built.
 --
 -- currency_label is guarded to the product's one synthetic label. The literal below is the value of
 -- SYNTHETIC_CURRENCY_LABEL in packages/shared/src/constants.ts, which a .sql file cannot import and
@@ -66,8 +66,9 @@ CREATE TABLE transactions (
 -- from the rows alone, without a stored balance and without changing anything. A balance column
 -- would be a second source of truth for a value these rows already state.
 --
--- amount_minor_units takes the same non-negative integer guard as the transaction it reverses and
--- no stricter one: a refund of nothing is representable, and whether a given amount is acceptable is
+-- amount_minor_units takes the same two guards as the transaction it reverses — the non-negativity
+-- check on the column below and the `typeof(amount_minor_units) = 'integer'` guard 0012 adds — and no
+-- stricter one: a refund of nothing is representable, and whether a given amount is acceptable is
 -- the route's decision rather than a constraint's. The amount is a whole number of minor units of
 -- the synthetic label carried by the transaction, so this table holds no currency column of its own
 -- and no real currency code can appear here.
@@ -128,7 +129,7 @@ CREATE TABLE refunds (
 --
 -- This table is append-only: 0010 adds the triggers that abort an update or a delete of a row, so
 -- the correction a refund appends is a new row and never a change to the row it corrects. 0011 owns
--- the (ledger, created_at) index the three ledger reads run on.
+-- the (ledger) index the three ledger reads run on.
 CREATE TABLE ledger_entries (
   id                 TEXT PRIMARY KEY NOT NULL,
   ledger             TEXT NOT NULL CHECK (ledger IN ('marketplace', 'gate_fees', 'founder_allocation')),

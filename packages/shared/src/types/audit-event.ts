@@ -64,11 +64,18 @@ export interface AuditEvent {
    */
   actor_account_id: string;
   /**
-   * The action performed, as free-form text.
+   * The action performed, as the `<resource>.<verb>` member the writing route states —
+   * `listing.created`, for example.
    *
-   * No enumerable action vocabulary exists in this codebase, so the field is a plain `string` and
-   * MUST NOT be narrowed to a union or an enum: doing so would invent identifiers nothing defines.
-   * The route's HTTP method and path are the natural value.
+   * The column is deliberately unconstrained `TEXT` on the terms migration `0009` gives: a row can
+   * never be corrected, so a `CHECK` enumerating today's members could refuse a legitimate one
+   * for good. That is why this stored shape keeps `action` a plain `string` and MUST NOT be
+   * narrowed here — a union in this shape would claim a constraint the column does not have.
+   *
+   * The vocabulary is closed on the write side, by `AUDIT_ACTIONS` and the `AuditAction` union
+   * derived from it in `apps/api/src/audit/append-audit-event.ts`, the type that module's
+   * `AuditEventInput.action` carries: a route writes a member of that tuple or fails to compile,
+   * while the row reports whatever the column holds.
    */
   action: string;
   /** The resource the write acted on, from the closed list above. */

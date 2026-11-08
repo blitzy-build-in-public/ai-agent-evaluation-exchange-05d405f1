@@ -14,7 +14,7 @@ export default defineConfig({
     // Forks isolate each suite's own server, port and native better-sqlite3
     // connection, so a leak in one file cannot reach another file's in-memory
     // database. `fileParallelism: false` then runs the files one after another
-    // (vitest pins the worker count to 1), so a server boot and eleven migrations
+    // (vitest pins the worker count to 1), so a server boot and twelve migrations
     // per file never contend for a port or for CPU.
     pool: 'forks',
     fileParallelism: false,
