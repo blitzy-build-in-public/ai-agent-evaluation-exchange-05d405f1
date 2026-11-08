@@ -14,6 +14,14 @@
  * belongs to the API's integration suite, which owns the routes and the triggers together; what is
  * asserted here is that every write this path performs is an insertion, and that a refused checkout
  * inserts nothing at all.
+ *
+ * The fixture is the package's own: the ordered migrations are applied to an in-memory handle with
+ * `foreign_keys` on and the parent rows a transaction references seeded, which is the harness every
+ * suite in this package uses, so a drift in the delivered schema fails a case here rather than
+ * passing behind a hand-written copy of it. One refusal is planted for the atomicity case — a
+ * `BEFORE INSERT` trigger that aborts a `founder_allocation` row — because a `CHECK` cannot be added
+ * to a table the migrations have already created, and it lives only long enough to make the second of
+ * the checkout's three writes fail. It asserts nothing about immutability.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -28,6 +36,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { COMMERCE_DISCLOSURE_LABEL, resolveCommerceConfig } from '../config';
 import type { CommerceConfig } from '../config';
 import { allocate } from '../ledgers/allocate';
+import { listLedgerEntries } from '../ledgers/ledger-repository';
 import type { LedgerEntry } from '../ledgers/ledger-types';
 import type { ListingOffer } from '../offers/select-offer';
 import { createCheckoutSimulation } from './create-checkout-simulation';
@@ -59,6 +68,13 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 
 /** The resolved default configuration, which is the source of the two labels a row carries. */
 const CONFIG = resolveCommerceConfig();
+
+/**
+ * The symbols a real currency's amount would be written with, none of which may appear beside a
+ * simulated one: every amount this product stores is a whole count of minor units of the synthetic
+ * label, so neither the amount nor the sentence that discloses it carries a currency mark.
+ */
+const CURRENCY_SYMBOLS = ['$', '€', '£'] as const;
 
 /**
  * The offers the listing makes: a purchase at 10,000 minor units and a rent at 2,500. Both are whole
@@ -96,6 +112,13 @@ const REFUSALS: ReadonlyArray<{
     reason: 'invalid_amount',
   },
 ];
+
+/**
+ * The amounts an offer cannot be made at, each refused before anything is written: a negative count
+ * of minor units, a fractional one, and a value that is not a number at all. `Number.isSafeInteger`
+ * refuses all three in one test, which is why no amount is adjusted on the way out.
+ */
+const INVALID_AMOUNTS: readonly number[] = [-1, 12.5, Number.NaN];
 
 /** The stored shape of one `transactions` row, with `simulated` as the integer the column holds. */
 interface StoredTransactionRow {
@@ -293,6 +316,9 @@ describe('createCheckoutSimulation', () => {
       expect(transaction.id).toMatch(UUID_PATTERN);
       expect(transaction.simulated).toBe(true);
       expect(typeof transaction.simulated).toBe('boolean');
+      // Every amount in this product is a whole count of minor units, and the one the listing made
+      // is carried through untouched.
+      expect(Number.isInteger(transaction.amount_minor_units)).toBe(true);
 
       // Two entries, in the order they were appended: the charge taken in, then the allocation
       // computed from it. Both reference the transaction and neither names a report.
@@ -359,6 +385,19 @@ describe('createCheckoutSimulation', () => {
           transaction_id: transaction.id,
         },
       ]);
+
+      // The journal as the operator surfaces read it: one charge in the marketplace ledger, one
+      // allocation in the founder ledger, and a gate-fee ledger the checkout never touched — a
+      // gate-evaluation fee is charged per completed evaluation by the evaluation path.
+      expect(countRows('transactions')).toBe(1);
+      expect(countRows('ledger_entries')).toBe(2);
+      expect(listLedgerEntries(db, 'marketplace')).toHaveLength(1);
+      expect(listLedgerEntries(db, 'founder_allocation')).toHaveLength(1);
+      expect(listLedgerEntries(db, 'gate_fees')).toHaveLength(0);
+
+      const [marketplaceOnDisk] = listLedgerEntries(db, 'marketplace');
+      expect(marketplaceOnDisk?.amount_minor_units).toBe(transaction.amount_minor_units);
+      expect(marketplaceOnDisk?.transaction_id).toBe(transaction.id);
     });
 
     it('resolves the allocation from the configuration it is given, and journals no gate fee', () => {
@@ -383,6 +422,62 @@ describe('createCheckoutSimulation', () => {
       expect(storedLedgerRows().map((row) => row.ledger)).not.toContain('gate_fees');
       expect(countRows('ledger_entries')).toBe(2);
       expect(transaction.amount_minor_units).toBe(10000);
+
+      // A configured fee reaches neither amount a checkout journals: the fee belongs to the
+      // evaluation path, and no member of a checkout input could carry one.
+      const feeConfig = resolveCommerceConfig({ gateFeeMinorUnits: 50000 });
+      const second = completedCheckout(checkoutInput({ config: feeConfig }));
+
+      expect(feeConfig.gateFeeMinorUnits).toBe(50000);
+      expect(second.transaction.amount_minor_units).toBe(10000);
+      expect(entryAt(second.ledgerEntries, 0).amount_minor_units).toBe(10000);
+      expect(entryAt(second.ledgerEntries, 1).amount_minor_units).toBe(
+        allocate(10000, feeConfig.founderAllocationRateBasisPoints),
+      );
+      expect(entryAt(second.ledgerEntries, 1).amount_minor_units).toBe(25);
+      expect(listLedgerEntries(db, 'gate_fees')).toHaveLength(0);
+    });
+
+    it('appends a second checkout beside the first, leaving the first row untouched', () => {
+      const first = completedCheckout(checkoutInput());
+      const second = completedCheckout(checkoutInput({ offerModel: 'rent' }));
+
+      expect(second.transaction.id).not.toBe(first.transaction.id);
+      expect(countRows('transactions')).toBe(2);
+      expect(countRows('ledger_entries')).toBe(4);
+
+      // Each checkout journals its own pair, in write order and at its own offer's amount, and the
+      // gate-fee ledger stays empty for both. This is the append-only property observed through the
+      // module's own reads, with no trigger involved.
+      expect(listLedgerEntries(db, 'marketplace').map((entry) => entry.amount_minor_units)).toEqual([
+        10000,
+        2500,
+      ]);
+      expect(
+        listLedgerEntries(db, 'founder_allocation').map((entry) => entry.amount_minor_units),
+      ).toEqual([25, allocate(2500, CONFIG.founderAllocationRateBasisPoints)]);
+      expect(listLedgerEntries(db, 'gate_fees')).toHaveLength(0);
+
+      // The row written first still reads back exactly as it was written.
+      const stored = storedTransactions();
+      expect(stored).toHaveLength(2);
+      expect(stored[0]).toEqual({ ...first.transaction, simulated: 1 });
+      expect(stored[1]).toEqual({ ...second.transaction, simulated: 1 });
+    });
+
+    it('states the simulation in the row: the synthetic label, and no currency symbol', () => {
+      const { transaction } = completedCheckout(checkoutInput());
+
+      for (const symbol of CURRENCY_SYMBOLS) {
+        expect(transaction.disclosure_label).not.toContain(symbol);
+        expect(transaction.currency_label).not.toContain(symbol);
+      }
+
+      expect(transaction.currency_label).toBe(SYNTHETIC_CURRENCY_LABEL);
+      expect(storedTransactions()[0]?.currency_label).toBe(SYNTHETIC_CURRENCY_LABEL);
+      // The amount is a whole count of minor units of that label, so a currency mark has nowhere to
+      // appear — on the row, or in the sentence that discloses it.
+      expect(Number.isInteger(storedTransactions()[0]?.amount_minor_units)).toBe(true);
     });
   });
 
@@ -396,6 +491,23 @@ describe('createCheckoutSimulation', () => {
       expect(countRows('transactions')).toBe(0);
       expect(countRows('ledger_entries')).toBe(0);
     });
+
+    it.each(INVALID_AMOUNTS)(
+      'refuses an offer made at %s minor units, and writes no row at all',
+      (amountMinorUnits) => {
+        const result = createCheckoutSimulation(
+          db,
+          checkoutInput({ offers: [{ model: 'purchase', amountMinorUnits }] }),
+        );
+
+        // Nothing throws for any of the three shapes an unusable amount takes, and the store is left
+        // exactly as it was found. The branch is unreachable over HTTP, which is why the refused
+        // amount is asserted here rather than at the edge.
+        expect(result).toEqual({ ok: false, reason: 'invalid_amount' });
+        expect(countRows('transactions')).toBe(0);
+        expect(countRows('ledger_entries')).toBe(0);
+      },
+    );
   });
 
   describe('atomicity', () => {
