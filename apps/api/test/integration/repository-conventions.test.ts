@@ -4,7 +4,7 @@
  *
  * **What this file proves.** A statement about a file is proved by reading the file, and four of the
  * repository's obligations are exactly that. Criterion 12's structural half is that a new
- * contributor's path exists: `docs/starter-tasks/` holds at least ten labelled briefs, each with a
+ * contributor's path exists: `docs/starter-tasks/` holds at least twelve labelled briefs, each with a
  * title, a scope and an acceptance note, and `README.md` documents every root script the root
  * `package.json` declares, so the commands a contributor is told to run are the commands the
  * repository actually has. Criterion 13's structural half is that the manual privacy review's
@@ -103,8 +103,8 @@ const FIXTURES_MANIFEST_PATH = join(REPOSITORY_ROOT, "packages", "sgi-fixtures",
  * The plan's fixed values, asserted by name
  * ---------------------------------------------------------------------------------------------- */
 
-/** How many labelled briefs the contributor path must offer — twelve are planned, ten is the floor. */
-const MINIMUM_STARTER_TASKS = 10;
+/** How many labelled briefs the contributor path must offer — the plan fixes twelve, asserted as a floor. */
+const MINIMUM_STARTER_TASKS = 12;
 
 /** The single generic token `.github/CODEOWNERS` holds, awaiting the project owner's replacement. */
 const MAINTAINER_PLACEHOLDER = "MAINTAINER-PLACEHOLDER";
@@ -516,7 +516,7 @@ describe("repository conventions", () => {
    * docs folder's own choice, so they are enumerated from disk rather than retyped here.
    */
   describe("the starter-task briefs a first contribution begins from", () => {
-    it("holds at least ten briefs", () => {
+    it("holds at least twelve briefs", () => {
       const names = requireStarterTaskNames();
       const failures =
         names.length >= MINIMUM_STARTER_TASKS
@@ -530,7 +530,7 @@ describe("repository conventions", () => {
             ];
       expect(
         failures,
-        "the starter-task directory must offer at least ten labelled first contributions",
+        "the starter-task directory must offer at least twelve labelled first contributions",
       ).toEqual([]);
     });
 

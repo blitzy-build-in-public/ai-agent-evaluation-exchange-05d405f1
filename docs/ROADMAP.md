@@ -18,18 +18,18 @@ when any capability arrives.
 **Delivers.** The repository skeleton and everything that makes the tree buildable and testable: the
 workspace declaration with its root scripts, the strict compiler configuration inherited by every
 workspace, the three test configurations, the container files, the CI pipeline, and `packages/shared`
-in full — its constants, domain types, JSON schemas and the eleven ordered migrations that create the
+in full — its constants, domain types, JSON schemas and the twelve ordered migrations that create the
 tables, the append-only triggers and the read-path indexes.
 
 **Touches.** `package.json`, `package-lock.json`, `tsconfig.base.json`, `tsconfig.json`,
 `vitest.unit.config.ts`, `vitest.integration.config.ts`, `playwright.config.ts`, `Dockerfile`,
 `docker-compose.yml`, `.gitignore`, `.dockerignore`, `.github/workflows/ci.yml`, `packages/shared/**`
-including `packages/shared/migrations/0001`–`0011`.
+including `packages/shared/migrations/0001`–`0012`, among them `0012_amount_integer_guards.sql`.
 
 **Priority tier:** P0 — the infrastructure every other milestone is built on.
 
 **Exit condition.** From a clean checkout: `npm ci` exits 0, `npm run build` exits 0, and an empty
-unit run (`npm run test:unit` with no test file in the tree yet) succeeds; and the eleven migrations
+unit run (`npm run test:unit` with no test file in the tree yet) succeeds; and the twelve migrations
 apply in filename order to an in-memory database, with the append-only triggers created on all nine
 append-only tables.
 

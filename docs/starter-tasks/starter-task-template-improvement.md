@@ -66,8 +66,8 @@ worked example.
 ## Acceptance
 
 1. `npm run test:integration -- --testNamePattern="repository conventions"` exits 0 — the structural
-   proof: this folder holds at least ten briefs and every one of them carries a title, a scope and an
-   acceptance note. A brief missing one of the three turns that suite red, naming the file.
+   proof: this folder holds the plan's twelve briefs and every one of them carries a title, a scope and
+   an acceptance note. A brief missing one of the three turns that suite red, naming the file.
 2. Observable by reading this folder: every file's first Markdown heading is its title; every file
    carries exactly one `## Scope` and one `## Acceptance`; every file carries one `Labels:` line naming
    a tier `docs/ROADMAP.md` uses; and no file has gained a second H2 section, front matter or HTML.
