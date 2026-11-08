@@ -26,13 +26,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { SYNTHETIC_CURRENCY_LABEL } from '@adem/shared';
-import type { Refund } from '@adem/shared';
+import type { LedgerEntry, Refund } from '@adem/shared';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { COMMERCE_DISCLOSURE_LABEL, resolveCommerceConfig } from '../config';
 import type { CommerceConfig } from '../config';
 import { allocate } from '../ledgers/allocate';
+import { insertLedgerEntry } from '../ledgers/ledger-repository';
 import type { CreateRefundInput, RefundRefusal, RefundResult } from './create-refund';
 import { computeNetRemaining, createRefund } from './create-refund';
 
@@ -56,6 +57,16 @@ const MARKETPLACE_CHARGE_ID = 'a2d5c8f1-4b96-4e70-8c31-5f7d9a2b6e04';
 const FOUNDER_ALLOCATION_ID = 'c8e1f4a7-6d20-4b53-9f86-1a3c5e7b9d02';
 const OTHER_CHARGE_ID = 'e6b9c2d5-8f31-4a64-9c70-2d4f6a8b0e13';
 const UNKNOWN_TRANSACTION_ID = '0c4f7a2e-6b19-4d38-a05e-8f1c3d5b7a96';
+
+/**
+ * The three rows a completed evaluation leaves behind, which is what a gate-evaluation fee is
+ * charged for: the standard, the versioned criteria that report was scored against, and the report
+ * itself. They are fixed and invented like every other identifier here, and they exist so that a fee
+ * row can name a report a delivered table actually holds rather than an opaque string.
+ */
+const STANDARD_ID = '4c7e2f19-8b53-4d06-a7e2-6f1b9c3d5e80';
+const STANDARD_VERSION_ID = '8e2a5c31-7f94-4b60-9d38-1c5e7a2f6b04';
+const GATE_FEE_REPORT_ID = 'a7c4e01b-5d92-4b68-9f37-2e8c1a60d4b5';
 
 /** The amount a fixture transaction charges, and the two refunds that split it. */
 const TRANSACTION_AMOUNT_MINOR_UNITS = 10000;
@@ -369,6 +380,83 @@ function seedChargedTransaction(): void {
   });
 }
 
+/**
+ * Seeds the three rows a completed evaluation leaves behind: the standard, the versioned criteria it
+ * was scored against and the report itself. A gate-evaluation fee is charged for a report and for
+ * nothing else, so the fee row a case appends names the report this function stores.
+ */
+function seedEvaluationReport(): void {
+  db.prepare('INSERT INTO standards (id, code, title, summary) VALUES (?, ?, ?, ?)').run(
+    STANDARD_ID,
+    'SGI-SO-1.0.0',
+    'Structured Output Conformance',
+    'A seeded standard the fixture report is traced to.',
+  );
+
+  db.prepare(
+    `INSERT INTO standard_versions
+       (id, standard_id, version_label, status, total_cases, critical_cases,
+        pass_threshold_matches, critical_failures_allowed, rubric_reference, definition_json, published_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    STANDARD_VERSION_ID,
+    STANDARD_ID,
+    'SGI-SO-1.0.0',
+    'active',
+    20,
+    5,
+    18,
+    0,
+    'SGI-SO-1.0.0#rubric',
+    '{}',
+    FIXTURE_INSTANT,
+  );
+
+  db.prepare(
+    `INSERT INTO evaluation_reports
+       (id, candidate_version_id, standard_version_id, outcome, matched_count, total_count,
+        critical_failures, label, rubric_reference, prior_report_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    GATE_FEE_REPORT_ID,
+    LISTING_VERSION_ID,
+    STANDARD_VERSION_ID,
+    'PASS',
+    20,
+    20,
+    0,
+    'SAMPLE',
+    'SGI-SO-1.0.0#rubric',
+    null,
+    FIXTURE_INSTANT,
+  );
+}
+
+/**
+ * Appends one `gate_fees` row: the flat gate-evaluation fee of a completed evaluation, which carries
+ * the report it was charged for and no transaction at all. The row goes through the ledger writer
+ * rather than being written by hand, because that is the writer a completed evaluation's fee goes
+ * through, and it exists so a case can prove a refund leaves such a fee exactly as it was and
+ * allocates nothing from it.
+ *
+ * @returns The appended fee row, as the writer returns it.
+ */
+function appendGateFeeRow(): LedgerEntry {
+  seedEvaluationReport();
+
+  return insertLedgerEntry(db, {
+    ledger: 'gate_fees',
+    entry_type: 'charge',
+    direction: 'debit',
+    amount_minor_units: DEFAULT_CONFIG.gateFeeMinorUnits,
+    transaction_id: null,
+    report_id: GATE_FEE_REPORT_ID,
+    currency_label: SYNTHETIC_CURRENCY_LABEL,
+    disclosure_label: COMMERCE_DISCLOSURE_LABEL,
+    description: 'Simulated gate-evaluation fee for a completed evaluation report',
+  });
+}
+
 beforeEach(() => {
   db = new Database(':memory:');
   db.pragma('foreign_keys = ON');
@@ -580,6 +668,56 @@ describe('createRefund — the arithmetic of criterion 6', () => {
     expect(result.reversalEntries[1]?.amount_minor_units).toBe(100);
     expect(result.reversalEntries[0]?.amount_minor_units).toBe(TRANSACTION_AMOUNT_MINOR_UNITS);
   });
+
+  it('counts every amount it writes in whole minor units', () => {
+    const result = requireSuccess(createRefund(db, refundInput(PARTIAL_REFUND_MINOR_UNITS)));
+    const reversalIds = new Set(result.reversalEntries.map((entry) => entry.id));
+    const storedReversals = storedLedgerRows().filter((row) => reversalIds.has(row.id));
+
+    // Read back from the table rather than from the returned value, so the counts a reader of
+    // `refunds` and `ledger_entries` sees are the ones held to whole minor units.
+    expect(storedReversals).toHaveLength(2);
+    expect(storedRefundRows().every((row) => Number.isInteger(row.amount_minor_units))).toBe(true);
+    expect(storedReversals.every((row) => Number.isInteger(row.amount_minor_units))).toBe(true);
+    expect(Number.isInteger(result.refund.amount_minor_units)).toBe(true);
+    expect(
+      result.reversalEntries.every((entry) => Number.isInteger(entry.amount_minor_units)),
+    ).toBe(true);
+  });
+
+  it('leaves a gate-evaluation fee exactly as it was and allocates nothing from it', () => {
+    // Criterion 6's other half: a gate-evaluation fee is charged once per completed evaluation and is
+    // never eligible for an allocation. It carries the report it was charged for and no transaction,
+    // so a refund of the fixture transaction corrects two rows of that transaction's two ledgers and
+    // touches nothing of the fee's.
+    const fee = appendGateFeeRow();
+    const feeRowsBefore = storedLedgerRows().filter((row) => row.ledger === 'gate_fees');
+    const ledgerEntriesBefore = countRows(db, 'ledger_entries');
+
+    // The anchors: the fee is a stored row read back value for value, and the fixture's charge and
+    // allocation are still the only rows beside it.
+    expect(feeRowsBefore).toEqual([fee]);
+    expect(ledgerEntriesBefore).toBe(3);
+    expect(netFounderAllocationMinorUnits(TRANSACTION_ID)).toBe(25);
+
+    const result = requireSuccess(createRefund(db, refundInput(TRANSACTION_AMOUNT_MINOR_UNITS)));
+
+    // The fee row is unchanged and its ledger still holds one row, while exactly two rows were added:
+    // the refund appends its own transaction's reversals and nothing against a report.
+    expect(storedLedgerRows().filter((row) => row.ledger === 'gate_fees')).toEqual(feeRowsBefore);
+    expect(countRows(db, 'ledger_entries')).toBe(ledgerEntriesBefore + 2);
+    expect(result.reversalEntries).toHaveLength(2);
+    expect(result.reversalEntries.every((entry) => entry.report_id === null)).toBe(true);
+
+    // And no allocation was computed from the fee at any point: the founder-allocation ledger holds
+    // no row naming that report, and the transaction's own allocation is what the refund reversed.
+    expect(
+      storedLedgerRows().filter(
+        (row) => row.ledger === 'founder_allocation' && row.report_id === GATE_FEE_REPORT_ID,
+      ),
+    ).toHaveLength(0);
+    expect(netFounderAllocationMinorUnits(TRANSACTION_ID)).toBe(0);
+  });
 });
 
 describe('createRefund — the refusals', () => {
@@ -594,6 +732,20 @@ describe('createRefund — the refusals', () => {
 
   it.each(INVALID_AMOUNTS)('refuses $label without appending anything', ({ amount }) => {
     const result = createRefund(db, refundInput(amount));
+
+    expect(requireRefusal(result).reason).toBe('invalid_amount');
+    expect(countRows(db, 'refunds')).toBe(0);
+    expect(countRows(db, 'ledger_entries')).toBe(2);
+  });
+
+  it('refuses an amount that is not a count before it looks the transaction up', () => {
+    // The two readings differ for exactly this input: an amount of nothing is refused on its own
+    // account, so an identifier no row carries never has to be consulted to answer it. Passing the
+    // unknown identifier beside the zero amount is what pins the order rather than assuming it.
+    const result = createRefund(
+      db,
+      refundInput(0, { transactionId: UNKNOWN_TRANSACTION_ID }),
+    );
 
     expect(requireRefusal(result).reason).toBe('invalid_amount');
     expect(countRows(db, 'refunds')).toBe(0);
