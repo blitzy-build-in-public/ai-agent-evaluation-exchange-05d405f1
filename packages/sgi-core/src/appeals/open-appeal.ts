@@ -12,12 +12,14 @@
  * Two decisions are stated here, because the code alone would leave each open to
  * misreading:
  *
- * 1. **No ownership lookup, deliberately.** Resolving whether the named developer owns
- *    the appealed report would mean reading `listings` and `listing_versions`, which
- *    `apps/api` owns, and the API contract already supplies that answer as the write
- *    route's `403` from the resolved demo-account role. `developerAccountId` is
- *    therefore taken as given and never checked against the report: adding the check
- *    here would put a read of another owner's tables inside this package.
+ * 1. **The ownership decision belongs to the write route, not here.** Resolving whether
+ *    the named developer owns the appealed report would mean reading `listings` and
+ *    `listing_versions`, which `apps/api` owns, so the route does it: it joins the
+ *    report's candidate version to the listing that names the developer that published
+ *    it, and answers `403` when the resolved account is not that developer.
+ *    `developerAccountId` is therefore taken as given and never checked against the
+ *    report: adding the check here would put a read of another owner's tables inside
+ *    this package.
  * 2. **Opening an appeal appends one governance event.** An appeal's opening is itself a
  *    governance decision — a developer has contested a measurement — so it is recorded in
  *    the append-only log alongside the ruling that later answers it, through the package's
@@ -150,7 +152,9 @@ export class InvalidAppealError extends Error {
  *
  * @param db - The caller's database handle.
  * @param input - The appealed report, the developer opening the appeal, and the stated
- * reason. The developer is trusted as given: see the no-ownership-lookup note above.
+ * reason. The developer is taken as given: the ownership decision is the write route's,
+ * which refuses a developer that does not own the version the report measures — see the
+ * note above.
  * @returns The opened appeal, in status `open`.
  * @throws {InvalidAppealError} When `input.reason` is empty or nothing but whitespace.
  * @throws {ReportNotFoundError} When no `evaluation_reports` row has `input.reportId`.

@@ -1141,14 +1141,16 @@ export async function getReport(reportId: string): Promise<EvaluationReportDetai
  * `POST /evaluations/{id}/appeals` (developer): opens an appeal against a report with a
  * stated reason.
  *
- * The report comes from the path and the ground for contesting it from the body. The
- * resolved account's role is the whole of the check the route makes — it performs no
- * ownership lookup, so any developer account may open an appeal against any report. An appeal
- * never changes the report it concerns: a ruling appends a governance event, and
- * `GET /evaluations/{id}` returns the identical report afterwards.
+ * The report comes from the path and the ground for contesting it from the body. The route
+ * checks the resolved account's role and then the ownership of the report it names: an
+ * account whose role is not `developer`, and a developer that did not publish the listing
+ * version the report measures, are both refused as `403`. An appeal never changes the report
+ * it concerns: a ruling appends a governance event, and `GET /evaluations/{id}` returns the
+ * identical report afterwards.
  *
  * Raises {@link ApiClientError} for `404` (an unknown report), `401`, `403` — the resolved
- * account is not a developer — and `400`.
+ * account is not a developer, or is not the developer that published the measured version —
+ * and `400`.
  */
 export async function openAppeal(reportId: string, body: AppealCreateBody): Promise<Appeal> {
   const response = await send("POST", `/evaluations/${encodeURIComponent(reportId)}/appeals`, {

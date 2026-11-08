@@ -666,8 +666,9 @@ describe("a second ruling on an appeal that already carries a terminal status", 
       expect(readAppealRow(appeal.id)).toStrictEqual(rowBefore);
       expect(readEventRows()).toStrictEqual(logBefore);
 
-      // And nothing was even prepared past the read: the status guard runs before the transaction
-      // opens, so a refused ruling cannot leave a half-written decision behind.
+      // And nothing was even prepared past the read: the guard runs inside the transaction, but
+      // before either write is reached, so a refused ruling prepares no statement that could have
+      // left a half-written decision behind.
       expect(prepared).toHaveLength(1);
       expect(recordedStatement(prepared, 0)).toMatch(/\bFROM appeals\b/);
       expect(prepared.filter((source) => /\bUPDATE\b/i.test(source))).toEqual([]);
@@ -720,8 +721,8 @@ describe("the statements ruleAppeal prepares", () => {
     });
     const prepared = [...preparedStatements];
 
-    // The executable form of the module's own list: one `SELECT` on `appeals`; then, inside the
-    // transaction, one `UPDATE` on `appeals` and one `INSERT` into `governance_events`. Anything
+    // The executable form of the module's own list: inside the one transaction, one `SELECT` on
+    // `appeals`, one `UPDATE` on `appeals` and one `INSERT` into `governance_events`. Anything
     // else — a second read, a helper's lookup, a statement against another table — fails here.
     expect(prepared).toHaveLength(3);
     expect(recordedStatement(prepared, 0)).toMatch(/\bFROM appeals\b/);

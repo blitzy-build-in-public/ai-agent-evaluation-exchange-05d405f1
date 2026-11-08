@@ -130,7 +130,7 @@ import { UnknownStandardError, getStandardVersion } from "@adem/sgi-core";
 
 import { appendAuditEvent } from "../audit/append-audit-event";
 import { resolveDemoAccount, resolveOptionalDemoAccount } from "../auth/resolve-demo-account";
-import { requireRole } from "../auth/require-role";
+import { isOperator, requireRole } from "../auth/require-role";
 import type { ApiConfig } from "../config";
 import { ApiError } from "../errors/error-envelope";
 
@@ -1380,12 +1380,13 @@ export function registerListingsRoutes(app: FastifyInstance, context: ListingsRo
       // the operator still reads it with the history it keeps, which is what a later `restore` needs.
       // The header is resolved tolerantly here and for no other reason, because a public read may not
       // turn an absent or unresolvable header into a `401`. The role decides between `200` and `404`
-      // rather than raising `403`, so `requireRole` is deliberately not called: the listing is
-      // concealed from a non-operator, and a concealment is not a role refusal.
+      // rather than raising `403`, so `requireRole` is deliberately not called and the decision is
+      // asked through the shared predicate held beside it in `apps/api/src/auth/require-role.ts`: the
+      // listing is concealed from a non-operator, and a concealment is not a role refusal.
       if (listingRow.status === "hidden") {
         const reader = resolveOptionalDemoAccount(database, demoAccountHeader(request));
 
-        if (reader === null || reader.role !== "operator") {
+        if (!isOperator(reader)) {
           throw ApiError.notFound();
         }
       }

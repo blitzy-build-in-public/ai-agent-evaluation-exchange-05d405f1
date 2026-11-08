@@ -333,9 +333,16 @@ const NO_ACCOUNT_APPEAL_SENTENCE =
 const NO_ACCOUNT_RETEST_SENTENCE =
   "No demo account is selected, so the evaluation was not run. Choose a demo account in the demo account switcher and send the submission again — the selected account separates roles for the demonstration and is not a sign-in. The submission is still in the field.";
 
-/** The sentence an appeal from an account without the developer role renders. */
+/**
+ * The sentence an appeal from an account the row does not admit renders.
+ *
+ * The row's `403` covers both of its causes — an account whose role is not `developer`, and a
+ * developer that did not publish the listing version the report measures — so the sentence names the
+ * account the appeal needs rather than one of the two refusals, in the register the retest sentence
+ * below already uses for the same pair.
+ */
 const WRONG_ROLE_APPEAL_SENTENCE =
-  "Opening an appeal needs a demo account whose role is developer, and the selected account is not a developer, so the appeal was not opened. Switch to a developer account and open the appeal again. The reason you wrote has been kept.";
+  "Opening an appeal needs the demo account of the developer that published the listing version this report measures, and the selected account is not that developer, so the appeal was not opened. Switch to the owning developer account and open the appeal again. The reason you wrote has been kept.";
 
 /** The sentence a retest from an account that does not own the candidate version renders. */
 const WRONG_ROLE_RETEST_SENTENCE =

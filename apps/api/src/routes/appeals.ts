@@ -14,29 +14,34 @@
  *
  * **A ruling records a decision and never changes a measurement.** This is the file in which "an
  * operator cannot alter a measurement" becomes observable over HTTP, and the property is held by
- * what this file does not do: it issues no statement against the report or against the per-case
- * evidence a report carries — no read for an existence check included — and it offers no route,
- * verb or clause through which either could be amended or removed. The report's existence is
- * verified by `@adem/sgi-core`'s `openAppeal`, which reads its own table, and whether an appeal
- * exists and whether it already carries a terminal status is decided by that package's
- * `ruleAppeal`. A ruling appends a governance event and moves the appeal's own `status`; the
- * appealed report and its per-case evidence stay byte-identical, which is what the public
+ * what this file does not do: the ruling path issues no statement against the report or against the
+ * per-case evidence a report carries — no read for an existence check included — and it offers no
+ * route, verb or clause through which either could be amended or removed. The opening path reads the
+ * report once, and reads it only to resolve which developer's listing version it measures; the
+ * report's existence is verified by `@adem/sgi-core`'s `openAppeal`, which reads its own table, and
+ * whether an appeal exists and whether it already carries a terminal status is decided by that
+ * package's `ruleAppeal`. A ruling appends a governance event and moves the appeal's own `status`;
+ * the appealed report and its per-case evidence stay byte-identical, which is what the public
  * `GET /evaluations/{id}` returns before and after a ruling. The ruling's answer carries that
  * event beside the appeal — read back from the append-only log, filtered by the subject the
  * decision concerns — so the ground the operator stated is readable where the decision is shown,
  * which is the shape the sibling `./moderation` answer already has.
  *
- * **No ownership lookup, deliberately.** Whether the developer appealing a report owns the listing
- * version that report measures is not resolved here, and no table outside this workspace's own is
- * consulted to find out: the row's `403` is the demo-account role check below, and the domain
- * package takes the developer as given rather than reading `listings` and `listing_versions`, which
- * belong to this workspace. Resolving it here would put a cross-table read in a route and duplicate
- * knowledge the domain package deliberately declined to hold.
+ * **Ownership is resolved here, by one read.** Whether the developer appealing a report owns the
+ * listing version that report measures is this file's decision, and it is taken by
+ * {@link assertReportOwnedByDeveloper}: the report is joined through its candidate version to the
+ * listing that names the publishing developer, and a resolved developer that is not that developer is
+ * refused the row's `403` with a sentence of this file's own. The read answers no row for an
+ * identifier no report carries, and that case is deliberately left to `openAppeal`'s `404`, so
+ * "no report carries this id" has one source. The domain package takes the developer as given rather
+ * than reading `listings` and `listing_versions`, which belong to this workspace: putting that read
+ * inside `@adem/sgi-core` would give it a second owner's tables to read.
  *
  * **The failure order is the contract's**, and it is the same for both rows: the write rate limit,
  * then JSON-schema validation at the edge, then `401` for a demo-account header that is absent or
- * names no seeded account, then `403` for a resolvable account whose role the row does not accept,
- * then the domain call and this route's audit append inside one transaction, then `201` or `200`. A
+ * names no seeded account, then `403` for a resolvable account whose role the row does not accept —
+ * and, on the opening row, for a developer whose report another developer's listing owns — then the
+ * domain call and this route's audit append inside one transaction, then `201` or `200`. A
  * refusal carries a stable `code` and no HTTP status, so it is mapped through `toApiError`, the one
  * place a code becomes a status and a client-facing sentence: `not_found` is `404`, `invalid_appeal`
  * is `400` and `already_ruled` is `409`. Nothing here decides a status from domain state, and no
@@ -44,11 +49,13 @@
  * as `{ error: { code, message } }`, and the account resolved by `resolveDemoAccount` and the role
  * asserted by `requireRole` reach it unchanged.
  *
- * **The four refusals these rows answer are this file's sentences**, not the domain package's. The
+ * **The refusals these rows answer are this file's sentences**, not the domain package's. The
  * classes are exported from `@adem/sgi-core`'s entry and each names one refusal: a report no row
  * carries and an appeal no row carries are `404 not_found`, a blank ground is `400 invalid_appeal`,
- * and a second ruling is `409 already_ruled`. The package writes its messages for a log — each
- * begins with the package's own name — so the two helpers below replace that message with this
+ * and a second ruling is `409 already_ruled`. The ownership refusal of the opening row is this
+ * file's own outright — no package refusal answers it — and is raised with
+ * {@link REPORT_OWNED_BY_ANOTHER_DEVELOPER_SENTENCE}. The package writes its messages for a log —
+ * each begins with the package's own name — so the two helpers below replace that message with this
  * route's sentence while keeping the status and the code `toApiError` derived from it, and a refusal
  * this file does not know keeps whatever `toApiError` gives it. No client of these two rows reads a
  * sentence naming an internal module.
@@ -224,6 +231,19 @@ const REPORT_NOT_HELD_SENTENCE = "No evaluation report carries this identifier."
  */
 const BLANK_GROUND_SENTENCE = "An appeal needs a stated ground, and a blank ground states none.";
 
+/**
+ * The sentence an opening states for a report that measures a listing version another developer
+ * published.
+ *
+ * This is the row's ownership refusal, and it is phrased like the sibling refusals the version and
+ * evaluation rows state for the same relation — "published by another developer" — so one relation
+ * is described one way wherever a developer meets it. It names neither the other developer nor the
+ * listing the report measures, because a caller has nothing to do with a report it may not appeal
+ * and is owed no fact about it beyond the relation itself.
+ */
+const REPORT_OWNED_BY_ANOTHER_DEVELOPER_SENTENCE =
+  "This report measures a listing version published by another developer, so this demo account may not open an appeal against it.";
+
 /** The sentence a ruling states for an appeal identifier no row carries. */
 const APPEAL_NOT_HELD_SENTENCE = "No appeal carries this identifier.";
 
@@ -253,6 +273,83 @@ function withStatedSentence(error: unknown, sentence: string): ApiError {
   const mapped = toApiError(error);
 
   return new ApiError(mapped.status, mapped.code, sentence);
+}
+
+/**
+ * Who owns the report an opening names: the developer that published the listing version the report
+ * measures.
+ *
+ * The one row this route reads about the appealed report, and the whole of the ownership question.
+ * The report itself belongs to `@adem/sgi-core` and `listings` and `listing_versions` belong to this
+ * workspace, so the relation between them is resolved here rather than by a package that would have
+ * to read another owner's tables: see {@link assertReportOwnedByDeveloper}.
+ */
+interface ReportOwnerRow {
+  /** `accounts.id` of the developer that published the listing the report's version belongs to. */
+  readonly developer_account_id: string;
+}
+
+/**
+ * The one read this file performs against the report's own tables: the report joined through its
+ * candidate version to the listing that names the developer that published it.
+ *
+ * The report is the resource this row acts on and the listing names who owns it, so the question
+ * "may this developer appeal this report?" is answered by one statement over the chain rather than
+ * by two lookups that could disagree — a version row and its listing are one relation, and the joins
+ * are on primary keys. The statement selects the owning account's identifier and nothing else, so a
+ * `403` discloses nothing beyond the relation it refuses.
+ *
+ * A report whose version carries no listing answers no row; the schema makes that state
+ * unreachable, `listing_versions.listing_id` being a foreign key into `listings`, and this file takes
+ * no decision on it: see {@link assertReportOwnedByDeveloper}. Nothing is written and nothing is
+ * cached — a hit and a miss both leave every row as it was.
+ */
+const SELECT_REPORT_OWNER_SQL = `SELECT
+  l.developer_account_id AS developer_account_id
+FROM evaluation_reports AS r
+JOIN listing_versions AS v ON v.id = r.candidate_version_id
+JOIN listings AS l ON l.id = v.listing_id
+WHERE r.id = ?`;
+
+/**
+ * Whether the resolved developer may open an appeal against the named report, refusing the contract's
+ * `403` when it may not.
+ *
+ * The row's ownership rule. A developer may appeal the reports of the versions it published and no
+ * others — an appeal contests a measurement of its own listing — so a report whose listing belongs to
+ * another developer is refused here, before anything is written: a refusal leaves no appeal row, no
+ * `appeal_opened` governance event and no audit row behind. The comparison is between identifiers and
+ * nothing else, so the refusal states no fact about the report beyond the relation that refuses it.
+ *
+ * An identifier no report carries answers no row and is deliberately **not** decided here: this file
+ * takes no position on whether a report exists, so `openAppeal` stays the single place the contract's
+ * `404` is raised, with the one sentence the sibling read row states it in.
+ *
+ * The read runs before the write transaction and outside it, which is safe because the value it reads
+ * cannot change underneath the write: a listing's `developer_account_id` is set once, when the row is
+ * inserted — by the seed or by the create row — and no statement any route issues against `listings`
+ * ever updates it, moderation's status update moving that row's `status` alone. An ownership that
+ * could move between this read and the insert would make the pair a check-then-act; none can.
+ *
+ * @param database - The caller's database handle.
+ * @param reportId - The report the appeal names, taken from the path.
+ * @param developerAccountId - The resolved developer opening the appeal.
+ * @throws {ApiError} `403 forbidden` when the report's listing belongs to another developer.
+ */
+function assertReportOwnedByDeveloper(
+  database: Database,
+  reportId: string,
+  developerAccountId: string,
+): void {
+  const owner = database.prepare<[string], ReportOwnerRow>(SELECT_REPORT_OWNER_SQL).get(reportId);
+
+  if (owner === undefined) {
+    return;
+  }
+
+  if (owner.developer_account_id !== developerAccountId) {
+    throw ApiError.forbidden(REPORT_OWNED_BY_ANOTHER_DEVELOPER_SENTENCE);
+  }
 }
 
 /**
@@ -515,12 +612,16 @@ export function registerAppealRoutes(app: FastifyInstance, context: AppealRouteC
     },
     (request, reply) => {
       // Called for the pair of refusals it owns: `401` when the header names no seeded account, and
-      // `403` when the account it names is not a developer. No ownership check follows — see this
-      // module's comment.
+      // `403` when the account it names is not a developer.
       const account = requireRole(
         resolveDemoAccount(context.database, request.headers[DEMO_ACCOUNT_HEADER.toLowerCase()]),
         "developer",
       );
+
+      // The ownership question `requireRole` leaves open, and the row's other `403`: a developer may
+      // appeal the reports of the versions it published and no others. Nothing is written when it
+      // refuses, and a report no row carries is left to `openAppeal`'s own `404`.
+      assertReportOwnedByDeveloper(context.database, request.params.id, account.id);
 
       const appeal = recordAppealOpening(context.database, {
         reportId: request.params.id,

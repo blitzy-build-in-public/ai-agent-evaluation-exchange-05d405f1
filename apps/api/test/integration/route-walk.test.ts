@@ -267,13 +267,16 @@ function actingAs(role: AccountRole): RequestOptions {
 }
 
 /**
- * The request options that send one write as a seeded developer that does not own the given listing.
+ * The request options that send one write as a seeded developer that does not own the resource named by
+ * the given listing.
  *
- * It exists for the version row's `403` "not owner", which no role refusal reaches: the acting
- * account must carry the role the row requires and still not own the listing. The seeded second
- * developer is that account — it owns none of the seeded listings — and it is reached through the
- * harness's account list rather than by handle or a retyped identifier, with the listing's own
- * account excluded so the case cannot be built against the acting developer's own listing.
+ * It exists for the ownership refusals, which no role refusal reaches: the acting account must carry the
+ * role the row requires and still not own what the row acts on. Both such rows are addressed through the
+ * listing that owns the resource — the version row by the listing it publishes to, and the appeal row by
+ * the listing the appealed report's candidate version belongs to — so the listing is what this helper
+ * takes. The seeded second developer is that account — it owns none of the seeded listings — and it is
+ * reached through the harness's account list rather than by handle or a retyped identifier, with the
+ * listing's own account excluded so the case cannot be built against the acting developer's own listing.
  */
 function actingAsNonOwner(listingId: string): RequestOptions {
   const owner = server.accountOf(listingId);
@@ -283,7 +286,7 @@ function actingAsNonOwner(listingId: string): RequestOptions {
 
   if (nonOwner === undefined) {
     throw new Error(
-      "route walk: the seed carries no second developer, so the version row's ownership refusal cannot be reached.",
+      "route walk: the seed carries no second developer, so the ownership refusals cannot be reached.",
     );
   }
 
@@ -1234,6 +1237,34 @@ describe("route walk: every row of the API contract table", () => {
         404,
         "not_found",
       );
+    });
+
+    it("refuses an appeal from a developer that does not own the report, writing nothing", async () => {
+      const reportId = captured(walk.reportId, "the written report");
+      const listingId = captured(walk.seededListingId, "the seeded listing");
+      const appealsBefore = countOf("SELECT COUNT(*) AS count FROM appeals");
+      const openingsBefore = countOf(
+        "SELECT COUNT(*) AS count FROM governance_events WHERE event_type = 'appeal_opened'",
+      );
+
+      expectRefusal(
+        await server.post(
+          `/evaluations/${reportId}/appeals`,
+          { reason: "An appeal from a developer the report does not belong to." },
+          actingAsNonOwner(listingId),
+        ),
+        403,
+        "forbidden",
+      );
+
+      // The refusal is the row's own `403` and it writes nothing: a developer the row admits still may
+      // not contest another developer's measurement, so neither an appeal row nor an `appeal_opened`
+      // event follows it. The count is of the whole table rather than of this report's rows, so an
+      // appeal opened against any other report between the two reads would fail this case too.
+      expect(countOf("SELECT COUNT(*) AS count FROM appeals")).toBe(appealsBefore);
+      expect(
+        countOf("SELECT COUNT(*) AS count FROM governance_events WHERE event_type = 'appeal_opened'"),
+      ).toBe(openingsBefore);
     });
 
     it("refuses an appeal with no demo header as 401", async () => {

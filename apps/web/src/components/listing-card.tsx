@@ -121,10 +121,15 @@ export function ListingCard(props: ListingCardProps): JSX.Element {
   const compareActionLabel = isSelected ? "Remove from compare" : "Add to compare";
   // The link opens the comparison the reader has made, so it carries the selection — but only
   // while that selection is one the compare contract accepts: a single identifier is refused
-  // with 400 there, and the page's own prompt to add another is the better answer.
+  // with 400 there, and the page's own prompt to add another is the better answer. Every
+  // identifier is encoded before it is joined, so one the reader typed into the address bar
+  // cannot add a parameter to this link or cut its query short at a fragment marker.
+  const selectedQuery = selectedIds
+    .map((id: string): string => encodeURIComponent(id))
+    .join(COMPARE_ID_SEPARATOR);
   const comparisonPath =
     selectedIds.length >= COMPARE_MIN_IDS && selectedIds.length <= COMPARE_MAX_IDS
-      ? `/compare?${COMPARE_IDS_PARAMETER}=${selectedIds.join(COMPARE_ID_SEPARATOR)}`
+      ? `/compare?${COMPARE_IDS_PARAMETER}=${selectedQuery}`
       : "/compare";
 
   function handleCompareToggle(): void {

@@ -139,12 +139,20 @@ function parseCompareIds(value: string | null): string[] {
     .filter((token: string): boolean => token !== "");
 }
 
-/** The address that names a comparison of exactly these identifiers, in this order. */
+/**
+ * The address that names a comparison of exactly these identifiers, in this order.
+ *
+ * Every identifier is encoded before it is joined, so an identifier the reader typed into the
+ * address bar cannot add a parameter to this link or cut its query short at a fragment marker.
+ */
 function comparisonPath(ids: readonly string[]): string {
   if (ids.length === 0) {
     return COMPARE_PATH;
   }
-  return `${COMPARE_PATH}?${COMPARE_IDS_PARAMETER}=${ids.join(COMPARE_ID_SEPARATOR)}`;
+  const selection = ids
+    .map((id: string): string => encodeURIComponent(id))
+    .join(COMPARE_ID_SEPARATOR);
+  return `${COMPARE_PATH}?${COMPARE_IDS_PARAMETER}=${selection}`;
 }
 
 /**

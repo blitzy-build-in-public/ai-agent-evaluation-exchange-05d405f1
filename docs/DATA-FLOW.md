@@ -296,10 +296,13 @@ the column that holds them is `docs/SCHEMA.md`.
 
 **An appeal is opened against a report and ruled through an appended event.** A developer calls
 `POST /api/v1/evaluations/{id}/appeals` (developer, `201` with the appeal in status `open`; `404` for a
-report no row carries; `400` for a reason that states nothing). Opening it appends one `appeals` row, one
-`appeal_opened` governance event, and the route's own audit row, in one transaction. An operator then
-calls `POST /api/v1/appeals/{id}/ruling` (operator, `200` with the appeal in its new state; `409` when it
-is already ruled — a ruling is final and either outcome a second time is a second ruling; `404`; `403`).
+report no row carries; `400` for a reason that states nothing; `403` for a developer that did not publish
+the listing version the report measures). The route resolves that ownership before it writes, with one
+read-only join from the report through its candidate version to the listing that names its developer.
+Opening the appeal appends one `appeals` row, one `appeal_opened` governance event, and the route's own
+audit row, in one transaction. An operator then calls `POST /api/v1/appeals/{id}/ruling` (operator, `200`
+with the appeal in its new state; `409` when it is already ruled — a ruling is final and either outcome a
+second time is a second ruling; `404`; `403`).
 The ruling moves the appeal's own `status` to `upheld` or `denied` and appends one `appeal_ruled` event,
 inside one transaction, and it reaches nothing else: no statement on this path names `evaluation_reports`
 or `report_case_results`, so **the appealed report and its per-case evidence stay byte-identical** and the

@@ -17,9 +17,11 @@
  * opening half of the governance record (every opening appends exactly one `appeal_opened`
  * event carrying the developer's stated ground and naming the report, and a refused opening
  * appends none), the immutability criterion's opening half (the appealed report is read and
- * never written), and the deliberate absence of an ownership lookup in this path — the last
- * of which is asserted structurally, by recording the SQL the module prepares, because the
- * absence of a read is not something a behavioural case can show.
+ * never written), and the absence of an ownership lookup in this module — the ownership
+ * decision is the write route's, which reads the developer that published the version the
+ * report measures and refuses `403`, and this module's silence about it is asserted
+ * structurally, by recording the SQL the module prepares, because the absence of a read is
+ * not something a behavioural case can show.
  */
 
 import { readdirSync, readFileSync } from "node:fs";

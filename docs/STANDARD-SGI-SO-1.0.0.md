@@ -266,8 +266,8 @@ Neither changes a measurement.
 
 - **Open an appeal.** `POST /api/v1/evaluations/{id}/appeals`, developer role, `201` with the appeal
   in status `open`. `404` when no report carries that id, `400` when the stated reason is empty or
-  nothing but whitespace, and `401`/`403` from the write header and role rules every write route
-  shares.
+  nothing but whitespace, `403` when the resolved developer did not publish the listing version the
+  report measures, and `401`/`403` from the write header and role rules every write route shares.
 - **Rule an appeal.** `POST /api/v1/appeals/{id}/ruling`, operator role, `200` with the appeal in its
   new state, `upheld` or `denied`. `409` when the appeal already carries a terminal ruling — a
   ruling being final, the same outcome a second time is as much a second ruling as the opposite one,

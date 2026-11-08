@@ -208,6 +208,18 @@ entry. Adding one is a change of five parts:
 Install at the repository root, never inside a workspace, and never hand-edit `package-lock.json`:
 the one root lockfile is what `npm ci` installs and what the dependency report is read from.
 
+The root manifest also carries an `allowScripts` block, approving the two packages whose install
+scripts a working checkout needs — `better-sqlite3`, which fetches its prebuilt binding, and
+`esbuild`, which fetches its platform binary. What that block enforces depends on the npm in use,
+and on the documented toolchain it is a record of what the build needs rather than a boundary around
+what may run: the npm bundled with the documented Node 20.20.2 release is 10.8.2, which does not
+implement the field at all, so on that toolchain every dependency's install script runs. npm 11.16
+and later read the block and warn about a dependency it does not cover, while on the npm 11 line
+that dependency's script still runs; npm 12 blocks an uncovered install script by default, and
+`--strict-allow-scripts` makes such an install fail. Read the install script a dependency declares
+before adding it, extend the block only when the build genuinely needs that script, and say why in
+the pull request.
+
 **Three classes of package may not be added at all**, whatever their licence: a payment provider's
 library, an analytics or tracking SDK, and an advertising SDK. The exclusion scan fails the build on
 any of them. A payment provider's name may not appear anywhere either — in source, configuration,

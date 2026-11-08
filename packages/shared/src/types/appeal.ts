@@ -72,11 +72,11 @@ export interface Appeal {
  * The report comes from the **path**, never from the body, so this body cannot be used
  * to appeal a report the caller did not target. The appellant's identity comes from the
  * resolved demo session rather than from any field here: a missing or unresolvable
- * `X-Demo-Account` header is `401`, a resolved account whose role is not `developer` is
- * `403`, and an unknown report is `404`. The role is the whole of the check that route
- * makes — it performs no ownership lookup, deliberately, so any developer may appeal any
- * report. The reason is required because an appeal is opened against a report *with a
- * stated reason*.
+ * `X-Demo-Account` header is `401`, a resolved account whose role is not `developer`, or
+ * a developer that did not publish the listing version the report measures, is `403`, and
+ * an unknown report is `404`. The route checks the role and then the ownership, so a
+ * developer appeals the reports of the versions it published and no others. The reason is
+ * required because an appeal is opened against a report *with a stated reason*.
  */
 export interface AppealCreateBody {
   /** The developer's stated ground for contesting the report; required. */

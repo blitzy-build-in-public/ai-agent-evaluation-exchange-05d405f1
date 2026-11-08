@@ -18,7 +18,7 @@ A change to a case set, a severity, a threshold or a rule is therefore a governa
 |---|---|---|
 | Anonymous reader | Read the standards catalogue, one published version, any report and all of `docs/` | Nothing: `GET /api/v1/standards` and `GET /api/v1/standards/{id}/versions/{v}` are public |
 | Community contributor | Submit a standards proposal; open a discussion thread; contribute code, fixture packs and evaluator checks | `X-Demo-Account` names a seeded account whose role is `contributor` |
-| Developer | Publish a listing and a version, evaluate its own version, open an appeal against a report | Header names an account whose role is `developer` |
+| Developer | Publish a listing and a version, evaluate its own version, open an appeal against a report of its own version | Header names an account whose role is `developer` |
 | Operator | Review a proposal, rule an appeal, moderate a listing, read the audit feed and the three ledgers | Header names an account whose role is `operator` |
 | Maintainer | Review a change to a CODEOWNERS-protected path and merge it | Repository review, not an API role: no header grants it |
 
@@ -93,12 +93,12 @@ The retest's own record in code is the report's `prior_report_id`, the `retest_c
 
 | Method and path | Role | Success | Error cases |
 |---|---|---|---|
-| `POST /api/v1/evaluations/{id}/appeals` | developer | `201` with the appeal in status `open` | `400` `invalid_appeal` for a blank reason, `404` `not_found` for a report no row carries, `401`, `403` for a resolvable non-developer |
+| `POST /api/v1/evaluations/{id}/appeals` | developer | `201` with the appeal in status `open` | `400` `invalid_appeal` for a blank reason, `404` `not_found` for a report no row carries, `401`, `403` for a resolvable non-developer or for a developer that did not publish the listing version the report measures |
 | `POST /api/v1/appeals/{id}/ruling` | operator | `200` with the appeal in its new state, `upheld` or `denied` | `404` `not_found`, `409` `already_ruled` when a terminal ruling exists, `401`, `403` |
 
 Both rows are owned by `apps/api/src/routes/appeals.ts`, and the ruling body's required field is named `status` — the column the ruling sets — mapping into the domain's `ruling` parameter.
 
-**Opening.** `openAppeal` in `packages/sgi-core/src/appeals/open-appeal.ts` validates the stated reason before any read, verifies the report exists with one read against `evaluation_reports` alone, then inserts one `appeals` row and appends one `appeal_opened` governance event **in one transaction**, so an appeal and the record of its opening cannot diverge. The stated ground is stored verbatim. The domain performs no ownership lookup, deliberately: resolving whether the developer owns the version the report measures would mean reading `listings` and `listing_versions`, which `apps/api` owns, and the route's role check supplies the `403`. The route appends the audit action `appeal.opened`.
+**Opening.** `openAppeal` in `packages/sgi-core/src/appeals/open-appeal.ts` validates the stated reason before any read, verifies the report exists with one read against `evaluation_reports` alone, then inserts one `appeals` row and appends one `appeal_opened` governance event **in one transaction**, so an appeal and the record of its opening cannot diverge. The stated ground is stored verbatim. The domain performs no ownership lookup: resolving whether the developer owns the version the report measures would mean reading `listings` and `listing_versions`, which `apps/api` owns, so the route makes that decision itself. It reads the report's candidate version through to the listing that names the developer that published it, and refuses `403` to a resolved developer that is not that developer, before anything is written. The route appends the audit action `appeal.opened`.
 
 **Ruling.** `ruleAppeal` in `packages/sgi-core/src/appeals/rule-appeal.ts` refuses an unknown appeal as `404` `not_found` and one that already carries a terminal ruling as `409` `already_ruled`, before anything is written — a ruling is final, and the same outcome a second time is as much a second ruling as the opposite one. It then moves the appeal's own `status` and appends **one** `appeal_ruled` event whose payload carries the outcome and the status it moved from, in one transaction. The operator's ground travels into the event only; the row keeps the developer's reason. The route appends the audit action `appeal.ruled`.
 

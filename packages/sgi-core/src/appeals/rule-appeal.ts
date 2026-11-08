@@ -20,8 +20,11 @@
  *    stored exactly as submitted. The `appeals` table is deliberately not one of the nine
  *    append-only tables and carries no `RAISE(ABORT)` trigger, which is what makes this
  *    `UPDATE` legal: `status` is the row's only mutable column.
- * 2. **One transaction, two writes.** The status change and the event that records it are
- *    wrapped together, so the row's state and the ruling's history cannot diverge.
+ * 2. **One transaction holds the read, both refusals and the two writes.** The appeal's
+ *    row is read, the checks against its stored status are made, and the status change and
+ *    the event that records it are written, all inside one transaction — so the decision
+ *    and the write that records it cannot be separated, and the row's state and the ruling's
+ *    history cannot diverge.
  * 3. **The event's type is `appeal_ruled`, and the outcome travels in its payload.** The
  *    vocabulary that governs the column is the closed tuple `GOVERNANCE_EVENT_TYPES`,
  *    declared once in `@adem/shared` and enforced by `appendEvent` before it writes; its
@@ -37,8 +40,8 @@
  * not in a join, not in a helper — and this module issues no `DELETE` and no upsert clause.
  * `INSERT OR REPLACE`, which SQLite documents as bypassing an append-only `DELETE`
  * trigger, appears nowhere in this package. The statements this module executes, in order,
- * are exactly: one `SELECT` on `appeals`; then, inside the transaction, one `UPDATE` on
- * `appeals` and one `INSERT` into `governance_events`.
+ * are exactly, all of them inside the one transaction: one `SELECT` on `appeals`, one
+ * `UPDATE` on `appeals` and one `INSERT` into `governance_events`.
  *
  * What holds the append-only rule is that no route offers the mutation; the trigger on
  * `governance_events` is defence in depth behind it and is never a security boundary, since
@@ -113,10 +116,11 @@ export class AppealNotFoundError extends Error {
  *
  * `apps/api` maps `code` to the contract's **409**. A ruling is final: the same outcome a
  * second time is as much a second ruling as the opposite outcome, so both are refused here
- * and nothing is written. The refusal is raised before the transaction opens, which is why
- * a refused call leaves the row and the log exactly as they were. The stored status is named
- * in the message because it is what makes the refusal actionable, and this module adds no
- * member to this class beyond the error machinery: a caller decides what to do from `code`.
+ * and nothing is written. The refusal is raised inside the transaction, before either write
+ * is reached, which is why a refused call leaves the row and the log exactly as they were.
+ * The stored status is named in the message because it is what makes the refusal actionable,
+ * and this module adds no member to this class beyond the error machinery: a caller decides
+ * what to do from `code`.
  */
 export class AppealAlreadyRuledError extends Error {
   /** A stable identifier for the failure, for a caller that switches on it. */
@@ -145,9 +149,12 @@ export class AppealAlreadyRuledError extends Error {
  *    column a later migration adds cannot change the shape of what is returned. No row
  *    raises {@link AppealNotFoundError}.
  * 2. **A second ruling is refused** before anything is written: a stored `status` that is
- *    not `open` raises {@link AppealAlreadyRuledError}. There is deliberately no second
- *    check inside the transaction and no `AND status = 'open'` guard on the update: the
- *    pre-check plus the synchronous single-writer design is the plan's shape, and the two
+ *    not `open` raises {@link AppealAlreadyRuledError}. That read and this refusal happen
+ *    inside the same transaction as the two writes below, so the status the refusal reads
+ *    and the status the ruling writes are one act rather than two: a ruling another writer
+ *    commits between them cannot be ruled over unnoticed — SQLite refuses this transaction's
+ *    write against a snapshot a later commit has superseded — and the rule therefore rests
+ *    on this transaction rather than on the deployment's concurrency model. The two
  *    statements below are the whole of what a ruling writes.
  * 3. **The status change and its governance event are written in one transaction**, so the
  *    row's new state and the ruling's history cannot diverge. The event's `reason` is the
@@ -157,8 +164,18 @@ export class AppealAlreadyRuledError extends Error {
  *    ruling-reason column — see the payload's `previousStatus` and `status` for the same
  *    information, recorded where a row can never be corrected.
  * 4. **The updated appeal is returned**, assembled from the row read in step 1 with `status`
- *    replaced by the ruling. Nothing is re-read: `status` is the only column written, and
- *    every other value was read before the transaction opened.
+ *    replaced by the ruling, inside the transaction that made the write. Nothing is re-read:
+ *    `status` is the only column written, and every other value is the row this transaction
+ *    itself read.
+ *
+ * The read, both refusals and both writes run inside **one** transaction, so the check that
+ * the appeal is still open and the write that rules it are one act: a refusal rolls back
+ * before either write is reached, a failure between the two writes undoes both, and a refused
+ * call leaves the row and the log exactly as it found them. Nothing is committed or rolled
+ * back by hand, and `appendEvent` joins this transaction rather than opening one of its own.
+ * Where the write route has already opened a transaction of its own — `apps/api`'s
+ * `recordAppealRuling` does — better-sqlite3 nests this one inside it as a savepoint, so the
+ * ruling and the route's audit row remain indivisible as well.
  *
  * No emptiness rule is imposed on `input.reason`. The wire body's reason is optional
  * (`AppealRulingBody` has `reason?: string`) while this parameter is required, so the route
@@ -189,29 +206,30 @@ export function ruleAppeal(
 ): Appeal {
   const { appealId, operatorAccountId, ruling, reason } = input;
 
-  const row = db
-    .prepare<[string], AppealRow>(
-      `SELECT id, report_id, developer_account_id, reason, status, created_at
-       FROM appeals
-       WHERE id = ?`,
-    )
-    .get(appealId);
+  return db.transaction((): Appeal => {
+    const row = db
+      .prepare<[string], AppealRow>(
+        `SELECT id, report_id, developer_account_id, reason, status, created_at
+         FROM appeals
+         WHERE id = ?`,
+      )
+      .get(appealId);
 
-  if (row === undefined) {
-    throw new AppealNotFoundError(appealId);
-  }
+    if (row === undefined) {
+      throw new AppealNotFoundError(appealId);
+    }
 
-  if (row.status !== "open") {
-    throw new AppealAlreadyRuledError(appealId, row.status);
-  }
+    if (row.status !== "open") {
+      throw new AppealAlreadyRuledError(appealId, row.status);
+    }
 
-  const writeRuling = db.transaction(() => {
     // The status column only: a ruling is a new decision, so the developer's reason and
     // every other column of the row are left exactly as the opener wrote them.
     db.prepare("UPDATE appeals SET status = ? WHERE id = ?").run(ruling, appealId);
 
-    // Inside the caller's transaction, which is what makes the row and its audit record
-    // indivisible: the appender joins an open transaction rather than opening its own.
+    // Inside the transaction opened above, which is what makes the decision and the row
+    // that records it indivisible: the appender joins an open transaction rather than
+    // opening one of its own.
     appendEvent(db, {
       subjectType: "appeal",
       subjectId: appealId,
@@ -220,15 +238,16 @@ export function ruleAppeal(
       reason,
       payload: { appealId, reportId: row.report_id, previousStatus: "open", status: ruling },
     });
-  });
-  writeRuling();
 
-  return {
-    id: row.id,
-    reportId: row.report_id,
-    developerAccountId: row.developer_account_id,
-    reason: row.reason,
-    status: ruling,
-    createdAt: row.created_at,
-  };
+    // Assembled from the row read above with `status` replaced by the ruling, so the
+    // developer's own ground is provably the stored one rather than anything re-read here.
+    return {
+      id: row.id,
+      reportId: row.report_id,
+      developerAccountId: row.developer_account_id,
+      reason: row.reason,
+      status: ruling,
+      createdAt: row.created_at,
+    };
+  })();
 }
