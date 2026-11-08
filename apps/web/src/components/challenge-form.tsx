@@ -42,6 +42,7 @@ import { createChallenge } from "../api-client";
 import type { Challenge } from "@adem/shared";
 import { describeRetryWait, readWriteFailure, withFullStop } from "../payload-reading";
 import type { WriteFailureFacts } from "../payload-reading";
+import { acceptedServerSentence } from "./error-notice";
 
 /**
  * Props for {@link ChallengeForm}. The listing the challenge is about is required; the callback
@@ -126,7 +127,10 @@ function missingQuestionFailure(): WriteFailureFacts {
  *
  * The sentences are this component's own rather than the service's: the service answers a
  * client error with one generic sentence, which does not tell a reader whether the question,
- * the account or the listing was the problem.
+ * the account or the listing was the problem. The one exception is a failure no status below
+ * names, and even there the service's own sentence is rendered only when it passes the
+ * acceptance decision `./error-notice` implements; otherwise this component's own sentence
+ * stands, so a refusal is explained either way.
  */
 function describeFailure(error: unknown): ChallengeFailureReading | null {
   if (error === null) {
@@ -178,13 +182,20 @@ function describeFailure(error: unknown): ChallengeFailureReading | null {
         variant: "notice--warning",
         offersBrowse: false,
       };
-    default:
+    default: {
+      // The service's own sentence only when it passes the acceptance decision `./error-notice`
+      // implements, this form's own sentence otherwise.
+      const sentence = acceptedServerSentence(failure.code, failure.message);
       return {
         questionMessage: null,
-        statusMessage: `The question was not posted. ${withFullStop(failure.message)} The text you typed has been kept.`,
+        statusMessage:
+          sentence === null
+            ? UNREADABLE_FAILURE_STATUS
+            : `The question was not posted. ${withFullStop(sentence)} The text you typed has been kept.`,
         variant: "notice--error",
         offersBrowse: false,
       };
+    }
   }
 }
 

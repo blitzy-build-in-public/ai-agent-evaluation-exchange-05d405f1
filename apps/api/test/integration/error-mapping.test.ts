@@ -1,8 +1,11 @@
 /**
  * The one error envelope's mapping of a route's failed JSON schema — the demo-session header's
  * failure answered `401 unauthorized`, and every other schema rejection answered `400
- * validation_error` — the two client errors Fastify raises for a body it will not parse, answered at
- * their own statuses rather than as server faults, and the level each failure is recorded at.
+ * validation_error` — the client errors Fastify raises for a body it will not parse, the transport
+ * pair answered at their own statuses rather than as server faults and a body the runtime's JSON
+ * parser refuses answered with the envelope's own sentence rather than the parser's, the refusal of a
+ * request that never became one answered by the transport-level handler, and the level each failure is
+ * recorded at.
  *
  * `apps/api/src/server.ts` is the composition root whose one `setErrorHandler` performs that mapping
  * in the product, and it exports the mapping as `mapFailure` and its logging policy as
@@ -24,10 +27,21 @@
  * malformed submission is `400` rather than the `500 internal_error` the mapper reserves for a code
  * it does not know, and the domain's own sentence reaches the client unchanged.
  *
- * Every request goes through `app.inject`, so no port is bound and no temporary file is written. The
- * one database this file opens is the in-memory handle the product instance is built over, opened
- * once for this file and closed with that instance.
+ * A further ground is the one no Fastify request exists for: a request the HTTP parser itself refuses
+ * — a garbage request line, a header name carrying a space or a NUL, an HTTP version the parser does
+ * not know. Those cases write their bytes over a loopback connection to the product's own instance
+ * listening on an ephemeral port, because `app.inject` speaks through an HTTP client that a malformed
+ * request cannot survive: no request object is built for it, so no route, hook or error handler is
+ * reached. What they assert is the one envelope the transport-level handler frames by hand, in place
+ * of the framework's own built-in error body.
+ *
+ * Every request whose mapping is asserted goes through `app.inject`, so no port is bound and no
+ * temporary file is written for those; the parser-refused ground above is the one that needs a real
+ * socket. The two databases this file opens are in-memory handles, one per instance, each closed with
+ * the instance it was handed to.
  */
+
+import { createConnection } from "node:net";
 
 import Database from "better-sqlite3";
 import Fastify from "fastify";
@@ -134,6 +148,40 @@ const INVALID_MEDIA_TYPE_FAILURE = {
 const BODY_LIMIT_BYTES = 1_048_576;
 
 /**
+ * The bodies the runtime's JSON parser refuses: none of them is JSON, and each differs from the others
+ * only in the text that made it unparsable. The three spellings are the reason the sentence a client
+ * reads is the envelope's own — the parser names the caller's own bytes back for one of them and only
+ * its own position for another, so the framework's message gave three malformed bodies three different
+ * sentences.
+ */
+const MALFORMED_JSON_BODIES: readonly string[] = ["<html>", '{"title": ', '{"a":1,}'];
+
+/**
+ * The address the raw-connection probes connect to: the loopback address and never the wildcard, so a
+ * probe reaches its own instance's socket and only that one.
+ */
+const LOOPBACK_HOST = "127.0.0.1";
+
+/**
+ * The requests the HTTP parser itself refuses, each named for the shape that makes it unparsable. None
+ * of them needs a header or a body to be refused: the parser never gets as far as routing the request,
+ * so what it refuses is the syntax and nothing about the destination, and the path and version are the
+ * API's own only because a probe should ask for the API it is probing.
+ */
+const PARSER_REFUSED_REQUESTS: readonly { readonly shape: string; readonly raw: string }[] = [
+  {
+    shape: "a header name carrying a space",
+    raw: `GET ${API_PREFIX}/listings HTTP/1.1\r\nHost: x\r\nBad Header: a\r\n\r\n`,
+  },
+  {
+    shape: "a header name carrying a NUL",
+    raw: `GET ${API_PREFIX}/listings HTTP/1.1\r\nHost: x\r\nBad\u0000Header: a\r\n\r\n`,
+  },
+  { shape: "a garbage request line", raw: "GARBAGE\r\n\r\n" },
+  { shape: "an impossible HTTP version", raw: `GET ${API_PREFIX}/listings HTTP/9.9\r\n\r\n` },
+];
+
+/**
  * The statuses a framework failure may carry that the closed vocabulary has no code for. Each is in
  * the client-error range and none is in `STATUS_DEFAULT_CODE`, so the mapping's documented answer — a
  * status it cannot name a code for is answered `500 internal_error` — is what these pin.
@@ -180,6 +228,22 @@ const app = Fastify();
  */
 const productDatabase = new Database(":memory:");
 const productApp = createServer({ database: productDatabase, port: 1 });
+
+/**
+ * The instance the raw-connection cases run against: the product's own instance over an in-memory
+ * handle of its own, listening on an ephemeral port for the four parser-refused shapes.
+ *
+ * It gets a handle of its own rather than sharing `productDatabase`, because a refusal that never
+ * became a request reads nothing: sharing one would couple two grounds that prove different things,
+ * and neither handle is written to by a parser refusal. The port is pinned in the configuration for
+ * the same reason as the instance above — a shell that sets `ADEM_PORT` must not change what this file
+ * proves — and the socket is bound to port 0 later, so the kernel's ephemeral port is the one used.
+ */
+const parserDatabase = new Database(":memory:");
+const parserApp = createServer({ database: parserDatabase, port: 1 });
+
+/** The port {@link parserApp} bound, read back from its own socket once it listens. */
+let parserPort = 0;
 
 /**
  * The value the mapping was handed for the most recent request, so each HTTP assertion can be
@@ -253,6 +317,44 @@ function carriedMessage(value: unknown): string {
   }
   const message: unknown = (value as { message?: unknown }).message;
   return typeof message === "string" ? message : "";
+}
+
+/**
+ * Writes one request's raw bytes over a fresh loopback connection and answers with everything the
+ * server wrote back before the connection closed.
+ *
+ * A connection rather than a request, because the refusal these cases measure happens before there is
+ * a request to make: `app.inject` and the global `fetch` both hand their request to an HTTP client
+ * whose own parser would reject or re-encode a malformed spelling, and the framework's handler for a
+ * request the parser refuses can only be reached by bytes arriving on a socket.
+ *
+ * The server answers and then destroys the connection, so a reset can arrive after the bytes this
+ * probe reads: an error once something has been received is the teardown of the connection rather than
+ * a failed probe. A connection that closes having carried nothing is refused here, because the case's
+ * assertion would otherwise report an empty answer as a missing envelope.
+ */
+function sendRawRequest(rawRequest: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: LOOPBACK_HOST, port: parserPort });
+    const chunks: Buffer[] = [];
+
+    socket.on("connect", () => socket.write(rawRequest));
+    socket.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    socket.on("error", (error: Error) => {
+      if (chunks.length === 0) {
+        reject(error);
+      }
+    });
+    socket.on("close", () => {
+      if (chunks.length === 0) {
+        reject(new Error("The connection closed before the server wrote a response."));
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+  });
 }
 
 /**
@@ -366,6 +468,19 @@ beforeAll(async () => {
   // The product instance is readied for the same reason: its routes, the rate-limit plugin and the
   // migration runner are what the two real-request probes cross.
   await productApp.ready();
+
+  // The parser-refused cases need a real socket, and a socket needs a bound port: `listen` is handed
+  // port 0 so the kernel chooses one, and the port it chose is read back from the instance's own
+  // address rather than assumed, so this file binds nothing another suite or another process holds.
+  await parserApp.listen({ port: 0, host: LOOPBACK_HOST });
+
+  const address = parserApp.server.address();
+
+  if (address === null || typeof address === "string") {
+    throw new Error("The parser-refused probe instance did not bind a loopback port.");
+  }
+
+  parserPort = address.port;
 });
 
 beforeEach(() => {
@@ -381,6 +496,10 @@ afterAll(async () => {
   // it opened itself, so this file is the one that releases this one.
   await productApp.close();
   productDatabase.close();
+
+  // The same order for the parser-refused ground, which owns a listening socket as well as a handle.
+  await parserApp.close();
+  parserDatabase.close();
 });
 
 describe("the demo header's failed validation", () => {
@@ -697,6 +816,52 @@ describe("a request the product refuses, through a real request", () => {
       CLIENT_ERROR_SENTENCE,
     );
   });
+
+  it.each(MALFORMED_JSON_BODIES)(
+    "answers a body the runtime's JSON parser refuses with the envelope's own sentence",
+    async (payload) => {
+      // No header is needed here either: the parser refuses the body before the route's own schemas,
+      // the demo header's included, are looked at. The sentence asserted is the envelope's and never
+      // the parser's, which for these three spellings names the caller's own bytes back for one body
+      // and only its own position for another — three malformed forms, one answer.
+      const response = await productApp.inject({
+        method: "POST",
+        url: `${API_PREFIX}/listings`,
+        headers: { "content-type": "application/json" },
+        payload,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expectEnvelopeFailure(JSON.parse(response.body), "validation_error", CLIENT_ERROR_SENTENCE);
+    },
+  );
+});
+
+describe("a request the HTTP parser itself refuses", () => {
+  it.each(PARSER_REFUSED_REQUESTS)(
+    "answers $shape with the one envelope at 400",
+    async ({ raw }) => {
+      const response = await sendRawRequest(raw);
+
+      // The status line is framed by the transport-level handler rather than by the framework, so it
+      // is asserted as a line: the protocol, the status the contract gives a request the API will not
+      // accept, and a reason phrase that is always present.
+      const lineEnd = response.indexOf("\r\n");
+
+      expect(lineEnd).toBeGreaterThan(0);
+      expect(response.slice(0, lineEnd)).toMatch(/^HTTP\/1\.1 400 .+$/);
+
+      // And the body is the one envelope, in place of the framework's own built-in error body.
+      const bodyStart = response.indexOf("\r\n\r\n");
+
+      expect(bodyStart).toBeGreaterThan(0);
+      expectEnvelopeFailure(
+        JSON.parse(response.slice(bodyStart + 4)),
+        "validation_error",
+        CLIENT_ERROR_SENTENCE,
+      );
+    },
+  );
 });
 
 describe("the level a failure is recorded at", () => {

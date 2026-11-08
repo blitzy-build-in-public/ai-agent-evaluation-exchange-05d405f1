@@ -44,6 +44,7 @@ import { DEMO_AUTHENTICATION_LABEL } from "@adem/shared";
 import type { StandardProposal } from "@adem/shared";
 import { submitProposal } from "../api-client";
 import { describeRetryWait, isRecord, readNumber, readText } from "../payload-reading";
+import { acceptedServerSentence } from "./error-notice";
 
 /** Props for {@link StandardsProposalForm}. */
 export interface StandardsProposalFormProps {
@@ -279,10 +280,13 @@ function explainFailure(failure: unknown): FailureExplanation | null {
     return formExplanation(UNKNOWN_STANDARD_EXPLANATION);
   }
   if (status === 400 || code === INVALID_PROPOSAL_CODE || code === VALIDATION_ERROR_CODE) {
-    // The domain's own sentence says what it refused; a body refused at the edge carries a sentence
+    // The domain's own sentence says what it refused, and it is shown only when it passes the
+    // acceptance decision `./error-notice` implements; a body refused at the edge carries a sentence
     // about a schema instead, so that one is answered in this form's terms.
     const refusal =
-      code === INVALID_PROPOSAL_CODE && message !== null ? message : REFUSED_PROPOSAL_EXPLANATION;
+      code === INVALID_PROPOSAL_CODE
+        ? acceptedServerSentence(code, message) ?? REFUSED_PROPOSAL_EXPLANATION
+        : REFUSED_PROPOSAL_EXPLANATION;
     const field = fieldNamedBy(refusal);
     if (field === "title") {
       return explanationForFields(refusal, null);

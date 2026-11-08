@@ -37,6 +37,7 @@
  * whose role does not match the row is answered `403`.
  */
 
+import { SUBSTANTIVE_FREE_TEXT_PATTERN } from '../constants';
 import { OFFER_MODELS } from '../types/commerce';
 
 /**
@@ -69,10 +70,12 @@ import { OFFER_MODELS } from '../types/commerce';
  * this module's own choice, large enough to state a buyer's question in full and
  * no larger.
  *
- * `message` also carries `pattern: '\\S'`, requiring at least one non-whitespace
- * character: JSON Schema's `pattern` is a search rather than a whole-string
- * match, so `\S` asks for substance rather than for length, and `minLength: 1`
- * alone would admit `"   "` — five characters that state nothing. A
+ * `message` also carries {@link SUBSTANTIVE_FREE_TEXT_PATTERN}, the one
+ * character rule the product's stored free text obeys, declared in
+ * `../constants` and imported here rather than respelled. Anchored, because JSON
+ * Schema's `pattern` is a search rather than a whole-string match, it asks for
+ * substance and refuses a control character other than a line feed: `minLength:
+ * 1` alone would admit `"   "` — five characters that state nothing — so a
  * whitespace-only value is refused the same way an empty one is, while
  * `"  Is this listed for a trial?  "` is accepted with its surrounding
  * whitespace left for the route to store as the buyer wrote it. The rule is the
@@ -82,11 +85,11 @@ import { OFFER_MODELS } from '../types/commerce';
  *
  * Statuses this row produces or hands on: `400` for a missing or empty
  * `listing_id` or `message`, for a `message` that carries no non-whitespace
- * character or one over its stated maximum; `404` from the route for a
- * `listing_id` that names no listing; `401` for a missing or unresolvable demo
- * header; `403` for a resolvable account whose role is not `buyer`; and success
- * is `201`, the write appending an `audit_events` row of resource type
- * `inquiry`.
+ * character or a control character other than a line feed, or one over its
+ * stated maximum; `404` from the route for a `listing_id` that names no listing;
+ * `401` for a missing or unresolvable demo header; `403` for a resolvable
+ * account whose role is not `buyer`; and success is `201`, the write appending
+ * an `audit_events` row of resource type `inquiry`.
  */
 export const inquiryCreateBodySchema = {
   body: {
@@ -94,7 +97,12 @@ export const inquiryCreateBodySchema = {
     required: ['listing_id', 'message'],
     properties: {
       listing_id: { type: 'string', minLength: 1 },
-      message: { type: 'string', minLength: 1, maxLength: 2000, pattern: '\\S' },
+      message: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 2000,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },

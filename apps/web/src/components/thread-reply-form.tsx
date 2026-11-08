@@ -14,8 +14,9 @@
  * where a successful write is announced.
  *
  * A blank or whitespace-only value is refused here without a request, and the value that is
- * sent is trimmed — the schema requires at least one character, so a whitespace-only title
- * would be accepted by the service as a thread with nothing to read.
+ * sent is trimmed, so no round trip is spent on one. The guard is not the whole rule: the schema
+ * asks for at least one non-whitespace character and refuses a control character other than a
+ * line feed, so the service refuses a whitespace-only title too.
  *
  * Presentation only. Every write goes through `../api-client`, which owns the base URL, the
  * demo-account header and the wire envelope; this file holds no URL, no header, no `fetch`, no
@@ -28,6 +29,7 @@ import { Link } from "react-router-dom";
 import { DEMO_AUTHENTICATION_LABEL, WRITE_RATE_LIMIT_MAX } from "@adem/shared";
 import type { Thread, ThreadPost } from "@adem/shared";
 import { createPost, createThread } from "../api-client";
+import { acceptedServerSentence } from "./error-notice";
 import { describeRetryWait, readWriteFailure } from "../payload-reading";
 
 /** The sentence the create form shows for a blank title, in place of a request. */
@@ -37,9 +39,10 @@ const EMPTY_TITLE_MESSAGE = "Enter a title for the thread";
 const EMPTY_REPLY_MESSAGE = "Enter a reply";
 
 /**
- * The sentence shown when the service refuses the title. The schema fixes this field to a
- * non-empty string, so a `400` here is always the missing or empty value and never a
- * rejection of what was typed.
+ * The sentence shown when the service refuses the title. The form refuses a value with no text in
+ * it before sending and sends the trimmed value, so this `400` is the schema refusing what was
+ * sent: a title over the stated maximum, or one carrying a control character other than a line
+ * feed.
  */
 const REFUSED_TITLE_MESSAGE = "The service refused the title. A thread needs a title of at least one character.";
 
@@ -148,9 +151,11 @@ function describeCreateFailure(error: unknown): WriteFailure {
     case 429:
       return regionFailure(describeRateLimit(failure.retryAfterSeconds), "notice--warning");
     default:
-      // Every other failure the client raises already carries a sentence a page may render as it
-      // stands — a transport failure, a server fault — and it carries no path, header or body.
-      return regionFailure(failure.message);
+      // Every other failure the client raises may carry a sentence of the service's own, and it is
+      // rendered only when it passes the acceptance decision `./error-notice` implements — one short
+      // line of ordinary prose free of the markers that spell a trace, and never an internal failure's.
+      // Otherwise this form's own sentence stands, so the refusal is explained either way.
+      return regionFailure(acceptedServerSentence(failure.code, failure.message) ?? UNEXPECTED_FAILURE_MESSAGE);
   }
 }
 
@@ -177,7 +182,9 @@ function describeReplyFailure(error: unknown): WriteFailure {
     case 429:
       return regionFailure(describeRateLimit(failure.retryAfterSeconds), "notice--warning");
     default:
-      return regionFailure(failure.message);
+      // As in the create form above: the service's own sentence only when it passes the acceptance
+      // decision `./error-notice` implements, this form's own sentence otherwise.
+      return regionFailure(acceptedServerSentence(failure.code, failure.message) ?? UNEXPECTED_FAILURE_MESSAGE);
   }
 }
 

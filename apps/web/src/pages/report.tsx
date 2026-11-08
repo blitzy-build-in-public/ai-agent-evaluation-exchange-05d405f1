@@ -97,7 +97,7 @@ import {
 import type { AppealRulingResult } from "../api-client";
 import { readAuditFeed } from "../audit-feed-read";
 import { EmptyState } from "../components/empty-state";
-import { ErrorNotice } from "../components/error-notice";
+import { ErrorNotice, acceptedServerSentence } from "../components/error-notice";
 import { SampleBadge } from "../components/sample-badge";
 import { findDemoAccount } from "../data/demo-accounts";
 import {
@@ -371,7 +371,9 @@ function throttledRetestSentence(retryAfterSeconds: number | null): string {
  *
  * The sentences are this form's own rather than the service's, because the status says what the
  * reader can do about the failure and the service's single sentence for a client error says only that
- * the request was not accepted.
+ * the request was not accepted. A failure no status below names renders the service's own sentence
+ * when it passes the acceptance decision `../components/error-notice` implements, and this form's own
+ * sentence otherwise.
  */
 function describeAppealFailure(error: unknown): WriteFailureReading | null {
   if (error === null) {
@@ -397,13 +399,20 @@ function describeAppealFailure(error: unknown): WriteFailureReading | null {
         variant: "notice--warning",
         offersBrowse: false,
       };
-    default:
+    default: {
+      // The service's own sentence only when it passes the acceptance decision
+      // `../components/error-notice` implements; this form's own sentence otherwise.
+      const accepted = acceptedServerSentence(failure.code, failure.message);
       return {
         kind: "explained",
-        sentence: `The appeal was not opened. ${withFullStop(failure.message)} The reason you wrote has been kept.`,
+        sentence:
+          accepted === null
+            ? UNREADABLE_APPEAL_FAILURE
+            : `The appeal was not opened. ${withFullStop(accepted)} The reason you wrote has been kept.`,
         variant: "notice--error",
         offersBrowse: false,
       };
+    }
   }
 }
 
@@ -413,7 +422,9 @@ function describeAppealFailure(error: unknown): WriteFailureReading | null {
  * An incomplete submission (`422`) is the one status that keeps the field valid: the shape was
  * accepted and a case is missing, which is not something the reader typed wrongly, so the explanation
  * is rendered by the error notice — which echoes the service's own sentence naming the cases it did
- * not receive — rather than marked beside the control.
+ * not receive — rather than marked beside the control. A failure no status below names renders the
+ * service's own sentence when it passes the acceptance decision `../components/error-notice`
+ * implements, and this form's own sentence otherwise.
  */
 function describeRetestFailure(error: unknown): WriteFailureReading | null {
   if (error === null) {
@@ -445,13 +456,20 @@ function describeRetestFailure(error: unknown): WriteFailureReading | null {
         variant: "notice--warning",
         offersBrowse: false,
       };
-    default:
+    default: {
+      // As above: the service's own sentence only when it passes the shared acceptance decision,
+      // this form's own sentence otherwise.
+      const accepted = acceptedServerSentence(failure.code, failure.message);
       return {
         kind: "explained",
-        sentence: `The evaluation was not run. ${withFullStop(failure.message)} The submission is still in the field.`,
+        sentence:
+          accepted === null
+            ? UNREADABLE_RETEST_FAILURE
+            : `The evaluation was not run. ${withFullStop(accepted)} The submission is still in the field.`,
         variant: "notice--error",
         offersBrowse: false,
       };
+    }
   }
 }
 
@@ -1220,6 +1238,8 @@ function throttledRulingSentence(retryAfterSeconds: number | null): string {
  * The sentences are this section's own rather than the service's, because the status says what the
  * operator can do about the failure — which account to switch to, whether the record has moved on —
  * while the service's single sentence for a client error says only that the request was not accepted.
+ * A failure no status below names renders the service's own sentence when it passes the acceptance
+ * decision `../components/error-notice` implements, and this section's own sentence otherwise.
  * The `409` and the `404` both re-read the audit feed where they are handled, because in both cases the
  * list on screen is out of date rather than the request being wrong.
  */
@@ -1259,13 +1279,20 @@ function describeRulingFailure(error: unknown): WriteFailureReading | null {
         variant: "notice--warning",
         offersBrowse: false,
       };
-    default:
+    default: {
+      // The service's own sentence only when it passes the acceptance decision
+      // `../components/error-notice` implements; this section's own sentence otherwise.
+      const accepted = acceptedServerSentence(failure.code, failure.message);
       return {
         kind: "explained",
-        sentence: `The ruling was not recorded. ${withFullStop(failure.message)} The ground you wrote has been kept.`,
+        sentence:
+          accepted === null
+            ? UNREADABLE_RULING_FAILURE
+            : `The ruling was not recorded. ${withFullStop(accepted)} The ground you wrote has been kept.`,
         variant: "notice--error",
         offersBrowse: false,
       };
+    }
   }
 }
 

@@ -131,7 +131,6 @@ export interface SponsoredSlot {
  * `apps/web/src/components/sponsored-label.tsx` on every sponsored item.
  */
 export interface SponsoredSlotListItem extends SponsoredSlot {
-  /** Always the literal `true`: an unmarked sponsored item cannot be typed. */
   sponsored: true;
 }
 
@@ -152,10 +151,9 @@ export interface SponsoredSlotListItem extends SponsoredSlot {
  */
 export interface SponsoredSlotListResult {
   /**
-   * The sponsored items the read answers with, one entry per slot it carries. There is
-   * no paging and no cursor, so a surface renders the whole array rather than a first
-   * page of it, and an empty array is a complete answer: the pages that render this
-   * block render nothing when it is empty rather than an empty frame.
+   * The sponsored items the read answers with, one entry per slot it carries: an empty array is a
+   * complete answer, so the pages that render this block render nothing when it is empty rather
+   * than an empty frame.
    */
   items: SponsoredSlotListItem[];
 }

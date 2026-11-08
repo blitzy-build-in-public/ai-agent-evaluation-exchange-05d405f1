@@ -16,6 +16,9 @@
  * themselves. This module still declares no query schema for them, and that is
  * deliberate: its six exports are the boards' write contracts, so a second
  * schema for those two reads would be a second statement of one paging contract.
+ * The four write bodies below carry the one character rule the product's stored
+ * free text obeys, declared in `../constants` and imported here rather than
+ * respelled, so no board can drift into a rule of its own.
  *
  * Nothing in this module holds a closed vocabulary: a challenge's status, a
  * row's author and every timestamp are server-owned columns, so no enum and no
@@ -24,6 +27,8 @@
  * `../types/challenge.ts` and `../types/thread.ts` describe the accepted bodies;
  * they are named here rather than imported because this module is data only.
  */
+
+import { SUBSTANTIVE_FREE_TEXT_PATTERN } from '../constants';
 
 /**
  * Body contract for `POST /challenges` (buyer).
@@ -40,9 +45,11 @@
  * left believing one was accepted.
  *
  * Validation produces `400` for a missing or empty `listing_id` or `question`,
- * or a `question` over its stated maximum; the route's own checks produce `404`
- * for an unknown listing, `401` for a missing or unresolvable demo header, and
- * `403` for a resolvable account whose role is not `buyer`.
+ * or a `question` over its stated maximum, or a `question` that carries no
+ * non-whitespace character or a control character other than a line feed; the
+ * route's own checks produce `404` for an unknown listing, `401` for a missing or
+ * unresolvable demo header, and `403` for a resolvable account whose role is not
+ * `buyer`.
  *
  * `question` carries a stated `maxLength` of 1000. A challenge is read by every
  * visitor who opens the board it belongs to, so a field with no ceiling lets one
@@ -55,7 +62,12 @@ export const challengeCreateBodySchema = {
     required: ['listing_id', 'question'],
     properties: {
       listing_id: { type: 'string', minLength: 1 },
-      question: { type: 'string', minLength: 1, maxLength: 1000 },
+      question: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 1000,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },
@@ -92,9 +104,10 @@ export const challengeIdParamsSchema = {
  * A route attaches this schema beside `challengeIdParamsSchema`
  * (`{ ...challengeIdParamsSchema, ...challengeResponseBodySchema }`).
  * Validation produces `400` for a missing or empty `body`, or a `body` over its
- * stated maximum; the route's own checks produce `404` for an unknown challenge
- * id, `401` for a missing or unresolvable demo header, and `403` for a role the
- * row does not accept.
+ * stated maximum, or a `body` that carries no non-whitespace character or a
+ * control character other than a line feed; the route's own checks produce
+ * `404` for an unknown challenge id, `401` for a missing or unresolvable demo
+ * header, and `403` for a role the row does not accept.
  *
  * `body` carries a stated `maxLength` of 4000. A response is served beside its
  * challenge by the board read, which is public, so a field with no ceiling lets
@@ -106,7 +119,12 @@ export const challengeResponseBodySchema = {
     type: 'object',
     required: ['body'],
     properties: {
-      body: { type: 'string', minLength: 1, maxLength: 4000 },
+      body: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 4000,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },
@@ -122,8 +140,9 @@ export const challengeResponseBodySchema = {
  * is refused with `400 validation_error` before the handler runs.
  *
  * Validation produces `400` for a missing or empty `title`, or a `title` over
- * its stated maximum; the route's own checks produce `401` for a missing or
- * unresolvable demo header.
+ * its stated maximum, or a `title` that carries no non-whitespace character or a
+ * control character other than a line feed; the route's own checks produce `401`
+ * for a missing or unresolvable demo header.
  *
  * `title` carries a stated `maxLength` of 200. Every read of the board serves
  * the title of each thread it lists, so a field with no ceiling lets one client
@@ -135,7 +154,12 @@ export const threadCreateBodySchema = {
     type: 'object',
     required: ['title'],
     properties: {
-      title: { type: 'string', minLength: 1, maxLength: 200 },
+      title: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 200,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },
@@ -170,9 +194,10 @@ export const threadIdParamsSchema = {
  *
  * A route attaches this schema beside `threadIdParamsSchema`
  * (`{ ...threadIdParamsSchema, ...threadPostBodySchema }`). Validation produces
- * `400` for a missing or empty `body`, or a `body` over its stated maximum; the
- * route's own checks produce `404` for an unknown thread id and `401` for a
- * missing or unresolvable demo header.
+ * `400` for a missing or empty `body`, or a `body` over its stated maximum, or a
+ * `body` that carries no non-whitespace character or a control character other
+ * than a line feed; the route's own checks produce `404` for an unknown thread id
+ * and `401` for a missing or unresolvable demo header.
  *
  * `body` carries a stated `maxLength` of 4000. A post is served beside its
  * thread by the board read, which is public, so a field with no ceiling lets one
@@ -184,7 +209,12 @@ export const threadPostBodySchema = {
     type: 'object',
     required: ['body'],
     properties: {
-      body: { type: 'string', minLength: 1, maxLength: 4000 },
+      body: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 4000,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },

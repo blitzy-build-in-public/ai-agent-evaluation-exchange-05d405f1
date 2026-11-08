@@ -4,9 +4,10 @@
  * `POST /standards/proposals` and `POST /standards/proposals/{id}/review`.
  *
  * Two placements are deliberate, and both follow the plan's file map rather than
- * a local choice. The proposal and review bodies live in *this* module instead
- * of a seventh schema module, because `packages/shared/src/schemas` holds exactly
- * six schema modules and that count is part of the plan's contract.
+ * a local choice. The proposal and review bodies live in *this* module instead of
+ * in a schema module of their own, because the map carries no separate schema
+ * module for the standards proposal row: a module for them would be a path the
+ * map does not name, so their contracts sit with the moderation action's.
  * `MODERATION_ACTIONS` is declared here rather than under `../types`, because the
  * map carries no `types/moderation.ts`; the module therefore exports a runtime
  * value, which `packages/shared/src/index.ts` re-exports with `export *`, so the
@@ -42,6 +43,7 @@
  * and it can never rewrite a measurement.
  */
 
+import { FREE_TEXT_PATTERN } from '../constants';
 import { PROPOSAL_REVIEW_STATUSES } from '../types/standard';
 
 /**
@@ -106,6 +108,17 @@ export type ModerationAction = (typeof MODERATION_ACTIONS)[number];
  * client inflate every payload that reads the trail. The number is this module's
  * own choice, large enough to state a reason in full and no larger.
  *
+ * `reason` carries {@link FREE_TEXT_PATTERN} as well, the one character rule the
+ * product's stored free text obeys, declared in `../constants` and imported here
+ * rather than respelled: a value may carry no C0 control character other than the
+ * line feed and no DEL, because those are invisible or device control in the
+ * sentence the appended event, the audit feed and the listing's moderation history
+ * all read back. It is deliberately the **character rule alone**, the empty value
+ * included: blankness is judged one layer in, where the moderation route refuses a
+ * reason that is empty or nothing but whitespace with the `400` it answers today
+ * (`apps/api/src/routes/moderation.ts`), so a pattern that refused a blank value
+ * as well would leave that refusal unreachable rather than add one.
+ *
  * The listing acted on comes from the path, through
  * {@link moderationListingIdParamsSchema}, and never from the body; a route
  * spreads the two together:
@@ -120,9 +133,10 @@ export type ModerationAction = (typeof MODERATION_ACTIONS)[number];
  * `created_at` or `actor_account_id` is refused the same way.
  *
  * Statuses this row produces: `400` for a missing or empty `action` or `reason`,
- * or a `reason` over its stated maximum, `404` for a listing id no listing
- * carries, `401` for a missing or unresolvable demo header, and `403` for a
- * resolvable account whose role is not `operator`.
+ * a `reason` over its stated maximum or one carrying a control character other
+ * than a line feed, `404` for a listing id no listing carries, `401` for a missing
+ * or unresolvable demo header, and `403` for a resolvable account whose role is not
+ * `operator`.
  * Success is `200`, carrying the listing's new status beside the governance event
  * the route appended — the event type `listing_moderated` against subject type
  * `listing`, both drawn from the closed vocabularies in
@@ -136,7 +150,12 @@ export const moderationActionBodySchema = {
     required: ['action', 'reason'],
     properties: {
       action: { type: 'string', enum: MODERATION_ACTIONS },
-      reason: { type: 'string', minLength: 1, maxLength: 1000 },
+      reason: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 1000,
+        pattern: FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },
@@ -190,8 +209,9 @@ export const moderationListingIdParamsSchema = {
  * proposal is a new proposal rather than an edit to this one.
  *
  * Statuses this row produces: `400` for a missing or empty `standard_id`, `title`
- * or `rationale`, or for a `title` or `rationale` over its stated maximum; `401`
- * for a missing or unresolvable demo header; `403` for a resolvable account whose
+ * or `rationale`, for a `title` or `rationale` over its stated maximum or carrying
+ * a control character other than a line feed; `401` for a missing or unresolvable
+ * demo header; `403` for a resolvable account whose
  * role is not `contributor`; and `404` when `standard_id` names no standard in the
  * catalogue. Success is `201` with the created proposal in status `submitted`.
  *
@@ -200,6 +220,18 @@ export const moderationListingIdParamsSchema = {
  * that lists it, so a field with no ceiling lets one client inflate every
  * payload that carries the proposal. The numbers are this module's own choice,
  * large enough for a proposal's heading and its full reasoning.
+ *
+ * Both fields carry {@link FREE_TEXT_PATTERN} too, the one character rule the
+ * product's stored free text obeys, declared in `../constants` and imported here
+ * rather than respelled: neither value may carry a C0 control character other
+ * than the line feed, and neither may carry a DEL, so the heading and the
+ * reasoning that trail and page read back are sentences. The rule is deliberately
+ * the **character rule alone**, the empty value included: blankness is judged one
+ * layer in, where `submitProposal` in
+ * `packages/sgi-core/src/proposals/submit-proposal.ts` refuses a title or a
+ * rationale that is empty or nothing but whitespace with the `400` it answers
+ * today, so a pattern that refused a blank value as well would leave that refusal
+ * unreachable rather than add one.
  */
 export const standardProposalCreateBodySchema = {
   body: {
@@ -207,8 +239,18 @@ export const standardProposalCreateBodySchema = {
     required: ['standard_id', 'title', 'rationale'],
     properties: {
       standard_id: { type: 'string', minLength: 1 },
-      title: { type: 'string', minLength: 1, maxLength: 200 },
-      rationale: { type: 'string', minLength: 1, maxLength: 4000 },
+      title: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 200,
+        pattern: FREE_TEXT_PATTERN,
+      },
+      rationale: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 4000,
+        pattern: FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },
@@ -260,6 +302,16 @@ export const standardProposalIdParamsSchema = {
  * number is this module's own choice, large enough to state a decision's
  * reasoning in full and no larger.
  *
+ * `reason` carries {@link FREE_TEXT_PATTERN} as well, the one character rule the
+ * product's stored free text obeys, declared in `../constants`: a value may carry
+ * no C0 control character other than the line feed and no DEL, since the reason
+ * travels as written into the payload of the event the review appends. The rule is
+ * the **character rule alone**, the empty value included, because blankness is not
+ * this field's to judge: `reason` is optional, and `reviewProposal` in
+ * `packages/sgi-core/src/proposals/review-proposal.ts` imposes no emptiness rule on
+ * the reason it is handed, so a pattern that refused a blank value as well would
+ * refuse a body those layers accept today.
+ *
  * The review appends a governance event with `event_type` `proposal_reviewed` and
  * `subject_type` `standard_proposal`, and it **never rewrites the proposal's
  * text**: `title` and `rationale` are immutable after creation. It follows that
@@ -271,9 +323,10 @@ export const standardProposalIdParamsSchema = {
  * A route attaches it beside {@link standardProposalIdParamsSchema}
  * (`{ ...standardProposalIdParamsSchema, ...standardProposalReviewBodySchema }`).
  * Statuses this row produces: `400` for a missing `status` or a `status` outside
- * the review vocabulary, or for a `reason` over its stated maximum, `404` for an
- * unknown proposal id, `401` for a missing or unresolvable demo header, `403` for
- * a resolvable account whose role is not `operator`, and `409` when the proposal
+ * the review vocabulary, or for a `reason` over its stated maximum or one carrying
+ * a control character other than a line feed, `404` for an unknown proposal id,
+ * `401` for a missing or unresolvable demo header, `403` for a resolvable account
+ * whose role is not `operator`, and `409` when the proposal
  * already holds `accepted` or `rejected`.
  * Success is `200`, carrying the proposal in its new status beside the appended
  * event.
@@ -284,7 +337,11 @@ export const standardProposalReviewBodySchema = {
     required: ['status'],
     properties: {
       status: { type: 'string', enum: PROPOSAL_REVIEW_STATUSES },
-      reason: { type: 'string', maxLength: 1000 },
+      reason: {
+        type: 'string',
+        maxLength: 1000,
+        pattern: FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },

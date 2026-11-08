@@ -1,8 +1,9 @@
 /**
- * The product's closed vocabulary and the numbers its API contract fixes, each
- * defined once. Every value here is a fixed interface: the label and copy strings
- * are asserted in rendered text, and the paging and rate-limit numbers are read by
- * the API and by its documented contract from this one definition.
+ * The product's closed vocabulary, the numbers its API contract fixes and the one
+ * character rule its stored free text obeys, each defined once. Every value here is a
+ * fixed interface: the label and copy strings are asserted in rendered text, and the
+ * paging and rate-limit numbers are read by the API and by its documented contract
+ * from this one definition.
  */
 
 /**
@@ -132,3 +133,36 @@ export const WRITE_RATE_LIMIT_MAX = 60;
  * `timeWindow` beside {@link WRITE_RATE_LIMIT_MAX}.
  */
 export const WRITE_RATE_LIMIT_WINDOW = "1 minute";
+
+/**
+ * The characters a stored free-text value may not carry, as the body of a regular-expression
+ * character class: every C0 control character except the line feed, and DEL.
+ *
+ * The line feed is kept because the text surfaces here hold the line breaks their author typed and
+ * render them, so a value may span lines. Every other control character is invisible or device
+ * control in a field a reader reads, which is the same notion of a control character
+ * apps/api/src/errors/error-envelope.ts applies to an error sentence.
+ */
+const FORBIDDEN_TEXT_CHARACTERS = "\\u0000-\\u0009\\u000b-\\u001f\\u007f";
+
+/** The character class of every character a stored free-text value may carry. */
+const FREE_TEXT_CHARACTER = `[^${FORBIDDEN_TEXT_CHARACTERS}]`;
+
+/**
+ * The `pattern` of a free-text field whose content is judged for its characters alone: every
+ * character is allowed, the empty value included, so this pattern is only for a field whose
+ * blankness another layer already judges.
+ */
+export const FREE_TEXT_PATTERN = `^${FREE_TEXT_CHARACTER}*$`;
+
+/**
+ * The `pattern` of a free-text field that must carry substance: every character allowed except a
+ * control character other than a line feed, and at least one non-whitespace character. `minLength`
+ * cannot state the second half — it counts characters, so it admits a value made only of
+ * whitespace, which would render as a heading with no text and as a link with no accessible name.
+ *
+ * The substance character is written `[^\s\u0000-\u001f\u007f]` and not `\S`: `\S` matches a NUL,
+ * so a value made of a control character would satisfy it. Both patterns are anchored because JSON
+ * Schema searches for a match rather than matching the whole value.
+ */
+export const SUBSTANTIVE_FREE_TEXT_PATTERN = `^${FREE_TEXT_CHARACTER}*[^\\s\\u0000-\\u001f\\u007f]${FREE_TEXT_CHARACTER}*$`;

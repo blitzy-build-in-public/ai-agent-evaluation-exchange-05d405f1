@@ -208,12 +208,17 @@ const LEDGER_PATH_SEGMENTS: Readonly<Record<LedgerName, string>> = Object.freeze
 
 /**
  * The one failure this module raises: the status the request was answered with, the stable
- * code the API's envelope carries, a sentence a page can render as it stands, and — on a
- * throttled write — how many whole seconds to wait.
+ * code the API's envelope carries, the sentence the failure carries, and — on a throttled
+ * write — how many whole seconds to wait.
  *
- * A page renders `message` and branches on `code` or `status` where it must; it never
- * inspects a response, a body or a URL, because none of those reaches it. `status` is `0`
- * only for {@link TRANSPORT_ERROR_CODE}, where no response was received at all, and
+ * The sentence is the envelope's whenever a response stated one and this module's own when
+ * none arrived, so a page renders `message` as it stands only when the acceptance decision
+ * `acceptedServerSentence` in `./components/error-notice` accepts it — one short line of
+ * ordinary prose free of the markers that spell a trace, and never for the code
+ * `internal_error`. A page renders its own sentence whenever the decision refuses that one, so
+ * every refusal is explained either way. A page branches on `code` or `status` where it must
+ * and never inspects a response, a body or a URL, because none of those reaches it. `status`
+ * is `0` only for {@link TRANSPORT_ERROR_CODE}, where no response was received at all, and
  * `retryAfterSeconds` is non-null only when the response carried a numeric `Retry-After`,
  * which the write rate limit does.
  *

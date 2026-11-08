@@ -104,7 +104,6 @@ export interface Transaction {
   amount_minor_units: MinorUnits;
   /** Literal type of the synthetic currency label declared in `../constants`. */
   currency_label: typeof SYNTHETIC_CURRENCY_LABEL;
-  /** Always the literal `true`: a transaction that is not simulated cannot be typed. */
   simulated: true;
   /** The nonfunctional demo label rendered with every simulated amount. */
   disclosure_label: string;

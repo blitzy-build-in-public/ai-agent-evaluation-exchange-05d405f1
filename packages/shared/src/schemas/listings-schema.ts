@@ -35,6 +35,10 @@
  */
 
 import {
+  FREE_TEXT_PATTERN,
+  SUBSTANTIVE_FREE_TEXT_PATTERN,
+} from '../constants';
+import {
   COMPARE_MAX_IDS,
   COMPARE_MIN_IDS,
   DEFAULT_LISTING_SORT,
@@ -174,16 +178,16 @@ export const listingIdParamsSchema = {
  *
  * Statuses this row produces or hands on: `400` for a missing or empty `title`,
  * `summary`, `category_id` or `license_code`, for a `title`, `summary` or
- * `license_code` that carries no non-whitespace character, for a bounded text
- * field over its stated maximum, or for a `pricing_model` outside
- * {@link PRICING_MODELS} — and for a declared field carrying a value of another
- * JSON type, or for a field this object does not declare, refused by the
- * request-body policy before the handler runs; `401` for a missing or
- * unresolvable demo header; and `403` for a resolvable account whose role is not
- * `developer`. Success is `201` with the created listing. Whether `category_id`
- * names a category that exists is decided
- * elsewhere: this schema constrains the field's shape, and the reference is held
- * by the foreign key to `categories.id` in
+ * `license_code` that carries no non-whitespace character or a control character
+ * other than a line feed, for a bounded text field over its stated maximum, or
+ * for a `pricing_model` outside {@link PRICING_MODELS} — and for a declared
+ * field carrying a value of another JSON type, or for a field this object does
+ * not declare, refused by the request-body policy before the handler runs; `401`
+ * for a missing or unresolvable demo header; and `403` for a resolvable account
+ * whose role is not `developer`. Success is `201` with the created listing.
+ * Whether `category_id` names a category that exists is decided elsewhere: this
+ * schema constrains the field's shape, and the reference is held by the foreign
+ * key to `categories.id` in
  * `packages/shared/migrations/0002_listings_and_versions.sql`, checked by the
  * route against the catalogue rather than restated as a list of ids here.
  *
@@ -193,18 +197,23 @@ export const listingIdParamsSchema = {
  * empty string: `title: ""` is a validation failure rather than a listing with a
  * blank heading.
  *
- * The three text fields carry `pattern: '\\S'` as well, because a length is not
- * the whole of what makes a value usable. JSON Schema's `pattern` is a search
- * rather than a whole-string match, so `\S` requires **at least one
- * non-whitespace character**: `title: "   "` — which `minLength: 1` admits,
- * counting five characters — is refused exactly as `title: ""` is, while
- * `title: "  Depot notes  "` is accepted with its surrounding whitespace left
- * for the route to store as the developer wrote it. The rule is load-bearing
- * for a listing's title, because that string is what a reader encounters as
- * text: the detail page renders it as the heading, the results card as its link
- * text and the compare control as part of its accessible name, so a
- * whitespace-only one produces a page with no heading and a link and a button
- * with no name for assistive technology rather than a merely odd label.
+ * The three text fields carry {@link SUBSTANTIVE_FREE_TEXT_PATTERN} as well,
+ * because a length is not the whole of what makes a value usable. The pattern is
+ * the one character rule the product's stored free text obeys, declared once in
+ * `../constants`: anchored, because JSON Schema's `pattern` is a search rather
+ * than a whole-string match, it requires **at least one non-whitespace
+ * character** and refuses every control character other than the line feed,
+ * which a value keeps because the surfaces here render the line breaks its
+ * author typed. `title: "   "` — which `minLength: 1` admits, counting five
+ * characters — is refused exactly as `title: ""` is, and a value carrying a NUL
+ * is refused with it, while `title: "  Depot notes  "` is accepted with its
+ * surrounding whitespace left for the route to store as the developer wrote it.
+ * The rule is load-bearing for a listing's title, because that string is what a
+ * reader encounters as text: the detail page renders it as the heading, the
+ * results card as its link text and the compare control as part of its
+ * accessible name, so a whitespace-only one produces a page with no heading and
+ * a link and a button with no name for assistive technology rather than a merely
+ * odd label.
  *
  * The three free-text fields also carry a stated `maxLength` — `title` 200,
  * `summary` 2000 and `license_code` 64 — because a stored value is carried by
@@ -215,9 +224,10 @@ export const listingIdParamsSchema = {
  * other three numbers are this module's own choice, large enough for the content
  * of that kind.
  *
- * The one content rule imposed on a listing's text is therefore the
- * non-whitespace pattern stated above: substance, and not only length, decides
- * whether a value is accepted. No second rule belongs there — `license_code` is
+ * The one content rule imposed on a listing's text is therefore the shared
+ * pattern stated above, both halves of it: substance, and not only length,
+ * decides whether a value is accepted, and a control character other than a line
+ * feed keeps a value out. No second rule belongs there — `license_code` is
  * free text because the exchange publishes no licence catalogue, `summary` is
  * the developer's own words, and a vocabulary or format invented here would
  * refuse content this contract says the exchange accepts.
@@ -227,10 +237,25 @@ export const listingCreateBodySchema = {
     type: 'object',
     required: ['title', 'summary', 'category_id', 'license_code', 'pricing_model'],
     properties: {
-      title: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' },
-      summary: { type: 'string', minLength: 1, maxLength: 2000, pattern: '\\S' },
+      title: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 200,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
+      summary: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 2000,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
       category_id: { type: 'string', minLength: 1 },
-      license_code: { type: 'string', minLength: 1, maxLength: 64, pattern: '\\S' },
+      license_code: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 64,
+        pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
+      },
       pricing_model: { type: 'string', enum: PRICING_MODELS },
     },
     additionalProperties: false,
@@ -250,11 +275,16 @@ export const listingCreateBodySchema = {
  * `undefined` and cannot write a `null` the row would refuse.
  *
  * `notes` carries a stated `maxLength` of 2000, as every free-text field in this
- * folder now does: the notes are served with the version history on every read
- * of the listing, so a field with no ceiling lets one client inflate every
- * payload that carries the version. The number is this module's own choice,
- * large enough for the content of that kind — the notes for one version — and no
- * larger.
+ * folder does: the notes are served with the version history on every read of
+ * the listing, so a field with no ceiling lets one client inflate every payload
+ * that carries the version. The number is this module's own choice, large enough
+ * for the content of that kind — the notes for one version — and no larger.
+ *
+ * `notes` carries the shared character rule too, {@link FREE_TEXT_PATTERN}: a
+ * version with nothing to say beyond its own label is an ordinary state, so the
+ * field is judged for its characters alone — a blank note and the line breaks
+ * its author typed are both stored as written, while a note carrying a control
+ * character other than a line feed is refused.
  *
  * **The unique `(listing_id, version_string)` pair is the contract's `409`, and
  * the pattern below MUST NOT be grown into a uniqueness rule.** Only the stored
@@ -268,10 +298,11 @@ export const listingCreateBodySchema = {
  *
  * Statuses this row produces or hands on: `400` for a missing or empty
  * `version_string`, for one the pattern or `maxLength` rejects, or for a `notes`
- * over its stated maximum; `404` for a listing id no listing carries; `409` for
- * a version string this listing has already published; `401` for a missing or
- * unresolvable demo header; and `403` for a resolvable developer account that
- * does not own the listing.
+ * over its stated maximum or carrying a control character other than a line
+ * feed; `404` for a listing id no listing carries; `409` for a version string
+ * this listing has already published; `401` for a missing or unresolvable demo
+ * header; and `403` for a resolvable developer account that does not own the
+ * listing.
  *
  * A version is append-only by route design: no route updates or deletes one, so
  * a correction is a new version and an evaluation always names the version that
@@ -288,7 +319,7 @@ export const listingVersionCreateBodySchema = {
         maxLength: 32,
         pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]*$',
       },
-      notes: { type: 'string', maxLength: 2000 },
+      notes: { type: 'string', maxLength: 2000, pattern: FREE_TEXT_PATTERN },
     },
     additionalProperties: false,
   },

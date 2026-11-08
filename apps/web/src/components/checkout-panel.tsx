@@ -46,6 +46,7 @@ import { createCheckoutSimulation } from "../api-client";
 import { readWriteFailure } from "../payload-reading";
 import type { WriteFailureFacts } from "../payload-reading";
 import { offerModelsForVersion } from "../listing-offers";
+import { acceptedServerSentence } from "./error-notice";
 import { SYNTHETIC_CURRENCY_LABEL } from "@adem/shared";
 import type { ListingClaim, OfferModel, PricingModel, Transaction } from "@adem/shared";
 
@@ -134,9 +135,9 @@ function describeNextStep(facts: WriteFailureFacts): string {
 }
 
 /**
- * The explanation a reader sees for a failed checkout: the sentence the service sent, followed
- * by the next step for its status. A thrown value that carries no status — or none at all — is
- * still explained rather than rendered as it stands.
+ * The explanation a reader sees for a failed checkout: the sentence the service sent, when the
+ * workspace may render it, followed by the next step for its status. A thrown value that carries no
+ * status — or none at all — is still explained rather than rendered as it stands.
  */
 function describeFailure(error: unknown): string {
   const facts = readWriteFailure(error);
@@ -147,9 +148,10 @@ function describeFailure(error: unknown): string {
 
   const nextStep = describeNextStep(facts);
 
-  // A failure is read only when its sentence is non-blank, so the next step alone below stands for
-  // facts a caller hands in by other means.
-  return facts.message === "" ? nextStep : `${facts.message} ${nextStep}`;
+  // The service's sentence is rendered only when it passes the acceptance decision `./error-notice`
+  // implements; otherwise the next step stands alone, so the refusal is explained either way.
+  const sentence = acceptedServerSentence(facts.code, facts.message);
+  return sentence === null ? nextStep : `${sentence} ${nextStep}`;
 }
 
 /**

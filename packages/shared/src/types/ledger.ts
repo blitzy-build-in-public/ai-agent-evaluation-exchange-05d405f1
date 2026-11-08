@@ -187,10 +187,6 @@ export interface LedgerReadResult {
  * produced it; the rows themselves stay the record of what was actually computed.
  */
 export interface FounderAllocationLedgerReadResult extends LedgerReadResult {
-  /**
-   * The rate the entries of the page this response carries state they were computed from, in whole
-   * basis points: the rate the most recent of them that states one carries in its own `description`,
-   * or `DEFAULT_FOUNDER_ALLOCATION_RATE_BASIS_POINTS` when the page holds no entry that states one.
-   */
+  /** The rate those entries were computed from, in whole basis points. */
   rate_basis_points: number;
 }

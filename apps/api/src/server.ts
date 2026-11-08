@@ -4,9 +4,10 @@
  * `createApp` wires, in one order, what no other module of this workspace owns: the resolved
  * configuration and the database connection, the migration runner's precondition, the write rate
  * limit, the fourteen route groups under the versioned prefix, the built web application's static
- * handler, and the two handlers that give every failure one shape. It holds no business rule — no
- * matched count, outcome, label, allocation, gate fee or reversal is computed here — and the domain
- * packages are reached only indirectly, through the route groups.
+ * handler, and the handlers that give every failure one shape, a request the HTTP parser refuses
+ * included. It holds no business rule — no matched count, outcome, label, allocation, gate fee or
+ * reversal is computed here — and the domain packages are reached only indirectly, through the route
+ * groups.
  *
  * **Registration order.**
  *
@@ -49,7 +50,8 @@
  *    package's refusal and a server fault all leave by it, so no handler writes an error body of its
  *    own and no client parses a second shape. It records a refused request at warning level, with the
  *    method, the path, the status and the code, and a server fault at error level with the cause
- *    itself; a request body, the demo header's value and the envelope's sentence are never recorded.
+ *    itself; a request body, the query string, the demo header's value and the envelope's sentence are
+ *    never recorded — the query string is where a client's own free text travels.
  * 8. The single not-found handler answers an `/api/` path, and a request for something that looks
  *    like a static file, with the envelope and status `404`; it answers every other path with the SPA
  *    entry, read from disk as it answers, and status `200`, which is what lets `/listings`,
@@ -60,6 +62,16 @@
  *    same `404`, and no `PUT`, `PATCH` or `DELETE` handler exists anywhere in this workspace, so an
  *    update or a delete of an append-only record is unreachable by construction rather than by a
  *    check.
+ * 9. A request the HTTP parser itself refuses — a garbage request line, a header name carrying a
+ *    space or a NUL, an HTTP version the parser does not know — is answered with that same envelope,
+ *    by the handler handed to the instance at step 2. Such a request never becomes a Fastify request:
+ *    the runtime raises it on the connection before any route, hook or handler is reached, and
+ *    Fastify's own default would answer a body of a shape this API does not use, with `error` a bare
+ *    string and no code of the closed vocabulary. Every parser refusal is answered `400
+ *    validation_error`, the code and status the contract gives a request it will not accept, rather
+ *    than at a status the framework's own separate timeout and header-overflow branches choose —
+ *    neither of which the contract defines a code for. A connection that was reset, and a socket
+ *    already destroyed, have nowhere to answer and are left alone.
  *
  * **What this module deliberately does not do.** It does not listen: `apps/api/src/index.ts` is the
  * workspace's only public entry and the only place a `main`-style start-up lives, so that
@@ -70,12 +82,14 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { STATUS_CODES } from "node:http";
+import type { Socket } from "node:net";
 import { join } from "node:path";
 
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { ConnectionError, FastifyInstance, FastifyReply } from "fastify";
 import type { Database } from "better-sqlite3";
 
 import type { ApiConfig, ApiConfigOverrides } from "./config";
@@ -213,7 +227,13 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
   const ownsConnection = options.database === undefined;
   const database = options.database ?? openDatabase(config.databasePath);
 
-  const instance = Fastify({ logger: { level: "info" } });
+  // The parser's own refusals are answered beside the error handler below, at the only place Fastify
+  // accepts the handler for them: a request the parser refuses never becomes a request object, so the
+  // error handler cannot be reached for it. See {@link answerParserRefusal}.
+  const instance = Fastify({
+    logger: { level: "info" },
+    clientErrorHandler: answerParserRefusal,
+  });
 
   // Registered before the work that can fail, so a handle this module opened is closed even when a
   // later registration throws: the caller closes the instance, and the instance closes the handle.
@@ -280,11 +300,15 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
     } else {
       // A refused request is recorded at warning level with the facts an operator needs to diagnose
       // it, so a client-caused failure is distinguishable from routine traffic by level alone. The
-      // body, the demo header's value and the envelope's own sentence are never recorded.
+      // body, the demo header's value and the envelope's own sentence are never recorded, and neither
+      // is the query string: a client's search phrase travels there — `GET /listings?q=…` is how this
+      // API is searched — and a process-local diagnostic log is not a place for a caller's own text.
+      // The record carries the path rather than the whole target, so the field holds what its name
+      // says.
       request.log.warn(
         {
           method: request.method,
-          url: request.url,
+          path: pathnameOf(request.url),
           statusCode: apiError.status,
           code: apiError.code,
         },
@@ -310,10 +334,14 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
       const notFound = ApiError.notFound();
 
       if (isApiPath(path)) {
+        // The record carries the path resolved above rather than the request's whole target, and it is
+        // never given the query string: a client's search phrase travels there — `GET /listings?q=…`
+        // is how this API is searched — and a process-local diagnostic log is not a place for a
+        // caller's own text.
         request.log.warn(
           {
             method: request.method,
-            url: request.url,
+            path,
             statusCode: notFound.status,
             code: notFound.code,
           },
@@ -371,6 +399,74 @@ export function createApp(options: CreateServerOptions = {}): FastifyInstance {
  */
 export function failureLogLevel(status: number): "warn" | "error" {
   return status >= 500 ? "error" : "warn";
+}
+
+/**
+ * Answers a request the HTTP parser itself refuses — a garbage request line, a header name carrying a
+ * space or a NUL, an HTTP version the parser does not know — with the API's one envelope.
+ *
+ * Such a request never becomes a Fastify request: the runtime raises it on the connection before any
+ * route, hook or handler is reached, so the error handler cannot shape its answer, and Fastify's own
+ * default would answer a body of a shape this API does not use — `error` as a bare string, with no
+ * code of the closed vocabulary and no sentence this product chose. Handing this function to the
+ * instance's construction is what makes the envelope total over the transport as well as over the
+ * application. It is also the one response this module writes itself, because a refusal that never
+ * became a request has no reply to send on: the bytes are framed here and the connection is closed.
+ *
+ * Every parser refusal is answered with the envelope's `validation_error` and the status
+ * {@link ERROR_STATUS} records for it — the contract's answer for a request the API will not accept —
+ * and never at a status of the parser's own. Fastify's own default separates a request timeout and a
+ * header overflow onto `408` and `431`, and the contract's vocabulary carries no code for either, so
+ * answering them at those statuses would put a status in the product that no client can look up in
+ * the one code-to-status map.
+ *
+ * A connection that was reset, and a socket already destroyed, have nowhere to send a response and are
+ * left alone — Fastify's own default returns for the same reason — and a socket that is not writable
+ * is destroyed without a write. The response is framed here rather than by the framework, so its
+ * shape is stated where it is written: the reason phrase comes from the runtime's own status table
+ * with a phrase for a status that table does not carry, the length is the body's byte length rather
+ * than its character count, and the socket is destroyed after the write, which is the only way a
+ * connection whose request was never parsed can be ended.
+ *
+ * @param error - The parser's own failure, carrying the connection's error code.
+ * @param socket - The connection the refused request arrived on.
+ */
+function answerParserRefusal(error: ConnectionError, socket: Socket): void {
+  if (error.code === "ECONNRESET" || socket.destroyed) {
+    return;
+  }
+
+  const refusal = mapFailure({ statusCode: ERROR_STATUS.validation_error });
+  const body = JSON.stringify(envelope(refusal.code, refusal.message));
+
+  if (socket.writable) {
+    socket.write(
+      `HTTP/1.1 ${refusal.status} ${reasonPhraseOf(refusal.status)}\r\n` +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        "Content-Type: application/json; charset=utf-8\r\n" +
+        "Connection: close\r\n" +
+        `\r\n${body}`,
+    );
+  }
+
+  socket.destroy(error);
+}
+
+/**
+ * The reason phrase a status line carries.
+ *
+ * Read from the runtime's own status table, so the phrase on the line is the one this runtime spells
+ * for the status, with a phrase of this module's own for a status that table does not carry: the line
+ * is written by hand here, and a status line is only well formed with a phrase on it — it is where a
+ * client's parser, and a person reading a log or a trace, reads what the number meant.
+ *
+ * @param status - The status the line carries.
+ * @returns The runtime's phrase for it, or `Status <status>` when the table carries none.
+ */
+function reasonPhraseOf(status: number): string {
+  const phrase: string | undefined = STATUS_CODES[status];
+
+  return phrase === undefined || phrase.length === 0 ? `Status ${status}` : phrase;
 }
 
 /**
@@ -476,6 +572,18 @@ function sendApiError(reply: FastifyReply, error: ApiError): void {
  * did. Only a 4xx status is read this way: a fault at 5xx keeps the generic sentence and the 500 the
  * mapper chose, because its message is a driver report rather than a sentence.
  *
+ * A body the runtime's JSON parser refused is answered with the envelope's own sentence rather than
+ * with the parser's. The parser's message is a sentence about the text it was handed, not one this
+ * API wrote: it names the caller's own bytes back for some malformed spellings and only the engine's
+ * own position for others, so three malformed bodies reached a client as three different sentences, one
+ * of them carrying the request's own bytes. The substitution is scoped to that refusal alone: a
+ * framework-raised client error whose own sentence the safety gate admits keeps that sentence — the
+ * over-limit payload is the one whose framework sentence a client really reads — and one whose
+ * sentence the gate refuses is answered with the envelope's own sentence, exactly as the unaccepted
+ * media type was answered before this function's parser-refusal branch existed, because the framework's
+ * spelling for it names the media type it will not take and every media type carries one of the gate's
+ * own markers. The answers those two statuses produce are therefore unchanged by that branch.
+ *
  * Exported so `apps/api/test/integration/error-mapping.test.ts` can assert the mapping this handler
  * performs on the failures Fastify really raises, rather than a copy of it written in the suite; the
  * composition root is otherwise its only caller.
@@ -498,10 +606,39 @@ export function mapFailure(error: unknown): ApiError {
     return mapped;
   }
 
-  // Handed back through the mapper so the sentence is gated by the same rule as any other: a value
-  // that cannot be sent is replaced with the sentence the envelope's own vocabulary supplies for the
-  // status, and the code this branch chose is preserved rather than generalised.
-  return toApiError({ code, message: memberOf(error, "message") });
+  // Handed back through the mapper so the sentence is gated by the same rule as any other: a value that
+  // cannot be sent is replaced with the sentence the envelope's own vocabulary supplies for the status,
+  // and the code this branch chose is preserved rather than generalised. A parser's refusal is denied
+  // its message rather than gated on it: whether the gate would pass that message depends on the
+  // engine's spelling for the particular body — a spelling with no marker inside the length bound is
+  // passed and the client reads the runtime's sentence about its own bytes, while one naming a position
+  // with ` at `, as some malformed bodies are named, is refused — so denying the message is what gives
+  // every malformed body the one sentence the envelope supplies for the status.
+  return toApiError({
+    code,
+    message: isJsonParserRefusal(error) ? undefined : memberOf(error, "message"),
+  });
+}
+
+/**
+ * Whether a thrown value is the runtime's own refusal to parse a request's body.
+ *
+ * The JSON body parser hands V8's `SyntaxError` straight on, marked `400`, so its type is the one
+ * signal that says the message belongs to the engine rather than to this API — a message the parser
+ * builds from the text it was given. The check is guarded because the value is arbitrary: reading a
+ * prototype chain is what `instanceof` does, and a chain that raises must not cost a client the
+ * envelope, so a value whose type cannot be read is not treated as a parser refusal and keeps the
+ * mapping it would otherwise have had.
+ *
+ * @param error - The thrown value, of any type.
+ * @returns `true` for the runtime's JSON parser refusal, `false` for every other value.
+ */
+function isJsonParserRefusal(error: unknown): boolean {
+  try {
+    return error instanceof SyntaxError;
+  } catch {
+    return false;
+  }
 }
 
 /**

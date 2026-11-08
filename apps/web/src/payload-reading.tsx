@@ -29,7 +29,12 @@ export interface WriteFailureFacts {
   readonly status: number;
   /** The stable code the service answered with. */
   readonly code: string;
-  /** A sentence a caller can render as it stands. */
+  /**
+   * The sentence the failure carries — the envelope's own when a response stated one, the
+   * client's own when none did. A caller renders it as it stands only when `acceptedServerSentence`
+   * in `./components/error-notice` accepts it — never for an `internal_error` failure — and renders
+   * its own sentence otherwise.
+   */
   readonly message: string;
   /** Whole seconds to wait, from a `Retry-After`; `null` when the response stated none. */
   readonly retryAfterSeconds: number | null;

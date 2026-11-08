@@ -91,7 +91,7 @@ import type { RequestedPage } from "../collection-paging";
 import { ChallengeForm } from "../components/challenge-form";
 import { CollectionPager } from "../components/collection-pager";
 import { EmptyState } from "../components/empty-state";
-import { ErrorNotice } from "../components/error-notice";
+import { ErrorNotice, acceptedServerSentence } from "../components/error-notice";
 import { findDemoAccount } from "../data/demo-accounts";
 import type { DemoAccount } from "../data/demo-accounts";
 import { Timestamp, describeRetryWait, readString, readWriteFailure, withFullStop } from "../payload-reading";
@@ -519,7 +519,9 @@ const REFUSED_RESPONSE_READING: ResponseFailureReading = Object.freeze({
  *
  * The sentences are this form's own rather than the service's, because the service answers a client
  * error with one generic sentence that does not tell a reader whether the response, the account or
- * the challenge was the problem.
+ * the challenge was the problem. A failure no status below names renders the service's own sentence
+ * when it passes the acceptance decision `../components/error-notice` implements, and this form's own
+ * sentence otherwise.
  */
 function describeRespondFailure(error: unknown): ResponseFailureReading | null {
   if (error === null) {
@@ -574,13 +576,20 @@ function describeRespondFailure(error: unknown): ResponseFailureReading | null {
         variant: "notice--warning",
         offersBoard: false,
       };
-    default:
+    default: {
+      // The service's own sentence only when it passes the acceptance decision
+      // `../components/error-notice` implements; this form's own sentence otherwise.
+      const accepted = acceptedServerSentence(failure.code, failure.message);
       return {
         fieldMessage: null,
-        statusMessage: `The response was not posted. ${withFullStop(failure.message)} The text you typed has been kept.`,
+        statusMessage:
+          accepted === null
+            ? UNREADABLE_FAILURE_STATUS
+            : `The response was not posted. ${withFullStop(accepted)} The text you typed has been kept.`,
         variant: "notice--error",
         offersBoard: false,
       };
+    }
   }
 }
 

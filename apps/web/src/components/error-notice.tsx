@@ -158,6 +158,26 @@ function isRenderableMessage(value: unknown): value is string {
 }
 
 /**
+ * The service's own sentence for a refusal, when a surface may render it as it stands, or `null`.
+ *
+ * This is the acceptance decision stated once, so that every surface showing a refusal makes the same
+ * one: the sentence is returned only when it is one short, single-line piece of ordinary prose free of
+ * the markers that spell a trace, and it is never returned for an internal failure — the generic
+ * sentence on the server side exists so that nothing internal reaches a client, and echoing whatever
+ * arrived would defeat it. It repairs nothing and substitutes no permissive value: a sentence it
+ * refuses is a sentence the caller replaces with its own.
+ *
+ * A caller passes the code and the sentence as it received them and renders its own sentence whenever
+ * this returns `null`, so a refusal is explained on every surface rather than left blank.
+ */
+export function acceptedServerSentence(code: unknown, message: unknown): string | null {
+  if (code === INTERNAL_ERROR_CODE) {
+    return null;
+  }
+  return isRenderableMessage(message) ? message : null;
+}
+
+/**
  * What one failure renders: the variant that carries it, the sentence that says what happened, the
  * sentence that says what the reader can do next, and whether the server's own sentence may be added
  * as a detail line.
@@ -362,7 +382,7 @@ export function ErrorNotice(props: ErrorNoticeProps): JSX.Element {
     code === INTERNAL_ERROR_CODE,
     isSeconds(retryAfterSeconds) ? retryAfterSeconds : undefined,
   );
-  const serverSentence = text.echoServerMessage && isRenderableMessage(message) ? message : null;
+  const serverSentence = text.echoServerMessage ? acceptedServerSentence(code, message) : null;
 
   return (
     <div className={`error-notice notice ${text.variant}`}>

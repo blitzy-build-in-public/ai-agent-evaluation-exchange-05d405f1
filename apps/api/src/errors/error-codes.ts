@@ -120,11 +120,10 @@ export const ERROR_STATUS: Readonly<Record<ApiErrorCode, number>> = Object.freez
  * registered for (415) — the write rate-limit path (429) and everything else (500).
  * Every call site is in `apps/api/src/server.ts`.
  *
- * The two transport entries are what answer a framework-raised 413 or 415 at its own
- * status with the code for it: before them the lookup missed and the failure was
- * answered 500 `internal_error`, which told a client the server had failed when its own
- * request had. A status this map does not carry still answers 500, so widening a
- * framework's vocabulary is an edit here and never a status passed through with no code.
+ * A framework-raised 413 or 415 is answered at its own status with the code for it, so a
+ * client whose own request failed is told that rather than that the server failed. A
+ * status this map does not carry still answers 500, so widening a framework's
+ * vocabulary is an edit here and never a status passed through with no code.
  *
  * Partial on purpose: `noUncheckedIndexedAccess` turns every lookup into
  * `ApiErrorCode | undefined`, so a caller writes

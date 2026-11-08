@@ -1,5 +1,5 @@
 /**
- * Structural contract test for the six JSON Schema request modules of this folder.
+ * Structural contract test for the seven JSON Schema request modules of this folder.
  *
  * It asserts what those modules guarantee rather than restating their text, and it does
  * so **without a validation engine**: the dependency inventory is closed and names no
@@ -95,18 +95,21 @@ import {
   standardProposalIdParamsSchema,
   standardProposalReviewBodySchema,
 } from './moderation-schema';
+import { collectionPageQuerySchema } from './pagination-schema';
 
 import {
   BADGE_SCOPE,
   COLLECTION_PAGE_SIZE,
   DEMO_AUTHENTICATION_LABEL,
   FOUNDER_ALLOCATION_CONTRACT_LABEL,
+  FREE_TEXT_PATTERN,
   LISTING_PAGE_SIZE,
   NO_REPORT_LABEL,
   PAGE_NUMBER_MAX,
   REPORT_LABEL_SAMPLE,
   REPORT_LABEL_VERIFIED_IN_DEMO,
   SPONSORED_LABEL,
+  SUBSTANTIVE_FREE_TEXT_PATTERN,
   SYNTHETIC_CURRENCY_LABEL,
   WRITE_RATE_LIMIT_MAX,
   WRITE_RATE_LIMIT_WINDOW,
@@ -568,7 +571,7 @@ describe('inquiryCreateBodySchema', () => {
       type: 'string',
       minLength: 1,
       maxLength: 2000,
-      pattern: '\\S',
+      pattern: SUBSTANTIVE_FREE_TEXT_PATTERN,
     });
     expect(inquiryCreateBodySchema.body.additionalProperties).toBe(false);
   });
@@ -594,14 +597,14 @@ describe('the free-text write fields refuse a value that is only whitespace', ()
    * The four fields the non-blank rule covers, each as the name a reader looks it up by, the
    * pattern it declares and an ordinary value of its own kind.
    *
-   * `minLength` counts characters, so it admits a value made only of whitespace — which is the
-   * whole of the defect this group closes: a listing stored with a whitespace-only title
-   * renders an empty heading, a results-card link with no accessible name and a compare
-   * control labelled `Add to compare: ` with nothing after it. The rule the four fields carry
-   * instead is a `pattern`, which JSON Schema searches rather than matches whole, so `\S`
-   * requires at least one non-whitespace character. The ordinary value is what proves the rule
-   * is a floor rather than a filter: a value with text in it keeps its surrounding whitespace,
-   * which the routes store exactly as written.
+   * `minLength` counts characters, so it admits a value made only of whitespace — the empty heading,
+   * the results-card link with no accessible name and the compare control labelled
+   * `Add to compare: ` with nothing after it are what such a value renders as. The rule the four
+   * fields carry instead is {@link SUBSTANTIVE_FREE_TEXT_PATTERN}, the shared pattern declared in
+   * `../constants`, which JSON Schema searches rather than matches whole and which asks for
+   * substance as well as for characters. The ordinary value is what proves the rule is a floor
+   * rather than a filter: a value with text in it keeps its surrounding whitespace, which the
+   * routes store exactly as written.
    */
   const nonBlankFields: Array<[string, string, string]> = [
     [
@@ -631,7 +634,7 @@ describe('the free-text write fields refuse a value that is only whitespace', ()
     (field, pattern, ordinaryValue) => {
       // One spelling across the four fields: a divergent rule on any of them fails here rather
       // than leaving three of them checked and the fourth a length check alone.
-      expect(pattern).toBe('\\S');
+      expect(pattern).toBe(SUBSTANTIVE_FREE_TEXT_PATTERN);
 
       // The field declares the pattern at all. `new RegExp(undefined)` compiles to the empty
       // pattern, which matches everything, so a `pattern` key that went missing fails the two
@@ -643,6 +646,153 @@ describe('the free-text write fields refuse a value that is only whitespace', ()
       }
 
       expect(accepted.test(ordinaryValue)).toBe(true);
+    },
+  );
+});
+
+describe('the stored free-text rule', () => {
+  /**
+   * Every free-text field that declares a pattern, each as the name a reader looks it up by, the
+   * pattern it declares, the constant it must equal and whether that constant refuses a blank value
+   * as well as a control character.
+   *
+   * The two constants are the product's one character rule, declared in `../constants`: a stored
+   * value may carry no C0 control character except the line feed and no DEL, because those are
+   * invisible or device control in a field a reader reads. A field bound by length alone admits two
+   * values that are not sentences — a board write whose whole content is whitespace, which renders
+   * as a row, a heading and a link with no accessible name, and a value carrying a NUL or another
+   * control character, which reaches the listing card, the listing detail, the thread board and the
+   * thread heading as the code point itself. The fields below are the whole set the rule covers.
+   *
+   * Eight of them carry {@link SUBSTANTIVE_FREE_TEXT_PATTERN}, which asks for substance as well as
+   * characters. The other seven state the character rule alone, and deliberately: their blank value
+   * is judged one layer in or is an ordinary state — the moderation route's own trim guard, and
+   * `openAppeal` and `submitProposal` in `packages/sgi-core`, refuse an empty or whitespace-only
+   * reason, title or rationale with a `400`; `ruleAppeal` and `reviewProposal` hold an optional
+   * reason as stated; and a version with nothing to say beyond its own label is an ordinary state —
+   * so a pattern that refused a blank value as well would make those judgements unreachable rather
+   * than add one.
+   */
+  const freeTextFields: Array<[string, string, string, boolean]> = [
+    [
+      'listingCreateBodySchema.body.properties.title',
+      listingCreateBodySchema.body.properties.title.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'listingCreateBodySchema.body.properties.summary',
+      listingCreateBodySchema.body.properties.summary.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'listingCreateBodySchema.body.properties.license_code',
+      listingCreateBodySchema.body.properties.license_code.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'listingVersionCreateBodySchema.body.properties.notes',
+      listingVersionCreateBodySchema.body.properties.notes.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'inquiryCreateBodySchema.body.properties.message',
+      inquiryCreateBodySchema.body.properties.message.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'challengeCreateBodySchema.body.properties.question',
+      challengeCreateBodySchema.body.properties.question.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'challengeResponseBodySchema.body.properties.body',
+      challengeResponseBodySchema.body.properties.body.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'threadCreateBodySchema.body.properties.title',
+      threadCreateBodySchema.body.properties.title.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'threadPostBodySchema.body.properties.body',
+      threadPostBodySchema.body.properties.body.pattern,
+      SUBSTANTIVE_FREE_TEXT_PATTERN,
+      true,
+    ],
+    [
+      'appealCreateBodySchema.body.properties.reason',
+      appealCreateBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'appealRulingBodySchema.body.properties.reason',
+      appealRulingBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'moderationActionBodySchema.body.properties.reason',
+      moderationActionBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'standardProposalCreateBodySchema.body.properties.title',
+      standardProposalCreateBodySchema.body.properties.title.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'standardProposalCreateBodySchema.body.properties.rationale',
+      standardProposalCreateBodySchema.body.properties.rationale.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+    [
+      'standardProposalReviewBodySchema.body.properties.reason',
+      standardProposalReviewBodySchema.body.properties.reason.pattern,
+      FREE_TEXT_PATTERN,
+      false,
+    ],
+  ];
+
+  it.each(freeTextFields)(
+    '%s carries the shared pattern, which refuses a control character',
+    (field, pattern, expectedConstant, refusesBlankValue) => {
+      // The field declares the shared constant itself rather than a rule of its own, so no surface
+      // can drift into a second spelling of the one rule.
+      expect(pattern).toBe(expectedConstant);
+
+      const compiled = new RegExp(pattern);
+
+      // A NUL, two other C0 controls, a tab, a carriage return and DEL: each is refused, so a value
+      // that is not a sentence cannot be stored and rendered.
+      for (const controlBearing of ['a\u0000b', 'a\u0001b\u0007c', 'a\tb', 'a\rb', 'a\u007fb']) {
+        expect(compiled.test(controlBearing)).toBe(false);
+      }
+
+      // Plain text, text whose surrounding whitespace is kept as written, and a line feed, which is
+      // kept on purpose: the surfaces here render the line breaks an author types.
+      for (const written of ['Depot notes', '  Depot notes  ', 'line 1\nline 2']) {
+        expect(compiled.test(written)).toBe(true);
+      }
+
+      if (refusesBlankValue) {
+        // The empty value, a value made only of spaces, and one made only of the non-breaking space.
+        for (const noSubstance of ['', '   ', '\u00a0']) {
+          expect(compiled.test(noSubstance)).toBe(false);
+        }
+      }
     },
   );
 });
@@ -704,6 +854,7 @@ describe('moderationActionBodySchema', () => {
       type: 'string',
       minLength: 1,
       maxLength: 1000,
+      pattern: FREE_TEXT_PATTERN,
     });
     expect(moderationActionBodySchema.body.additionalProperties).toBe(false);
     expect(MODERATION_ACTIONS).toEqual(['flag', 'hide', 'restore']);
@@ -765,14 +916,14 @@ describe('the standards proposal and review bodies', () => {
  * Plan reconciliation, recorded so nobody restores an assertion that cannot hold: the
  * folder's specification lists `LISTING_STATUSES`, `REPORT_OUTCOMES`, `REPORT_LABELS`,
  * `LEDGER_NAMES` and `LEDGER_ENTRY_TYPES` among the vocabularies whose schema `enum`
- * arrays equal the corresponding `../types` tuples exactly. **No schema among the six
+ * arrays equal the corresponding `../types` tuples exactly. **No schema among the seven
  * modules in this folder carries an enum for any of those five.** There is no
  * listing-status request field, no report-outcome request field and no label request
  * field — the outcome and the label are derived by the domain and are never submitted —
  * and the three operator ledger reads take no request input at all. An equality against
- * a schema enum for them is therefore unsatisfiable without inventing a seventh schema
- * module, which the file map forbids and which would be a second definition of a
- * vocabulary whose point is that it has one. They are asserted by their exact literal
+ * a schema enum for them is therefore unsatisfiable without inventing a schema module
+ * for them that the plan's file map does not name, which would be a second definition of
+ * a vocabulary whose point is that it has one. They are asserted by their exact literal
  * members and order in half 2 instead, which preserves the anti-drift purpose.
  */
 describe('anti-drift: each closed vocabulary has exactly one definition', () => {
@@ -883,11 +1034,14 @@ interface QueryBearingSchema {
 }
 
 describe('the folder contract: exactly one Fastify section key per schema object', () => {
-  it('carries one section key on each of the 26 request schemas and no response schema', () => {
-    // The 26 section objects of the six modules. The three fragments —
+  it('carries one section key on each of the 27 request schemas and no response schema', () => {
+    // The 27 section objects of the seven modules. The three fragments —
     // `fixtureCaseSchema`, `fixtureCaseSetSchema` and `recordedOutputItemSchema` — are
     // deliberately absent: they are sub-schemas and carry no section key, which the
-    // fixture-envelope group above asserts.
+    // fixture-envelope group above asserts. `collectionPageQuerySchema` is listed with
+    // the rest because it is a schema object of this folder like any other: it is the
+    // shared `?page` contract the bounded collection reads attach themselves, so the one
+    // definition of that parameter answers all eight of those rows.
     const requestSchemas = [
       listingSearchQuerySchema,
       listingIdParamsSchema,
@@ -915,9 +1069,10 @@ describe('the folder contract: exactly one Fastify section key per schema object
       standardProposalCreateBodySchema,
       standardProposalIdParamsSchema,
       standardProposalReviewBodySchema,
+      collectionPageQuerySchema,
     ];
 
-    expect(requestSchemas).toHaveLength(26);
+    expect(requestSchemas).toHaveLength(27);
 
     for (const requestSchema of requestSchemas) {
       const keys = Object.keys(requestSchema);
@@ -950,10 +1105,11 @@ describe('the folder contract: exactly one Fastify section key per schema object
     const queryBearingSchemas: readonly QueryBearingSchema[] = [
       listingSearchQuerySchema,
       compareQuerySchema,
+      collectionPageQuerySchema,
     ];
 
     expect(bodyBearingSchemas).toHaveLength(15);
-    expect(queryBearingSchemas).toHaveLength(2);
+    expect(queryBearingSchemas).toHaveLength(3);
 
     for (const requestSchema of bodyBearingSchemas) {
       expect(requestSchema.body.additionalProperties).toBe(false);

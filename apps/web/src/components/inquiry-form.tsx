@@ -49,6 +49,7 @@ import { Link } from "react-router-dom";
 import type { Inquiry } from "@adem/shared";
 import { createInquiry } from "../api-client";
 import { describeRetryWait, readWriteFailure } from "../payload-reading";
+import { acceptedServerSentence } from "./error-notice";
 
 /**
  * Props for {@link InquiryForm}: the one listing the inquiry is about.
@@ -163,16 +164,19 @@ function describeRetry(retryAfterSeconds: number | null): string {
 }
 
 /**
- * The explanation a validation failure is rendered with: the sentence the service sent, and the
- * field to look at.
+ * The explanation a validation failure is rendered with: the sentence the service sent, when the
+ * caller may render it, and the field to look at.
  *
  * The service's own sentence is kept because the schema, not this form, decides what a valid
- * message is — a rule added there later then needs no change here.
+ * message is — a rule added there later then needs no change here. The caller states it only when
+ * it passes the acceptance decision `./error-notice` implements and passes the empty string
+ * otherwise, so a sentence this workspace will not show renders the explanation without a reason
+ * clause rather than rendering the sentence.
  */
 function explainValidation(failureMessage: string): string {
   const sentence = failureMessage.trim();
-  // A blank sentence is refused as a failure's message, so the empty arm below stands only for a
-  // caller that states its own sentence by hand.
+  // The empty arm below stands for a caller that states no sentence: either a refusal this form
+  // words itself or one whose sentence the acceptance decision refused.
   const reason = sentence === "" ? "" : ` ${sentence}`;
   return `The inquiry was not accepted as it was sent, so nothing was recorded.${reason} Check the message and send it again.`;
 }
@@ -199,7 +203,9 @@ function explainFailure(failure: unknown): FailureExplanation {
   switch (clientFailure.status) {
     case 400:
       return {
-        text: explainValidation(clientFailure.message),
+        text: explainValidation(
+          acceptedServerSentence(clientFailure.code, clientFailure.message) ?? "",
+        ),
         fieldIsInvalid: true,
         offersBrowse: false,
       };

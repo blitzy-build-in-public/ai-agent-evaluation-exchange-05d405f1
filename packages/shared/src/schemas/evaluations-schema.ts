@@ -41,6 +41,7 @@
  * byte-identical.
  */
 
+import { FREE_TEXT_PATTERN } from '../constants';
 import { CASE_SEVERITIES } from '../types/report';
 import { APPEAL_RULINGS } from '../types/appeal';
 
@@ -374,24 +375,40 @@ export const appealIdParamsSchema = {
  * appeal. The number is this module's own choice, large enough to state an
  * appeal's grounds in full and no larger.
  *
+ * `reason` carries {@link FREE_TEXT_PATTERN} as well, the one character rule the
+ * product's stored free text obeys, declared in `../constants` and imported here
+ * rather than respelled: a value may carry no C0 control character other than the
+ * line feed and no DEL, because those are invisible or device control in a
+ * sentence a reader reads. It is deliberately the **character rule alone**, the
+ * empty value included: blankness is judged one layer in, where `openAppeal` in
+ * `packages/sgi-core/src/appeals/open-appeal.ts` already refuses a reason that is
+ * empty or nothing but whitespace with the same `400` this row answers today, so a
+ * pattern that refused a blank value too would leave that refusal unreachable
+ * rather than add one.
+ *
  * A ruling on the appeal appends a governance event and leaves the report
  * **byte-identical**: `evaluation_reports` is append-only, this route is not
  * among its writers, and no field below can express a change to it.
  *
- * Statuses: `400` for a missing or empty `reason` or a `reason` over its stated
- * maximum, `404` for an unknown report, `401` for a missing or unresolvable demo
- * header, `403` for a resolvable account whose role is not `developer`, and `403`
- * for a developer that did not publish the listing version the report measures. The
- * route checks the role and then the ownership, so a developer appeals the reports
- * of the versions it published and no others. Success is `201` with the appeal in
- * status `open`.
+ * Statuses: `400` for a missing or empty `reason`, a `reason` over its stated
+ * maximum or one carrying a control character other than a line feed, `404` for
+ * an unknown report, `401` for a missing or unresolvable demo header, `403` for a
+ * resolvable account whose role is not `developer`, and `403` for a developer that
+ * did not publish the listing version the report measures. The route checks the
+ * role and then the ownership, so a developer appeals the reports of the versions
+ * it published and no others. Success is `201` with the appeal in status `open`.
  */
 export const appealCreateBodySchema = {
   body: {
     type: 'object',
     required: ['reason'],
     properties: {
-      reason: { type: 'string', minLength: 1, maxLength: 1000 },
+      reason: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 1000,
+        pattern: FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },
@@ -427,8 +444,19 @@ export const appealCreateBodySchema = {
  * ruling. The number is this module's own choice, large enough to state a
  * ruling's reasoning in full and no larger.
  *
- * Statuses: `400` for a missing `status`, a value outside the enum or a `reason`
- * over its stated maximum, `404` for an unknown appeal, `409` for an appeal
+ * `reason` carries {@link FREE_TEXT_PATTERN} as well, the one character rule the
+ * product's stored free text obeys, declared in `../constants`: a value may carry
+ * no C0 control character other than the line feed and no DEL, since the reason is
+ * stored as written in the payload of the event that records the ruling. The rule
+ * is the **character rule alone**, the empty value included, because blankness is
+ * not this field's to judge: a ruling is not obliged to state a ground, and
+ * `ruleAppeal` in `packages/sgi-core/src/appeals/rule-appeal.ts` imposes no
+ * emptiness rule on the reason it is handed, so a pattern that refused a blank
+ * value as well would refuse a body those layers accept today.
+ *
+ * Statuses: `400` for a missing `status`, a value outside the enum, or a `reason`
+ * over its stated maximum or one carrying a control character other than a line
+ * feed, `404` for an unknown appeal, `409` for an appeal
  * already ruled, `401` for a missing or unresolvable demo header, and `403` for a
  * resolvable account whose role is not `operator`.
  */
@@ -438,7 +466,11 @@ export const appealRulingBodySchema = {
     required: ['status'],
     properties: {
       status: { type: 'string', enum: APPEAL_RULINGS },
-      reason: { type: 'string', maxLength: 1000 },
+      reason: {
+        type: 'string',
+        maxLength: 1000,
+        pattern: FREE_TEXT_PATTERN,
+      },
     },
     additionalProperties: false,
   },
