@@ -1,64 +1,82 @@
-# Seed one more listing, with its claim and its version
+# Add a seed listing in a new category
 
 Labels: P0, good-first-issue, milestone M2
 
 ## Scope
 
-A buyer judges a listing by what it **claims** beside what was **measured**, so a listing that is only
-a title in a card teaches a reader nothing. `apps/api/src/seed/seed-data.ts` publishes the
-demonstration exchange a fresh checkout shows, and your task is to add one more complete listing
-inside a category the seed already carries — a listing row, at least one version of it, and the claim
-with its limitation that the compare view reads — so the search, filter and compare surfaces have one
-more real shape to lay side by side.
+A buyer judges a listing by what it **claims** beside what was **measured**, so a listing that is only a
+title in a card teaches a reader nothing - and a category with no listing in it teaches a reader less.
+`apps/api/src/seed/seed-data.ts` publishes the demonstration exchange a fresh checkout shows, and your
+task is to widen it by one category and one complete listing inside that category: a category row, a
+listing row, at least one version of it, and the claim with its limitation the compare view reads. You
+write data and nothing else, in the frozen-literal style of the shipped rows.
 
-You write one coherent set of rows, following the conventions the shipped ones use.
+1. **Your category**, a row in `SEED_CATEGORIES` whose slug satisfies the pattern the extension seam's
+   guard `validateListingCategory` in `packages/sgi-core/src/extensions/listing-category.ts` applies -
+   `^[a-z][a-z0-9-]{1,31}$`, two to thirty-two lowercase letters, digits or hyphens and starting with a
+   letter - with a non-empty name. That guard also requires a non-empty description of the category
+   value a contributor registers through the seam; the row stores an id, a slug and a name, so a seeded
+   row carries no description.
+2. **Its listing**, a row in `SEED_LISTINGS` naming your category's id, with an invented title and
+   summary, a licence code, an active status, fixed ISO-8601 `created_at` and `updated_at` literals, and
+   a pricing model from the closed set `rent`, `purchase`, `license` or `subscription`. Every row keeps
+   the shape the types in `packages/shared/src/index.ts` declare.
+3. **Its version and its claim**, rows in `SEED_LISTING_VERSIONS` and `SEED_LISTING_CLAIMS` in the same
+   literal style: a version string, notes, a creation instant and `is_fixture_candidate`; and, one row
+   per version, the claim, the limitation the developer admits, an evidence summary, a licence code and
+   a pricing model. A claim with an empty limitation is a listing nobody can judge.
 
-1. **The listing**, in one of the four shipped categories: a stable identifier constant, a slug, a
-   fictional title and summary, a licence code and one of the four pricing models - rent, purchase,
-   licence or subscription. Use a category the seed already carries rather than inventing one: a new
-   category is the separate task in `docs/starter-tasks/listing-category-seam.md`, and it belongs to
-   the seam because it is a value the extension registry validates.
-2. **Its version**, so the history the developer page shows is not empty. Every version carries a
-   version string, notes, a creation instant and the `is_fixture_candidate` flag, which stays `false`
-   for a version a developer publishes through the API - it is `true` only for the three candidate
-   fixture references, and it is the single input the report's label rule reads, which is why a
-   listing you seed does not become a `SAMPLE`-labelled candidate.
-3. **Its claim**, one row per version, carrying the claim, the limitation the developer admits, an
-   evidence summary, a licence code and a pricing model. The limitation is not decoration: the
-   compare view exists to put a claim and its limitation beside the measured evidence, and a claim
-   with an empty limitation is a listing nobody can judge.
+**The seeding mechanism is not yours to change.** `apps/api/src/seed/seed-database.ts` owns the refusal
+of a database that already holds rows, the single transaction that makes the seed all-or-nothing, the
+insert-only writes in foreign-key order, the standard version it registers through the scoring package,
+and the three reports it derives in the fixed order alpha, beta, gamma. `apps/api/src/seed/run-seed.ts`
+stays the `npm run seed` entry that honours `ADEM_DB_PATH` through `apps/api/src/config.ts`. You add rows
+to the data file; you never add or reorder a stage of the algorithm.
 
-**Determinism and fiction, both required.** Every value is a fixed literal: no clock, locale,
-timezone, random source, environment read or network — a creation instant is written as a fixed
-ISO-8601 UTC string, and every count is an integer. Every identity is invented: no real company,
-product or person, no contact detail, no credential or token, no `@` in any string and no run of five
-or more consecutive digits, because the exclusion scan reads every tracked file and the manual
-privacy review reads this folder and the seed. Amounts, where you show one, are integer minor units
-of the synthetic currency `DEMO` and carry no real currency code or symbol.
+**The seed's invariants hold.** Exactly three `listing_versions` rows carry the
+`is_fixture_candidate` flag as `true` - the three candidate fixture references - so a version you add
+carries `false`; that flag together with the outcome is the only input to a report's label (`SAMPLE` for
+a fixture candidate, otherwise `VERIFIED-IN-DEMO`). The seed still writes exactly three reports - one
+PASS, one failing on a `critical` case, one failing on the match threshold - and they still agree with
+`packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/expected-outcomes.json`. Your row moves no outcome.
 
-Read next: `apps/api/src/seed/seed-data.ts` for the shipped listing, version and claim rows and the
-identifier conventions; `docs/SCHEMA.md` for the `listings`, `listing_versions` and `listing_claims`
-tables; `apps/api/src/routes/listings.ts` for the search contract the row must satisfy;
-`apps/web/src/components/compare-table.tsx` for how the claim, the limitation and the evidence are
-laid out.
+**It is data, not schema.** `packages/shared/migrations/` holds applied migrations and each one is
+immutable: never edit one, and never add one for a category or a listing. If your listing needs a column
+that does not exist, that is a change to the plan rather than a starter task - raise it in the pull
+request instead of touching the schema.
+
+**Content rules, spelled out.** Every value is invented, and every value is fixed: no clock, locale,
+timezone, random source, environment read or network. No real brand, company, product, personal name,
+contact detail, credential or token anywhere in a row; no at-sign inside any string and no run of five
+or more consecutive digits, because the exclusion scan reads every tracked file and the manual privacy
+review reads this folder and the seed. Nothing in a seeded text claims safety, certification or a
+guarantee, and no real currency code or symbol appears anywhere: money, if a row mentions any, is an
+integer count of minor units of the synthetic currency `DEMO`.
+
+**If a suite counts the seeded rows, update it in the same change.** A fresh database holds one more
+category and one more listing because you added them, so the expectation moves deliberately - update it,
+say so in the pull request, and never weaken an assertion to make a run pass.
+
+Read next: `CONTRIBUTING.md` for the contribution path and the pull-request checklist, and
+`docs/ROADMAP.md` for the milestone this task belongs to, rather than either being restated here.
+`apps/api/src/routes/listings.ts` holds the search contract your row must satisfy, and
+`packages/sgi-fixtures/fixtures/SGI-SO-1.0.0/expected-outcomes.json` holds the outcomes that must not
+move.
 
 ## Acceptance
 
-1. `npm run typecheck` exits 0.
-2. `npm run test:integration -- --testNamePattern="the seed publishes"` exits 0 with the counts it
-   asserts updated deliberately in the same change, and
-   `--testNamePattern="the standard and the candidates the seed describes"` exits 0 with the three
-   seeded outcomes unchanged: a seeded row is a row the contract counts, and leaving the count behind
-   is how a seed drifts from what it claims to publish.
-3. `npm run seed` exits 0 against a fresh database file, and the listing is observable over the API:
-   `GET /api/v1/listings?category=<the category's slug>` answers `200` with your listing, and
-   `GET /api/v1/listings/<your id>` answers `200` with its version history, its claim, its limitation
-   and the offer models it supports.
-4. The compare view works with the new row: `GET /api/v1/compare?ids=<yours>,<another>` answers `200`
-   with both entries side by side, and the page renders the claim against the evidence for both rather
-   than a blank column. Record the two responses or a screenshot in the pull-request description.
-5. The seed's own invariants still hold: `npm run test:integration` exits 0, so every string the seed
-   publishes is still free of a contact detail, every closed vocabulary still holds, and the three
-   candidate outcomes (`seed-alpha` `PASS`, `seed-beta` failing on its critical case, `seed-gamma`
-   failing on its threshold cases) are unchanged.
+1. `npm run seed` exits 0 against a fresh database file, and the summary it prints names the rows it
+   wrote, your new category and your new listing among them.
+2. `npm run typecheck` exits 0; `npm run test:unit -- packages/sgi-core` exits 0, which includes the seam
+   guard's accept case for the slug pattern your category satisfies; and `npm run test:integration`
+   exits 0.
+3. Observable by hand: after `npm run seed` and `npm start`,
+   `GET http://localhost:3000/api/v1/listings?category=<your slug>` answers `200` with your listing in
+   `items` - the page size is fixed at 20, and a filter that matches nothing is `200` with `items: []`
+   rather than an error - and on `/listings` your category appears in the category filter and selecting
+   it returns that listing. Paste the response body into the pull request.
+4. The three seeded reports are unchanged: `GET /api/v1/evaluations/{id}` for each still answers PASS,
+   the `critical`-case FAIL and the threshold FAIL, and
+   `npm run test:integration -- --testNamePattern=evaluations` exits 0.
+5. `git diff --stat -- packages/shared/migrations` prints nothing.
 6. `npm run scan:exclusions` exits 0 with an empty finding list.
