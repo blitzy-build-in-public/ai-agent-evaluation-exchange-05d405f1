@@ -18,7 +18,7 @@
     "@fastify/rate-limit": "9.1.0",
     "@fastify/static": "7.0.4",
     "better-sqlite3": "9.6.0",
-    "fastify": "4.28.1"
+    "fastify": "5.12.6"
   },
   "devDependencies": {
     "typescript": "5.4.5"
