@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/sgi-fixtures" },
+    { "path": "./packages/shield" },
+    { "path": "./packages/sgi-core" },
+    { "path": "./packages/commerce-sim" },
+    { "path": "./apps/api" },
+    { "path": "./apps/web" },
+    { "path": "./examples/extension-fixture-pack" }
+  ]
+}

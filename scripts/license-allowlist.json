@@ -1,0 +1,29 @@
+{
+  "successCriteria11": ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT"],
+  "allowed": ["0BSD", "Apache-2.0", "BlueOak-1.0.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT"],
+  "amendments": [
+    {
+      "license": "BlueOak-1.0.0",
+      "reason": "A permissive, OSI-approved licence carried by the four packages the runtime graph reaches through glob under @fastify/static, a pinned row of the closed dependency inventory, so the row cannot be removed without departing from that inventory."
+    }
+  ],
+  "developmentOnlyExceptions": [
+    {
+      "license": "MPL-2.0",
+      "reason": "Permitted by the request for development-only dependencies; a package carrying it MUST NOT appear in a runtime graph."
+    },
+    {
+      "license": "CC-BY-3.0",
+      "reason": "Data licence of the SPDX data packages that license-checker-rseidelsohn and spdx-satisfies bring in (spdx-exceptions, and spdx-ranges' \"(MIT AND CC-BY-3.0)\"); development graph only, so it is never distributed."
+    },
+    {
+      "license": "CC-BY-4.0",
+      "reason": "Data licence of caniuse-lite, reached only through the frontend build tooling (browserslist); development graph only."
+    },
+    {
+      "license": "CC0-1.0",
+      "reason": "Public-domain dedication of spdx-license-ids, reached only through license-checker-rseidelsohn; development graph only."
+    }
+  ],
+  "source": "Success criteria 11 fixes the licence list this gate applies — MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and 0BSD, with MPL-2.0 permitted for development-only dependencies. Every licence this data file admits beyond that list is recorded below as an amendment naming the licence and why the tree needs it, and every development-only exception carries its own reason; widening either set is a reviewable diff to this file."
+}

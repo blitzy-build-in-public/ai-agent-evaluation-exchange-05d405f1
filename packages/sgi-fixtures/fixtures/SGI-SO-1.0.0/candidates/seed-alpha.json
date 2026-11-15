@@ -1,0 +1,184 @@
+{
+  "candidate_id": "seed-alpha",
+  "candidate_version_id": "00000000-0000-4000-8000-0000000000a1",
+  "standard_version_id": "SGI-SO-1.0.0",
+  "recorded_outputs": [
+    {
+      "case_id": "so-001",
+      "output": {
+        "record_type": "fulfilment",
+        "order_id": "demo-order-1001",
+        "status": "received"
+      }
+    },
+    {
+      "case_id": "so-002",
+      "output": {
+        "order_id": "demo-order-1002",
+        "handling": {
+          "fragile": true,
+          "notes": "keep upright"
+        }
+      }
+    },
+    {
+      "case_id": "so-003",
+      "output": {
+        "order_id": "demo-order-1003",
+        "status": "staged"
+      }
+    },
+    {
+      "case_id": "so-004",
+      "output": {
+        "order_id": "demo-order-1004",
+        "items": [
+          "crate-11",
+          "crate-12",
+          "pallet-02"
+        ]
+      }
+    },
+    {
+      "case_id": "so-005",
+      "output": {
+        "order_id": "demo-order-1005",
+        "item_count": 3
+      }
+    },
+    {
+      "case_id": "so-006",
+      "output": {
+        "order_id": "demo-order-1006",
+        "items": []
+      }
+    },
+    {
+      "case_id": "so-007",
+      "output": {
+        "reference_code": "YD-4417"
+      }
+    },
+    {
+      "case_id": "so-008",
+      "output": {
+        "order_id": "demo-order-1008",
+        "bay": null,
+        "status": "received"
+      }
+    },
+    {
+      "case_id": "so-009",
+      "output": {
+        "net_weight_grams": 1250
+      }
+    },
+    {
+      "case_id": "so-010",
+      "output": {
+        "due_on": "2024-03-14"
+      }
+    },
+    {
+      "case_id": "so-011",
+      "output": {
+        "order_id": "demo-order-1011",
+        "status": "closed"
+      }
+    },
+    {
+      "case_id": "so-012",
+      "output": {
+        "order_id": "demo-order-1012",
+        "expedited": false
+      }
+    },
+    {
+      "case_id": "so-013",
+      "output": {
+        "legs": [
+          {
+            "from_depot": "north-yard",
+            "to_depot": "east-yard",
+            "distance_km": 12
+          },
+          {
+            "from_depot": "east-yard",
+            "to_depot": "south-yard",
+            "distance_km": 7
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "so-014",
+      "output": {
+        "scan_codes": [
+          "sc-1100",
+          "sc-2200",
+          "sc-3300"
+        ]
+      }
+    },
+    {
+      "case_id": "so-015",
+      "output": {
+        "order_id": "demo-order-1015",
+        "handling": {}
+      }
+    },
+    {
+      "case_id": "so-016",
+      "output": {
+        "order_id": "demo-order-1016",
+        "note": "entreposer à l'abri"
+      }
+    },
+    {
+      "case_id": "so-017",
+      "output": {
+        "status": "closed",
+        "item_count": 4,
+        "depot": "north-yard",
+        "order_id": "demo-order-1017"
+      }
+    },
+    {
+      "case_id": "so-018",
+      "output": {
+        "order_id": "demo-order-1018",
+        "note": "pending review"
+      }
+    },
+    {
+      "case_id": "so-019",
+      "output": {
+        "batches": [
+          {
+            "batch_id": "b-1",
+            "items": [
+              "crate-01",
+              "crate-02"
+            ]
+          },
+          {
+            "batch_id": "b-2",
+            "items": [
+              "pallet-09"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "so-020",
+      "output": {
+        "order_id": "demo-order-1020",
+        "status": "staged",
+        "items": [],
+        "expedited": false,
+        "assigned_team": null
+      }
+    }
+  ]
+}

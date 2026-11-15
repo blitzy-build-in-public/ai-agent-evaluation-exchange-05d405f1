@@ -1,0 +1,63 @@
+# ADEM - one service, one process, one port, one file. `docker compose up` builds the repository's
+# image and serves both halves of the product through it: the Fastify API under /api/v1 and the built
+# React UI, which the API itself serves from apps/web/dist. It needs no environment variable and no
+# secret: the two inputs the process reads, ADEM_PORT and ADEM_DB_PATH, both have working defaults
+# (apps/api/src/config.ts), so this file starts on a clean machine with no .env file present.
+#
+# Five things about the shape below are decisions rather than conventions.
+#
+# 1. One service, named `app`, and nothing beside it. There is no database service, because the store
+#    is an embedded SQLite file; no migration service, because apps/api/src/db/migrate.ts applies
+#    packages/shared/migrations/*.sql at start-up before any route is reachable; and no seeding
+#    service, because loading the demo data is the one-time command noted below and not a start-up
+#    step. The service name is part of the contributor contract, since that command addresses the
+#    container by it.
+#
+# 2. No healthcheck here: the image declares its own (Dockerfile), probing the API's listing route
+#    through Node's global fetch on the port this file publishes, so `docker compose ps` reports a
+#    service that has answered its own readiness check and there is no second definition to drift
+#    from the first. With a single service there is nothing to gate on either.
+#
+# 3. The database is a named volume at /app/.adem, the directory the image creates, owns as `node`
+#    and gives to the runtime user to write. Docker copies that directory's ownership into a fresh
+#    volume, so the non-root server can create its SQLite file and its write-ahead log there without
+#    a privileged start, and the data outlives `docker compose restart` and `docker compose down`
+#    alike - only `docker compose down -v` discards it. No host bind mount is used: the database is a
+#    running instance's private state, not a file a contributor edits by hand.
+#
+# 4. `restart: unless-stopped` and nothing else. It loops a crashed process back up so a contributor's
+#    local session survives an unhandled failure, and it respects a deliberate `docker compose stop`.
+#    There is no `deploy` block, no resource limit, no logging driver, no profile and no extra
+#    network: a single-process local foundation has none of them to configure, and the plan defines
+#    none.
+#
+# 5. The two environment variables are stated with the values the process resolves when they are
+#    absent: the port the image publishes and the database file inside the volume. Stating them keeps
+#    the container's configuration readable in one place, and neither is a secret, so no `env_file:`
+#    and no interpolation is used anywhere - the file parses and runs as written.
+#
+# The demo data is loaded once, against the running service:
+#
+#    docker compose exec app npm run seed
+#
+# That command is deliberately not wired into this file. `npm run seed` writes rows with fixed
+# identifiers, so a second run against an already seeded volume fails; a one-shot seeding service or a
+# `command` override would turn a documented one-time step into an automatic start-up that breaks on
+# the second `docker compose up`, and would invent an operation the plan does not define.
+
+services:
+  app:
+    build:
+      context: .
+    image: adem:local
+    ports:
+      - "3000:3000"
+    environment:
+      ADEM_PORT: "3000"
+      ADEM_DB_PATH: /app/.adem/adem.sqlite
+    volumes:
+      - adem-data:/app/.adem
+    restart: unless-stopped
+
+volumes:
+  adem-data:

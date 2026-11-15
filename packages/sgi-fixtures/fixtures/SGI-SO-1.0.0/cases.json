@@ -1,0 +1,187 @@
+{
+  "standard_version_id": "SGI-SO-1.0.0",
+  "total_cases": 20,
+  "critical_cases": 5,
+  "cases": [
+    {
+      "id": "so-001",
+      "severity": "critical",
+      "input": {
+        "instruction": "The top level is one JSON object carrying exactly the declared keys record_type, order_id and status, never an array and never a scalar.",
+        "source": "A fulfilment record for demo-order-1001 whose status is received."
+      },
+      "expected_output": { "record_type": "fulfilment", "order_id": "demo-order-1001", "status": "received" }
+    },
+    {
+      "id": "so-002",
+      "severity": "standard",
+      "input": {
+        "instruction": "A declared sub-record is a nested JSON object with its own declared keys, not a flattened set of keys and not a quoted string.",
+        "source": "Order demo-order-1002 needs handling marked fragile with the note keep upright."
+      },
+      "expected_output": { "order_id": "demo-order-1002", "handling": { "fragile": true, "notes": "keep upright" } }
+    },
+    {
+      "id": "so-003",
+      "severity": "critical",
+      "input": {
+        "instruction": "Enum values are reproduced exactly as declared, in lowercase, with no case tolerance.",
+        "source": "Order demo-order-1003 is staged."
+      },
+      "expected_output": { "order_id": "demo-order-1003", "status": "staged" }
+    },
+    {
+      "id": "so-004",
+      "severity": "standard",
+      "input": {
+        "instruction": "A declared list of strings is a JSON array in the order the source gives, with no sorting and no re-ordering.",
+        "source": "Order demo-order-1004 is carried in crate-11, crate-12 and pallet-02."
+      },
+      "expected_output": { "order_id": "demo-order-1004", "items": ["crate-11", "crate-12", "pallet-02"] }
+    },
+    {
+      "id": "so-005",
+      "severity": "critical",
+      "input": {
+        "instruction": "A declared count is a JSON number, never a quoted string and never a word.",
+        "source": "Order demo-order-1005 holds item count 3."
+      },
+      "expected_output": { "order_id": "demo-order-1005", "item_count": 3 }
+    },
+    {
+      "id": "so-006",
+      "severity": "standard",
+      "input": {
+        "instruction": "A declared list with no source items is an empty JSON array, and the key is present rather than omitted.",
+        "source": "Order demo-order-1006 holds no items."
+      },
+      "expected_output": { "order_id": "demo-order-1006", "items": [] }
+    },
+    {
+      "id": "so-007",
+      "severity": "standard",
+      "input": {
+        "instruction": "A string value is copied verbatim, with no added prefix, suffix, label or re-casing.",
+        "source": "The reference code is YD-4417."
+      },
+      "expected_output": { "reference_code": "YD-4417" }
+    },
+    {
+      "id": "so-008",
+      "severity": "critical",
+      "input": {
+        "instruction": "A declared key whose value the source does not state is present with null, never omitted and never an empty string.",
+        "source": "Order demo-order-1008 is received and its bay is not stated."
+      },
+      "expected_output": { "order_id": "demo-order-1008", "bay": null, "status": "received" }
+    },
+    {
+      "id": "so-009",
+      "severity": "standard",
+      "input": {
+        "instruction": "An integer is written as a JSON number with no digit separators, no unit text and no decimal part.",
+        "source": "The net weight is 1250 grams."
+      },
+      "expected_output": { "net_weight_grams": 1250 }
+    },
+    {
+      "id": "so-010",
+      "severity": "standard",
+      "input": {
+        "instruction": "A date is an ISO-8601 calendar date in YYYY-MM-DD form, copied unmodified.",
+        "source": "The order is due on 2024-03-14."
+      },
+      "expected_output": { "due_on": "2024-03-14" }
+    },
+    {
+      "id": "so-011",
+      "severity": "standard",
+      "input": {
+        "instruction": "The object carries exactly the declared keys, with no unrequested extra keys taken from the source.",
+        "source": "Order demo-order-1011 is closed."
+      },
+      "expected_output": { "order_id": "demo-order-1011", "status": "closed" }
+    },
+    {
+      "id": "so-012",
+      "severity": "critical",
+      "input": {
+        "instruction": "A boolean is a JSON boolean, never the string true or false and never the number 1 or 0.",
+        "source": "Order demo-order-1012 is not expedited."
+      },
+      "expected_output": { "order_id": "demo-order-1012", "expedited": false }
+    },
+    {
+      "id": "so-013",
+      "severity": "standard",
+      "input": {
+        "instruction": "A declared list of records is a JSON array of objects, each carrying the declared keys.",
+        "source": "The route runs from north-yard to east-yard over 12 km and then from east-yard to south-yard over 7 km."
+      },
+      "expected_output": { "legs": [ { "from_depot": "north-yard", "to_depot": "east-yard", "distance_km": 12 }, { "from_depot": "east-yard", "to_depot": "south-yard", "distance_km": 7 } ] }
+    },
+    {
+      "id": "so-014",
+      "severity": "standard",
+      "input": {
+        "instruction": "The declared list order is ascending by value, whatever order the source gives.",
+        "source": "The scans arrived as sc-2200, sc-1100 and sc-3300."
+      },
+      "expected_output": { "scan_codes": ["sc-1100", "sc-2200", "sc-3300"] }
+    },
+    {
+      "id": "so-015",
+      "severity": "standard",
+      "input": {
+        "instruction": "A declared sub-record with nothing set is the empty JSON object, not null and not an omitted key.",
+        "source": "Order demo-order-1015 carries a handling record with no fields set."
+      },
+      "expected_output": { "order_id": "demo-order-1015", "handling": {} }
+    },
+    {
+      "id": "so-016",
+      "severity": "standard",
+      "input": {
+        "instruction": "Non-ASCII characters are preserved exactly, with no transliteration and no re-escaping.",
+        "source": "Order demo-order-1016 carries the note entreposer à l'abri."
+      },
+      "expected_output": { "order_id": "demo-order-1016", "note": "entreposer à l'abri" }
+    },
+    {
+      "id": "so-017",
+      "severity": "standard",
+      "input": {
+        "instruction": "Key order is not significant: an object whose keys and values match the declaration matches whatever order the recorder emits them in.",
+        "source": "Order demo-order-1017 is closed at north-yard with item count 4."
+      },
+      "expected_output": { "order_id": "demo-order-1017", "depot": "north-yard", "status": "closed", "item_count": 4 }
+    },
+    {
+      "id": "so-018",
+      "severity": "standard",
+      "input": {
+        "instruction": "A string value is emitted exactly as the source gives it, with no added and no removed whitespace.",
+        "source": "Order demo-order-1018 carries the note pending review."
+      },
+      "expected_output": { "order_id": "demo-order-1018", "note": "pending review" }
+    },
+    {
+      "id": "so-019",
+      "severity": "standard",
+      "input": {
+        "instruction": "Objects nest inside arrays inside the document, and each nested object carries exactly its declared keys.",
+        "source": "Two batches: batch b-1 holding crate-01 and crate-02, and batch b-2 holding pallet-09."
+      },
+      "expected_output": { "batches": [ { "batch_id": "b-1", "items": ["crate-01", "crate-02"] }, { "batch_id": "b-2", "items": ["pallet-09"] } ] }
+    },
+    {
+      "id": "so-020",
+      "severity": "standard",
+      "input": {
+        "instruction": "Null, a boolean and an empty list coexist in one document, each reproduced with its own JSON type and none dropped.",
+        "source": "Order demo-order-1020 is staged, has no items, is not expedited and has no assigned team."
+      },
+      "expected_output": { "order_id": "demo-order-1020", "status": "staged", "items": [], "expedited": false, "assigned_team": null }
+    }
+  ]
+}

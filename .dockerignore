@@ -1,0 +1,18 @@
+.git
+node_modules
+**/node_modules
+dist
+**/dist
+**/*.tsbuildinfo
+.adem
+e2e
+.github
+test-results
+playwright-report
+blob-report
+coverage
+# Test output written at the repository root: the audit suite's mkdtempSync scratch directory,
+# which a run leaves behind if it is interrupted. A build that raced a test run would otherwise
+# copy it into the image.
+.tmp-shield-audit-*
+blitzy

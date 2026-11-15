@@ -1,0 +1,14 @@
+{
+  "name": "@adem/shield",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "ADEM Shield Basic: a free, standalone policy decision engine for tool calls, with no runtime dependencies. Not a gate pass, not a certification and not a security guarantee.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5"
+  }
+}

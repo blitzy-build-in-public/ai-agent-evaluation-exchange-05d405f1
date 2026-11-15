@@ -1,0 +1,61 @@
+{
+  "standard_version_id": "EXAMPLE-PACK-1.0.0",
+  "total_cases": 6,
+  "critical_cases": 2,
+  "cases": [
+    {
+      "id": "xp-001",
+      "severity": "standard",
+      "input": {
+        "instruction": "The top level is one JSON object carrying exactly the declared keys, never an array and never a scalar.",
+        "source": "A demo release notice identified as demo-notice-11 in draft state."
+      },
+      "expected_output": { "notice_type": "release", "notice_id": "demo-notice-11", "state": "draft" }
+    },
+    {
+      "id": "xp-002",
+      "severity": "critical",
+      "input": {
+        "instruction": "A boolean is a JSON boolean, never the string \"true\" or \"false\" and never the number 1 or 0.",
+        "source": "A demo release notice identified as demo-notice-12 that is not public."
+      },
+      "expected_output": { "notice_id": "demo-notice-12", "public": false }
+    },
+    {
+      "id": "xp-003",
+      "severity": "standard",
+      "input": {
+        "instruction": "Key order is not significant: the same keys and values in any order are a match.",
+        "source": "A demo release notice identified as demo-notice-13 in draft state, tagged alpha and beta."
+      },
+      "expected_output": { "notice_id": "demo-notice-13", "tags": ["alpha", "beta"], "state": "draft" }
+    },
+    {
+      "id": "xp-004",
+      "severity": "standard",
+      "input": {
+        "instruction": "A count is a JSON number, never a quoted string.",
+        "source": "A demo release notice identified as demo-notice-14 reporting a change count of 2."
+      },
+      "expected_output": { "notice_id": "demo-notice-14", "change_count": 2 }
+    },
+    {
+      "id": "xp-005",
+      "severity": "critical",
+      "input": {
+        "instruction": "A declared key the source does not state is present with null, never omitted and never the empty string.",
+        "source": "A demo release notice identified as demo-notice-15 in draft state whose release date the source does not state."
+      },
+      "expected_output": { "notice_id": "demo-notice-15", "released_on": null, "state": "draft" }
+    },
+    {
+      "id": "xp-006",
+      "severity": "standard",
+      "input": {
+        "instruction": "A non-ASCII string value is preserved exactly, with no transliteration.",
+        "source": "A demo release notice identified as demo-notice-16 whose summary reads veröffentlichung für demo."
+      },
+      "expected_output": { "notice_id": "demo-notice-16", "summary": "veröffentlichung für demo" }
+    }
+  ]
+}

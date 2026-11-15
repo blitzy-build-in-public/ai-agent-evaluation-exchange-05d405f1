@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The fills are the tokens apps/web/src/styles/tokens.css defines: color-accent for the rounded square, color-accent-text for the chevron. -->
+  <rect width="32" height="32" rx="6" fill="#1f5fb4" />
+  <polyline points="8,21.5 16,11 24,21.5" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
